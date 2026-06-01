@@ -32,10 +32,20 @@ VER         = "4.7"
 APP_ID      = "hearth"
 HOME        = Path.home()
 BIN         = HOME / "bin"
-CFGDIR      = HOME / ".config" / "roaring"
+CFGDIR      = HOME / ".config" / "hearth"
 SOCK        = str(CFGDIR / "rac.sock")
 PIDF        = str(CFGDIR / "rac.pid")
 SETTF       = str(CFGDIR / "rac_settings.json")
+
+# One-time migration from old ~/.config/roaring/ location
+_OLD_CFGDIR = HOME / ".config" / "roaring"
+for _old, _new in [
+    (_OLD_CFGDIR / "rac_settings.json", CFGDIR / "rac_settings.json"),
+]:
+    if _old.exists() and not _new.exists():
+        import shutil as _shutil
+        CFGDIR.mkdir(parents=True, exist_ok=True)
+        _shutil.copy2(str(_old), str(_new))
 MXCONF      = str(HOME / ".config" / "roaring_mixer.conf")
 MCCONF      = str(HOME / ".config" / "roaring_mic_router.conf")
 
@@ -2104,9 +2114,24 @@ def run_app(vu_dump: bool = False):
     def _act_ssh_laptop(*_):
         import shutil as _sh2
         import subprocess as _sp
-        WIN_IP   = "192.168.50.132"
-        WIN_USER = "roari"
-        WIN_KEY  = str(Path.home() / ".ssh" / "roaring_win")
+        # Read SSH target from ~/.config/hearth/config.json
+        # Keys: ssh_host, ssh_user, ssh_key (optional, defaults to ~/.ssh/id_ed25519)
+        _ssh_cfg_path = CFGDIR / "config.json"
+        try:
+            _ssh_cfg = json.loads(_ssh_cfg_path.read_text()) if _ssh_cfg_path.exists() else {}
+        except Exception:
+            _ssh_cfg = {}
+        WIN_IP   = _ssh_cfg.get("ssh_host", "")
+        WIN_USER = _ssh_cfg.get("ssh_user", "")
+        WIN_KEY  = _ssh_cfg.get("ssh_key",  str(Path.home() / ".ssh" / "id_ed25519"))
+        if not WIN_IP or not WIN_USER:
+            _msg(
+                "SSH not configured",
+                f"Create {_ssh_cfg_path} with:\n"
+                '{"ssh_host": "192.168.x.x", "ssh_user": "username", '
+                '"ssh_key": "~/.ssh/keyname"}'
+            )
+            return
         ssh_cmd  = f"ssh -i {WIN_KEY} -o BatchMode=yes -o ConnectTimeout=8 {WIN_USER}@{WIN_IP}"
         for term, args in [
             ("konsole", ["konsole", "-e", "bash", "-c",
@@ -2579,7 +2604,7 @@ def run_app(vu_dump: bool = False):
         return True
 
     # padfire peer probe
-    _PF_SOCK = str(Path.home() / ".config/roaring/padfire.sock")
+    _PF_SOCK = str(Path.home() / ".config" / "padfire" / "padfire.sock")
 
     def _pf_ipc(cmd, timeout=0.5):
         if not Path(_PF_SOCK).exists(): return None
