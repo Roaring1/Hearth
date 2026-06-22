@@ -1,0 +1,26 @@
+[Desktop Entry]
+Type=Application
+Version=1.1
+Name=Hearth
+GenericName=Audio Mixer
+Comment=PipeWire audio mixer and control panel for the Roaring stack
+Exec=python3 /home/roaring/bin/hearth.py
+Icon=/home/roaring/.local/share/icons/hicolor/256x256/apps/hearth.png
+Terminal=false
+Categories=AudioVideo;
+Keywords=audio;mixer;pipewire;volume;fader;routing;
+StartupNotify=true
+StartupWMClass=hearth
+Actions=show;unmute;quit;
+
+[Desktop Action show]
+Name=Show Window
+Exec=python3 /home/roaring/bin/hearth.py --show
+
+[Desktop Action unmute]
+Name=Unmute All Sinks
+Exec=python3 /home/roaring/bin/hearth.py --unmute
+
+[Desktop Action quit]
+Name=Quit Hearth
+Exec=python3 /home/roaring/bin/hearth.py --quit

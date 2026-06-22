@@ -4,6 +4,8 @@
 #
 #   - manages VM sinks, Astro A50, Scarlett Solo, Carla, Moonlight, LPD8
 #   - Collector + PeakPoller threads; IPC via Unix socket (rac.sock)
+#   - 21/06/2026: v4.8 -- fix mic loopback unload, stale stream controls,
+#                 LPD8 reconnect watcher startup, and unsafe SSH command quoting
 #   - 28/05/2026: vesktop compat -- portal health monitor + ↺ restart, default-sink display
 #                 for venmic only_default_speakers check, venmic log in log viewer
 #   - 28/05/2026: fix crash -- col/row in QA grid loop shadowed Collector instance in closure
@@ -24,11 +26,11 @@
 #   - 29/04/2026: SIGUSR1/--dump -> tracemalloc snapshot in last_debug/
 #   - 29/04/2026: _drain used remove() not destroy() -> 11 GB RAM leak
 
-import os, re, json, math, time, queue, signal, socket, threading, subprocess, argparse
+import os, re, json, math, time, queue, signal, socket, threading, subprocess, argparse, shlex
 import tracemalloc as _tracemalloc
 from pathlib import Path
 
-VER         = "4.7"
+VER         = "5.0"
 APP_ID      = "hearth"
 HOME        = Path.home()
 BIN         = HOME / "bin"
@@ -88,6 +90,8 @@ DEFAULT_SETTINGS = {
     "notify_fail":       True,
     "latency_msec":      12,
     "mixer_collapsed":   False,
+    "win_w":             880,
+    "win_h":             620,
 }
 
 
@@ -134,7 +138,8 @@ def sh_bg(cmd):
                      stderr=subprocess.DEVNULL, start_new_session=True)
 
 def run_bin(script, *args):
-    parts = [f"bash {BIN}/{script}"] + list(args)
+    parts = ["bash", str(BIN / script), *map(str, args)]
+    parts = [shlex.quote(part) for part in parts]
     sh_bg(" ".join(parts))
 
 def pactl_vol(sink):
@@ -143,9 +148,6 @@ def pactl_vol(sink):
 
 def pactl_muted(sink):
     return "yes" in sh(f"pactl get-sink-mute {sink} 2>/dev/null").lower()
-
-def svc_state(unit):
-    return sh(f"systemctl --user is-active {unit} 2>/dev/null") or "unknown"
 
 def svc_states_batch(units):
     # one systemctl call for all units -- replaces N separate is-active spawns per tick
@@ -313,7 +315,6 @@ class Collector(threading.Thread):
         d = {}
         d["svc"]  = svc_states_batch([u for u, _ in SERVICES])
         _all_sinks = list(VM_SINKS) + [("B1", "mic_b1"), ("B2", "mic_b2")]
-        _sink_names = [s for _, s in _all_sinks] + [ASTRO_CHAT, ASTRO_GAME, SCARLETT]
 
         # single pactl list sinks call to get vol + mute + state for everything
         # replaces 15 separate pactl_vol/pactl_muted subprocess spawns per tick
@@ -679,18 +680,30 @@ class PeakPoller(threading.Thread):
                             procs[src] = p; born_at[src] = now
                 for src in list(procs.keys()):
                     if src not in srcs:
-                        try: procs[src].kill(); procs[src].wait(timeout=0.2)
-                        except Exception: pass
-                        del procs[src]
+                        p = procs.pop(src, None)
+                        if p is not None:
+                            try:
+                                p.kill()
+                                p.wait(timeout=0.2)
+                            except Exception:
+                                pass
                         born_at.pop(src, None); leftover.pop(src, None)
+                        with self._lock:
+                            self._peaks.pop(src, None)
                 if not self.available:
                     if any(now - born_at.get(s, now) >= 1.0 for s in procs):
                         self.available = True
                 for src, p in list(procs.items()):
                     if p.poll() is not None:
                         dead_at[src] = time.monotonic()
+                        try:
+                            p.wait(timeout=0.1)
+                        except Exception:
+                            pass
                         procs.pop(src, None)
                         born_at.pop(src, None); leftover.pop(src, None)
+                        with self._lock:
+                            self._peaks.pop(src, None)
                         continue
                     try:
                         rdy, _, _ = _select.select([p.stdout], [], [], 0)
@@ -699,8 +712,14 @@ class PeakPoller(threading.Thread):
                         raw_new = os.read(p.stdout.fileno(), READ_CHUNK)
                         if not raw_new:
                             dead_at[src] = time.monotonic()
+                            try:
+                                p.wait(timeout=0.1)
+                            except Exception:
+                                pass
                             procs.pop(src, None)
                             born_at.pop(src, None); leftover.pop(src, None)
+                            with self._lock:
+                                self._peaks.pop(src, None)
                             continue
                         raw = leftover.get(src, b"") + raw_new
                         n   = len(raw) // BYTES_FRAME
@@ -1141,9 +1160,29 @@ def run_app(vu_dump: bool = False):
 
     # window
     win = Gtk.Window(title="Hearth")
-    win.set_default_size(880, 620)
+    win.set_default_size(int(S.get("win_w", 880)), int(S.get("win_h", 620)))
     win.set_resizable(True)
-    win.connect("delete-event", lambda *_: win.hide() or True)
+    # remember window size across sessions (skip while mixer is collapsed)
+    _win_size = [int(S.get("win_w", 880)), int(S.get("win_h", 620))]
+    def _persist_win_size(*_):
+        try:
+            S["win_w"], S["win_h"] = int(_win_size[0]), int(_win_size[1])
+            save_settings(S)
+        except Exception:
+            pass
+    def _on_win_configure(w, _e):
+        try:
+            if not _mix_collapsed[0]:
+                _win_size[0], _win_size[1] = w.get_size()
+        except Exception:
+            pass
+        return False
+    def _on_win_delete(*_):
+        _persist_win_size()
+        win.hide()
+        return True
+    win.connect("configure-event", _on_win_configure)
+    win.connect("delete-event", _on_win_delete)
     win.connect("map",   lambda *_: col.set_window_visible(True))
     win.connect("unmap", lambda *_: col.set_window_visible(False))
     root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -1211,7 +1250,7 @@ def run_app(vu_dump: bool = False):
     mix_area.pack_start(mix_row, False, False, 0)
 
     _adjs: dict = {}; _mutes: dict = {}; _v_lbl: dict = {}
-    _st_lbl: dict = {}; _block: dict = {}; _vol_fn: dict = {}
+    _block: dict = {}; _vol_fn: dict = {}
     _mute_fn: dict = {}; _app_lbl: dict = {}
     _app_compact: dict = {}; _app_popbtn: dict = {}
     _sink_has_inputs: dict = {}
@@ -1371,9 +1410,6 @@ def run_app(vu_dump: bool = False):
         _v_lbl[sink] = vl
         col_box.pack_start(vl, False, False, 0)
 
-        # _st_lbl still tracked for drain logic but not shown -- redundant with VU color
-        stl = Gtk.Label(label=""); _st_lbl[sink] = stl
-
         mt = Gtk.ToggleButton(label="MUTE")
         mt.get_style_context().add_class("mute-btn")
         _mutes[sink] = mt
@@ -1452,18 +1488,12 @@ def run_app(vu_dump: bool = False):
     lbl_astro_hw = Gtk.Label(label="HW: ..."); lbl_astro_hw.set_xalign(0)
     lbl_astro_hw.get_style_context().add_class("dim-s")
     hw_box.pack_start(lbl_astro_hw, False, False, 0)
-    # btn_astro not shown in panel -- wired via [T] keybind and tray
-    btn_astro = Gtk.Button(label="Toggle Target  [T]")
-    btn_astro.set_tooltip_text("Astro A50: stereo-chat <-> stereo-game")
 
     hw_box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 1)
     hw_box.pack_start(ptitle("MONITOR"), False, False, 0)
     lbl_scarlett = Gtk.Label(label="Scarlett: OFF"); lbl_scarlett.set_xalign(0)
     lbl_scarlett.get_style_context().add_class("hw-idle")
     hw_box.pack_start(lbl_scarlett, False, False, 0)
-    # btn_scarlett not shown -- wired via [S] keybind and tray
-    btn_scarlett = Gtk.Button(label="Toggle Scarlett  [S]")
-    btn_scarlett.set_tooltip_text("Mirror VM buses to Focusrite Scarlett speakers")
 
     hw_box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 1)
     hw_box.pack_start(ptitle("CARLA"), False, False, 0)
@@ -2028,6 +2058,7 @@ def run_app(vu_dump: bool = False):
         def _tms(): tm.append(Gtk.SeparatorMenuItem())
         _tmi("show",     "Show Window")
         _tmi("unmute",   "UNMUTE ALL  [U]")
+        _tmi("mute_all", "Mute All Buses")
         _tms()
         _tmi("astro",    "Toggle Astro  [T]")
         _tmi("scarlett", "Toggle Scarlett  [S]")
@@ -2065,6 +2096,22 @@ def run_app(vu_dump: bool = False):
     def _act_unmute(*_):
         unmute_all()
         _msg("Unmuted", "Sent unmute to: Astro Chat, Astro Game, vm_game, vm_chat, vm_music, laptop_audio, Scarlett.")
+
+    def _act_mute_all(*_):
+        # quick "step away" mute of every output bus -- Unmute All / [U] restores
+        for _lbl, sink in VM_SINKS:
+            sh_bg(f"pactl set-sink-mute {sink} 1")
+        _msg("Muted", "Muted all output buses: GAME, CHAT, MUSIC, LAPTOP.\nPress U (Unmute All) to restore.")
+
+    def _act_open_config(*_):
+        # open ~/.config/hearth in the file manager (SSH config + debug dumps live here)
+        sh_bg(f"xdg-open {shlex.quote(str(CFGDIR))}")
+
+    def _notify(title, body=""):
+        if not S.get("notify_fail", True):
+            return
+        sh_bg("notify-send -a Hearth -u critical -i audio-card "
+              f"{shlex.quote(title)} {shlex.quote(body)}")
 
     def _carla_start(*_):
         sh_bg("systemctl --user reset-failed roaring-carla-session.service 2>/dev/null; "
@@ -2132,15 +2179,20 @@ def run_app(vu_dump: bool = False):
                 '"ssh_key": "~/.ssh/keyname"}'
             )
             return
-        ssh_cmd  = f"ssh -i {WIN_KEY} -o BatchMode=yes -o ConnectTimeout=8 {WIN_USER}@{WIN_IP}"
+        ssh_args = [
+            "ssh", "-i", os.path.expanduser(WIN_KEY),
+            "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
+            f"{WIN_USER}@{WIN_IP}",
+        ]
+        ssh_cmd_display = " ".join(shlex.quote(x) for x in ssh_args)
         for term, args in [
-            ("konsole", ["konsole", "-e", "bash", "-c",
-                         f"{ssh_cmd}; echo; echo '--- session ended ---'; read -p 'Press Enter to close'",
-                         "--", "--noclose"]),
-            ("xterm",   ["xterm", "-T", f"SSH {WIN_IP}", "-e", ssh_cmd]),
+            ("konsole", ["konsole", "--noclose", "-e", "bash", "-c",
+                         f"{ssh_cmd_display}; echo; echo '--- session ended ---'; "
+                         "read -p 'Press Enter to close'"]),
+            ("xterm",   ["xterm", "-T", f"SSH {WIN_IP}", "-e", *ssh_args]),
             ("gnome-terminal", ["gnome-terminal", "--", "bash", "-c",
-                                f"{ssh_cmd}; read -p 'Press Enter'"]),
-            ("xfce4-terminal", ["xfce4-terminal", "-e", ssh_cmd]),
+                                f"{ssh_cmd_display}; read -p 'Press Enter'"]),
+            ("xfce4-terminal", ["xfce4-terminal", "-e", ssh_cmd_display]),
         ]:
             if _sh2.which(term): _sp.Popen(args); return
         _msg("SSH to Laptop", "No terminal emulator found.\nInstall konsole or xterm.")
@@ -2213,13 +2265,12 @@ def run_app(vu_dump: bool = False):
 
     btn_lpd8_reconnect.connect("clicked", _act_lpd8_reconnect)
 
-    btn_astro.connect("clicked",    lambda *_: _act_toggle_astro())
-    btn_scarlett.connect("clicked", lambda *_: _act_toggle_scarlett())
     btn_emu.connect("clicked",      lambda *_: _act_unmute())
 
     if HAVE_IND and _ti:
         _ti["show"].connect("activate",     lambda *_: (win.show_all(), win.present()))
         _ti["unmute"].connect("activate",   lambda *_: _act_unmute())
+        _ti["mute_all"].connect("activate", lambda *_: _act_mute_all())
         _ti["astro"].connect("activate",    lambda *_: _act_toggle_astro())
         _ti["scarlett"].connect("activate", lambda *_: _act_toggle_scarlett())
         _ti["soft"].connect("activate",     lambda *_: _act_soft())
@@ -2237,6 +2288,7 @@ def run_app(vu_dump: bool = False):
     def _ms(): menu.append(Gtk.SeparatorMenuItem())
 
     _mi("Unmute All  [U]",                  _act_unmute)
+    _mi("Mute All Buses",                   _act_mute_all)
     _mi("Toggle Astro  [T]",                _act_toggle_astro)
     _mi("Toggle Scarlett  [S]",             _act_toggle_scarlett)
     _ms()
@@ -2248,6 +2300,7 @@ def run_app(vu_dump: bool = False):
     _mi("Force Default Sink -> vm_game",   lambda: force_default_sink("vm_game"))
     _ms()
     _mi("Settings...  Ctrl+,",             _act_settings)
+    _mi("Open Config Folder",              _act_open_config)
     _mi("About",                           _act_about)
     _ms()
     _mi("Hide to Tray  Esc",               lambda: win.hide())
@@ -2275,6 +2328,7 @@ def run_app(vu_dump: bool = False):
     _prev_log         = [""]
     _prev_states      = {}
     _prev_lpd8_st     = [""]
+    _prev_astro_muted = [None]
     # widget rebuild cache: keyed on sink -> list of "pa_index:name" strings
     # only tear down and rebuild when this changes -- prevents the GObject
     # signal-closure / refcount leak that caused 11 GB+ when running every tick
@@ -2317,7 +2371,7 @@ def run_app(vu_dump: bool = False):
             if _tracemalloc.is_tracing():
                 _snap = _tracemalloc.take_snapshot()
                 _top  = _snap.statistics("lineno")[:25]
-                lines.append(f"\ntracemalloc top 25 allocations:\n")
+                lines.append("\ntracemalloc top 25 allocations:\n")
                 for _st in _top:
                     lines.append(f"  {_st}\n")
                 _snap.dump(str(_DUMP_DIR / "tracemalloc.pkl"))
@@ -2357,6 +2411,9 @@ def run_app(vu_dump: bool = False):
                     if c.startswith("s-"): ctx.remove_class(c)
                 ctx.add_class(ST_CSS.get(st, "s-dim"))
                 sl.set_text(st); lset(ST_COL.get(st, "#3a3a3c"))
+                # notify only on a real transition into "failed" (core units)
+                if unit in CORE and st == "failed" and _prev_states.get(unit) not in (None, "failed"):
+                    _notify("Hearth: service failed", f"{unit} entered the failed state.")
                 _prev_states[unit] = st
 
         # health chip
@@ -2411,18 +2468,16 @@ def run_app(vu_dump: bool = False):
                     f'<span font_size="small" foreground="#ffffff73">'
                     f' {_db}dB</span>'
                 )
-            if sink in _st_lbl:
-                stl = _st_lbl[sink]; stl.set_text(st2)
-                sctx = stl.get_style_context()
-                for c2 in ["ch-st-run","ch-st-idle"]: sctx.remove_class(c2)
-                sctx.add_class("ch-st-run" if st2 == "RUNNING" else "ch-st-idle")
             if sink in _vu:
                 _vu[sink].set_state(st2, v)
             if sink in _app_lbl:
                 _apps = data.get("sink_inputs", {}).get(sink, [])
                 _sink_has_inputs[sink] = bool(_apps) or sink in ("mic_b1", "mic_b2")
                 # only rebuild when app list changes -- same destroy/rebuild to avoid GObject leak
-                _cur_keys = [f"{_a.get('index','')}:{_a.get('name','')}" for _a in _apps]
+                _cur_keys = [
+                    f"{_a.get('index','')}:{_a.get('name','')}:{_a.get('vol_pct',100)}:{int(bool(_a.get('muted', False)))}"
+                    for _a in _apps
+                ]
                 if _cur_keys != _prev_sink_inputs.get(sink):
                     _prev_sink_inputs[sink] = _cur_keys
                     # compact strip label: plain text, no scroll, no interactive widgets
@@ -2450,6 +2505,10 @@ def run_app(vu_dump: bool = False):
         # astro HW
         a_muted = data.get("astro_chat_mute", False)
         a_vol   = data.get("astro_chat_vol", 100)
+        if a_muted and _prev_astro_muted[0] is False:
+            _notify("Hearth: Astro A50 muted",
+                    "The Astro A50 hardware sink is muted -- press U to restore audio.")
+        _prev_astro_muted[0] = a_muted
         at      = data.get("astro", "chat")
         at_disp = "stereo-game" if at == "game" else "stereo-chat"
         lbl_astro_tgt.set_text(f"Astro: {at_disp}")
@@ -2527,8 +2586,7 @@ def run_app(vu_dump: bool = False):
         # LPD8 -- kick auto-watcher on failure/disconnect
         lpd8_st = data['svc'].get('lpd8-mixer', '--')
         lbl_lpd8.set_text(f"lpd8-mixer:  {lpd8_st}")
-        if (lpd8_st in ("failed", "inactive")
-                and _prev_lpd8_st[0] not in ("failed", "inactive", "")):
+        if lpd8_st in ("failed", "inactive"):
             _maybe_start_lpd8_watcher()
         _prev_lpd8_st[0] = lpd8_st
 
@@ -2715,6 +2773,8 @@ def run_app(vu_dump: bool = False):
 
     Gtk.main()
 
+    try: _persist_win_size()
+    except: pass
     try: Path(SOCK).unlink(missing_ok=True)
     except: pass
     try: Path(PIDF).unlink(missing_ok=True)

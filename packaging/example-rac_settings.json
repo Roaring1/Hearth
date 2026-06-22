@@ -1,0 +1,13 @@
+{
+  "refresh_ms": 500,
+  "vu_enabled": true,
+  "vu_speed": 0.22,
+  "mem_warn_mb": 60,
+  "mem_crit_mb": 200,
+  "start_minimized": false,
+  "notify_fail": true,
+  "latency_msec": 12,
+  "mixer_collapsed": false,
+  "notify_failures": true,
+  "vu_sensitivity": 1.0
+}
