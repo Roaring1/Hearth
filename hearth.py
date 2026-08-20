@@ -30,7 +30,7 @@ import os, re, json, math, time, queue, signal, socket, threading, subprocess, a
 import tracemalloc as _tracemalloc
 from pathlib import Path
 
-VER         = "5.0"
+VER         = "5.1"
 APP_ID      = "hearth"
 HOME        = Path.home()
 BIN         = HOME / "bin"
@@ -199,7 +199,10 @@ def write_conf_key(path, key, value):
     text = p.read_text()
     nl = f'{key}="{value}"'
     if re.search(rf'^{re.escape(key)}=', text, re.MULTILINE):
-        text = re.sub(rf'^{re.escape(key)}=.*', nl, text, flags=re.MULTILINE)
+        # literal replacement (lambda) so values containing backslashes or
+        # regex group refs like \1 / \g<0> are written verbatim, not
+        # interpreted as re.sub replacement escapes (fuzz-found bug).
+        text = re.sub(rf'^{re.escape(key)}=.*', lambda _m: nl, text, flags=re.MULTILINE)
     else:
         text += f'\n{nl}\n'
     p.write_text(text)
@@ -278,9 +281,20 @@ def ipc_serve(handler):
     while True:
         try:
             c, _ = srv.accept()
-            d = c.recv(256).decode().strip()
-            c.sendall(((handler(d) or "ok")+"\n").encode()); c.close()
-        except: break
+        except OSError:
+            # listening socket was closed (shutdown) -> exit the loop cleanly
+            break
+        # Per-connection work is isolated: a bad command or a raising handler
+        # must NOT kill the IPC thread (Gap #5: the old `except: break` made
+        # Hard Restart / ssh / dump / unmute silently stop working forever).
+        try:
+            d = c.recv(256).decode(errors="replace").strip()
+            c.sendall(((handler(d) or "ok")+"\n").encode())
+        except Exception as e:
+            print(f"[hearth] ipc handler error: {e}", flush=True)
+        finally:
+            try: c.close()
+            except Exception: pass
 
 
 class Collector(threading.Thread):
@@ -362,6 +376,13 @@ class Collector(threading.Thread):
         d["mem_mb"]   = pw_mem_mb()
         d["astro"]    = astro_target()
         d["scarlett"] = scarlett_on()
+
+        # No Noise -- reconcile is cheap/idempotent (near-instant no-op once
+        # settled) so it's safe to call every tick; this is what gives the
+        # feature its self-disable/re-enable behavior with zero extra
+        # background process.
+        sh(f"{HOME}/bin/no_noise_ctl.sh reconcile")
+        d["no_noise_active"] = (HOME / ".cache" / "roaring_no_noise_active").exists()
         d["timer"]    = sh(
             "systemctl --user list-timers roaring-pipewire-restart.timer "
             "--no-pager 2>/dev/null | awk 'NR==2{print $1,$2,$5}'"
@@ -1495,6 +1516,27 @@ def run_app(vu_dump: bool = False):
     lbl_scarlett.get_style_context().add_class("hw-idle")
     hw_box.pack_start(lbl_scarlett, False, False, 0)
 
+    # No Noise -- corrects the ~95Hz room resonance on Scarlett speaker
+    # output (measured via sweep test 2026-08-06). Only actually engages
+    # while the Scarlett mirror above is on; self-disables/re-enables with
+    # it automatically (see no_noise_ctl.sh). Runs via a standalone
+    # filter-chain.service process -- fully decoupled from Carla, so this
+    # can never trigger a Carla restart or steal focus.
+    _no_noise_chk = Gtk.CheckButton(label="No Noise")
+    _no_noise_chk.set_tooltip_text(
+        "Corrects the ~95Hz room resonance measured on Scarlett speaker "
+        "output. Only runs while the Scarlett mirror above is on -- "
+        "auto-disables/re-enables with it."
+    )
+    hw_box.pack_start(_no_noise_chk, False, False, 0)
+    _no_noise_last_click = [0.0]
+
+    def _on_no_noise_toggled(chk):
+        _no_noise_last_click[0] = time.time()
+        sh_bg(f"{HOME}/bin/no_noise_ctl.sh " + ("enable" if chk.get_active() else "disable"))
+    _no_noise_chk.connect("toggled", _on_no_noise_toggled)
+    _no_noise_chk.set_active(False)  # drain syncs from real state
+
     hw_box.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 1)
     hw_box.pack_start(ptitle("CARLA"), False, False, 0)
     lbl_carla = Gtk.Label(label="checking..."); lbl_carla.set_xalign(0)
@@ -2531,6 +2573,16 @@ def run_app(vu_dump: bool = False):
         ctx_sc = lbl_scarlett.get_style_context()
         for c in ["hw-ok","hw-idle"]: ctx_sc.remove_class(c)
         ctx_sc.add_class("hw-ok" if sc_on else "hw-idle")
+
+        # no noise -- sync checkbox to real active state, same race-guard
+        # pattern as the mic loopback toggles below (skip sync for 3s after
+        # a user click so it isn't reset before no_noise_ctl.sh finishes)
+        if time.time() - _no_noise_last_click[0] >= 3.0:
+            real_nn = data.get("no_noise_active", False)
+            if _no_noise_chk.get_active() != real_nn:
+                _no_noise_chk.handler_block_by_func(_on_no_noise_toggled)
+                _no_noise_chk.set_active(real_nn)
+                _no_noise_chk.handler_unblock_by_func(_on_no_noise_toggled)
 
         # carla
         n = data.get("carla", 0)

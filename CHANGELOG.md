@@ -1,5 +1,12 @@
 # Changelog
 
+## 5.1 — 2026-08-19
+
+### Added
+- **No Noise Room-Correction Integration**: Integrated control toggle and status reconciliation for the ~95Hz room resonance notch filter (`no_noise_ctl.sh`) on physical Scarlett speaker output. Decoupled from Carla and managed via PipeWire filter-chain.
+- **Hardened IPC Server**: Isolated per-connection command execution in `ipc_serve` within robust exception guards, preventing client disconnects or malformed commands from killing the background IPC thread.
+- **Safe Regex Configuration Writer**: Hardened `write_conf_key` to use literal lambda replacements, preventing escape interpretation of backslashes and group references in configuration values.
+
 ## 5.0 — 2026-06-21
 
 ### Added
