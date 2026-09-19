@@ -1,0 +1,10 @@
+39	vm_game	PipeWire	float32le 2ch 48000Hz	RUNNING
+42	vm_chat	PipeWire	float32le 2ch 48000Hz	RUNNING
+45	vm_music	PipeWire	float32le 2ch 48000Hz	RUNNING
+47	vm_share	PipeWire	float32le 2ch 48000Hz	RUNNING
+64	laptop_audio	PipeWire	float32le 2ch 48000Hz	IDLE
+117	mic_b1	PipeWire	float32le 2ch 48000Hz	RUNNING
+140	alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00.Direct__Direct__sink	PipeWire	s32le 2ch 48000Hz	SUSPENDED
+147	alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game	PipeWire	s16le 2ch 48000Hz	SUSPENDED
+148	alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat	PipeWire	s16le 2ch 48000Hz	RUNNING
+172	mic_b2	PipeWire	float32le 2ch 48000Hz	IDLE

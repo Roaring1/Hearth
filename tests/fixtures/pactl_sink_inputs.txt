@@ -1,0 +1,366 @@
+Sink Input #287
+	Driver: PipeWire
+	Owner Module: 536870925
+	Client: n/a
+	Sink: 148
+	Sample Specification: float32le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Format: pcm, format.sample_format = "\"float32ne\""  format.rate = "48000"  format.channels = "2"  format.channel_map = "\"front-left,front-right\""
+	Corked: no
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Buffer Latency: 0 usec
+	Sink Latency: 0 usec
+	Resample method: PipeWire
+	Properties:
+		target.object = "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"
+		node.group = "loopback-536870925"
+		pulse.module.id = "536870925"
+		audio.channels = "2"
+		audio.position = "[ FL, FR ]"
+		node.link-group = "loopback-3622-15"
+		node.latency = "192/48000"
+		node.virtual = "true"
+		resample.prefill = "true"
+		node.name = "output.loopback-3622-15"
+		device.description = "loopback-3622-15"
+		resample.disable = "true"
+		media.name = "loopback-3622-15 output"
+		stream.is-live = "true"
+		node.want-driver = "true"
+		resample.quality = "10"
+		node.autoconnect = "true"
+		node.trigger = "true"
+		media.class = "Stream/Output/Audio"
+		port.group = "stream.0"
+		adapt.follower.spa-node = ""
+		object.register = "false"
+		factory.id = "7"
+		clock.quantum-limit = "8192"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		client.id = "166"
+		object.id = "163"
+		object.serial = "287"
+		node.driver-id = "99"
+		module-stream-restore.id = "sink-input-by-media-name:loopback-3622-15 output"
+
+Sink Input #307
+	Driver: PipeWire
+	Owner Module: 536870926
+	Client: n/a
+	Sink: 148
+	Sample Specification: float32le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Format: pcm, format.sample_format = "\"float32ne\""  format.rate = "48000"  format.channels = "2"  format.channel_map = "\"front-left,front-right\""
+	Corked: no
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Buffer Latency: 0 usec
+	Sink Latency: 0 usec
+	Resample method: PipeWire
+	Properties:
+		target.object = "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"
+		node.group = "loopback-536870926"
+		pulse.module.id = "536870926"
+		audio.channels = "2"
+		audio.position = "[ FL, FR ]"
+		node.link-group = "loopback-3622-16"
+		node.latency = "192/48000"
+		node.virtual = "true"
+		resample.prefill = "true"
+		node.name = "output.loopback-3622-16"
+		device.description = "loopback-3622-16"
+		resample.disable = "true"
+		media.name = "loopback-3622-16 output"
+		stream.is-live = "true"
+		node.want-driver = "true"
+		resample.quality = "10"
+		node.autoconnect = "true"
+		node.trigger = "true"
+		media.class = "Stream/Output/Audio"
+		port.group = "stream.0"
+		adapt.follower.spa-node = ""
+		object.register = "false"
+		factory.id = "7"
+		clock.quantum-limit = "8192"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		client.id = "177"
+		object.id = "178"
+		object.serial = "307"
+		node.driver-id = "99"
+		module-stream-restore.id = "sink-input-by-media-name:loopback-3622-16 output"
+
+Sink Input #325
+	Driver: PipeWire
+	Owner Module: 536870927
+	Client: n/a
+	Sink: 148
+	Sample Specification: float32le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Format: pcm, format.sample_format = "\"float32ne\""  format.rate = "48000"  format.channels = "2"  format.channel_map = "\"front-left,front-right\""
+	Corked: no
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Buffer Latency: 0 usec
+	Sink Latency: 0 usec
+	Resample method: PipeWire
+	Properties:
+		target.object = "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"
+		node.group = "loopback-536870927"
+		pulse.module.id = "536870927"
+		audio.channels = "2"
+		audio.position = "[ FL, FR ]"
+		node.link-group = "loopback-3622-17"
+		node.latency = "192/48000"
+		node.virtual = "true"
+		resample.prefill = "true"
+		node.name = "output.loopback-3622-17"
+		device.description = "loopback-3622-17"
+		resample.disable = "true"
+		media.name = "loopback-3622-17 output"
+		stream.is-live = "true"
+		node.want-driver = "true"
+		resample.quality = "10"
+		node.autoconnect = "true"
+		node.trigger = "true"
+		media.class = "Stream/Output/Audio"
+		port.group = "stream.0"
+		adapt.follower.spa-node = ""
+		object.register = "false"
+		factory.id = "7"
+		clock.quantum-limit = "8192"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		client.id = "187"
+		object.id = "190"
+		object.serial = "325"
+		node.driver-id = "99"
+		module-stream-restore.id = "sink-input-by-media-name:loopback-3622-17 output"
+
+Sink Input #754344
+	Driver: PipeWire
+	Owner Module: n/a
+	Client: 114
+	Sink: 39
+	Sample Specification: s16le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Format: pcm, format.sample_format = "\"s16le\""  format.rate = "48000"  format.channels = "2"  format.channel_map = "\"front-left,front-right\""
+	Corked: no
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Buffer Latency: 0 usec
+	Sink Latency: 0 usec
+	Resample method: PipeWire
+	Properties:
+		client.api = "pipewire-pulse"
+		pulse.server.type = "unix"
+		application.name = "gst-launch-1.0"
+		application.process.id = "3879"
+		application.process.user = "roaring"
+		application.process.host = "RoaringsPC"
+		application.process.binary = "gst-launch-1.0"
+		application.language = "en_US.utf8"
+		application.process.machine_id = "3d5629bbefb14c5998a098e892dc85e0"
+		media.name = "Playback Stream"
+		pulse.corked = "false"
+		node.rate = "1/48000"
+		node.latency = "4320/48000"
+		target.object = "vm_game"
+		stream.is-live = "true"
+		node.name = "gst-launch-1.0"
+		node.want-driver = "true"
+		resample.quality = "10"
+		node.autoconnect = "true"
+		media.class = "Stream/Output/Audio"
+		port.group = "stream.0"
+		adapt.follower.spa-node = ""
+		object.register = "false"
+		factory.id = "7"
+		clock.quantum-limit = "8192"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		client.id = "76"
+		object.id = "71"
+		object.serial = "754344"
+		pulse.attr.maxlength = "4194304"
+		pulse.attr.tlength = "21120"
+		pulse.attr.prebuf = "0"
+		pulse.attr.minreq = "1920"
+		node.driver-id = "99"
+		module-stream-restore.id = "sink-input-by-application-name:gst-launch-1.0"
+
+Sink Input #2481854
+	Driver: PipeWire
+	Owner Module: n/a
+	Client: 2481853
+	Sink: 42
+	Sample Specification: float32le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Format: pcm, format.sample_format = "\"float32le\""  format.rate = "48000"  format.channels = "2"  format.channel_map = "\"front-left,front-right\""
+	Corked: no
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Buffer Latency: 0 usec
+	Sink Latency: 0 usec
+	Resample method: PipeWire
+	Properties:
+		client.api = "pipewire-pulse"
+		pulse.server.type = "unix"
+		pipewire.access.portal.app_id = "dev.vencord.Vesktop"
+		media.category = "Manager"
+		pipewire.client.access = "flatpak"
+		application.name = "vesktop"
+		application.process.id = "183"
+		application.process.user = "roaring"
+		application.process.host = "RoaringsPC"
+		application.process.binary = "vesktop.bin"
+		application.language = "en_US.utf8"
+		application.process.machine_id = "3d5629bbefb14c5998a098e892dc85e0"
+		application.process.session_id = "3"
+		application.icon_name = "vesktop"
+		media.name = "Playback"
+		pulse.corked = "false"
+		node.rate = "1/48000"
+		node.latency = "512/48000"
+		stream.is-live = "true"
+		node.name = "vesktop"
+		node.want-driver = "true"
+		resample.quality = "10"
+		node.autoconnect = "true"
+		media.class = "Stream/Output/Audio"
+		port.group = "stream.0"
+		adapt.follower.spa-node = ""
+		object.register = "false"
+		factory.id = "7"
+		clock.quantum-limit = "8192"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		client.id = "389"
+		object.id = "409"
+		object.serial = "2481854"
+		pulse.attr.maxlength = "4194304"
+		pulse.attr.tlength = "8192"
+		pulse.attr.prebuf = "6152"
+		pulse.attr.minreq = "2048"
+		node.driver-id = "99"
+		module-stream-restore.id = "sink-input-by-application-name:vesktop"
+
+Sink Input #4515715
+	Driver: PipeWire
+	Owner Module: n/a
+	Client: 4515712
+	Sink: 39
+	Sample Specification: float32le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Format: pcm, format.sample_format = "\"float32le\""  format.rate = "48000"  format.channels = "2"  format.channel_map = "\"front-left,front-right\""
+	Corked: no
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Buffer Latency: 0 usec
+	Sink Latency: 0 usec
+	Resample method: PipeWire
+	Properties:
+		client.api = "pipewire-pulse"
+		pulse.server.type = "unix"
+		pipewire.access.portal.app_id = "org.vinegarhq.Vinegar"
+		media.category = "Manager"
+		pipewire.client.access = "flatpak"
+		application.name = "Roblox Studio"
+		application.process.id = "80"
+		application.process.user = "roaring"
+		application.process.host = "RoaringsPC"
+		application.process.binary = "wine"
+		application.language = "en_US.utf8"
+		window.x11.display = ":0"
+		application.process.machine_id = "3d5629bbefb14c5998a098e892dc85e0"
+		application.process.session_id = "3"
+		media.name = "audio stream #1"
+		pulse.corked = "false"
+		node.rate = "1/48000"
+		node.latency = "240/48000"
+		stream.is-live = "true"
+		node.name = "Roblox Studio"
+		node.want-driver = "true"
+		resample.quality = "10"
+		node.autoconnect = "true"
+		media.class = "Stream/Output/Audio"
+		port.group = "stream.0"
+		adapt.follower.spa-node = ""
+		object.register = "false"
+		factory.id = "7"
+		clock.quantum-limit = "8192"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		client.id = "419"
+		object.id = "450"
+		object.serial = "4515715"
+		pulse.attr.maxlength = "32768"
+		pulse.attr.tlength = "9600"
+		pulse.attr.prebuf = "8"
+		pulse.attr.minreq = "3840"
+		node.driver-id = "99"
+		module-stream-restore.id = "sink-input-by-application-name:Roblox Studio"
+
+Sink Input #4629771
+	Driver: PipeWire
+	Owner Module: n/a
+	Client: 141093
+	Sink: 45
+	Sample Specification: float32le 2ch 44100Hz
+	Channel Map: front-left,front-right
+	Format: pcm, format.sample_format = "\"float32le\""  format.rate = "44100"  format.channels = "2"  format.channel_map = "\"front-left,front-right\""
+	Corked: no
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Buffer Latency: 0 usec
+	Sink Latency: 0 usec
+	Resample method: PipeWire
+	Properties:
+		client.api = "pipewire-pulse"
+		pulse.server.type = "unix"
+		pipewire.access.portal.app_id = "org.mozilla.firefox"
+		media.category = "Manager"
+		pipewire.client.access = "flatpak"
+		application.name = "Firefox"
+		application.process.id = "2"
+		application.process.user = "roaring"
+		application.process.host = "RoaringsPC"
+		application.process.binary = "firefox-bin"
+		application.language = "en_US.utf8"
+		application.process.machine_id = "3d5629bbefb14c5998a098e892dc85e0"
+		application.process.session_id = "3"
+		module-stream-restore.id = "sink-input-by-application-name:Firefox"
+		media.name = "AudioStream"
+		pulse.corked = "false"
+		node.rate = "1/44100"
+		node.latency = "3307/44100"
+		stream.is-live = "true"
+		node.name = "Firefox"
+		node.want-driver = "true"
+		resample.quality = "10"
+		node.autoconnect = "true"
+		media.class = "Stream/Output/Audio"
+		port.group = "stream.0"
+		adapt.follower.spa-node = ""
+		object.register = "false"
+		factory.id = "7"
+		clock.quantum-limit = "8192"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		client.id = "280"
+		object.id = "308"
+		object.serial = "4629771"
+		pulse.attr.maxlength = "4194304"
+		pulse.attr.tlength = "44104"
+		pulse.attr.prebuf = "35296"
+		pulse.attr.minreq = "8816"
+		node.driver-id = "99"

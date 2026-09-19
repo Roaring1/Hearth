@@ -1,0 +1,183 @@
+vm_game:monitor_FL
+  |-> input.loopback-3622-15:input_FL
+  |-> vm_share:playback_FL
+  |-> Roaring VU (internal):input_FL
+vm_game:monitor_FR
+  |-> input.loopback-3622-15:input_FR
+  |-> vm_share:playback_FR
+  |-> Roaring VU (internal):input_FR
+vm_game:playback_FL
+  |<- gst-launch-1.0:output_FL
+  |<- Roblox Studio:output_FL
+vm_game:playback_FR
+  |<- gst-launch-1.0:output_FR
+  |<- Roblox Studio:output_FR
+vm_chat:monitor_FL
+  |-> input.loopback-3622-16:input_FL
+  |-> Roaring VU (internal):input_FL
+vm_chat:monitor_FR
+  |-> input.loopback-3622-16:input_FR
+  |-> Roaring VU (internal):input_FR
+vm_chat:playback_FL
+  |<- vesktop:output_FL
+vm_chat:playback_FR
+  |<- vesktop:output_FR
+vm_music:monitor_FL
+  |-> input.loopback-3622-17:input_FL
+  |-> vm_share:playback_FL
+  |-> Roaring VU (internal):input_FL
+vm_music:monitor_FR
+  |-> input.loopback-3622-17:input_FR
+  |-> vm_share:playback_FR
+  |-> Roaring VU (internal):input_FR
+vm_music:playback_FL
+  |<- Firefox:output_FL
+vm_music:playback_FR
+  |<- Firefox:output_FR
+vm_share:monitor_FL
+  |-> Roaring VU (internal):input_FL
+vm_share:monitor_FR
+  |-> Roaring VU (internal):input_FR
+vm_share:playback_FL
+  |<- vm_game:monitor_FL
+  |<- vm_music:monitor_FL
+vm_share:playback_FR
+  |<- vm_game:monitor_FR
+  |<- vm_music:monitor_FR
+laptop_audio:monitor_FL
+  |-> Lavf61.7.100:input_FL
+  |-> Roaring VU (internal):input_FL
+laptop_audio:monitor_FR
+  |-> Lavf61.7.100:input_FR
+  |-> Roaring VU (internal):input_FR
+mic_b1:monitor_FL
+  |-> input.b1_mic:input_FL
+  |-> Roaring VU (internal):input_FL
+mic_b1:monitor_FR
+  |-> input.b1_mic:input_FR
+  |-> Roaring VU (internal):input_FR
+mic_b1:playback_FL
+  |<- Carla:audio-out1
+mic_b1:playback_FR
+  |<- Carla:audio-out2
+alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00.Direct__Direct__source:capture_FL
+  |-> input.sm7b_mono:input_FL
+alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FL
+  |<- output.loopback-3622-15:output_FL
+  |<- output.loopback-3622-16:output_FL
+  |<- output.loopback-3622-17:output_FL
+alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FR
+  |<- output.loopback-3622-15:output_FR
+  |<- output.loopback-3622-16:output_FR
+  |<- output.loopback-3622-17:output_FR
+alsa_input.usb-Astro_Gaming_Astro_A50-00.mono-chat:capture_MONO
+  |-> input.astro_mic_48k:input_MONO
+mic_b2:monitor_FL
+  |-> input.b2_mic:input_FL
+  |-> Roaring VU (internal):input_FL
+mic_b2:monitor_FR
+  |-> input.b2_mic:input_FR
+  |-> Roaring VU (internal):input_FR
+sm7b_mono:capture_MONO
+  |-> Carla:audio-in1
+  |-> Carla:audio-in2
+input.sm7b_mono:input_FL
+  |<- alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00.Direct__Direct__source:capture_FL
+input.astro_mic_48k:input_MONO
+  |<- alsa_input.usb-Astro_Gaming_Astro_A50-00.mono-chat:capture_MONO
+output.loopback-3622-15:output_FL
+  |-> alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FL
+output.loopback-3622-15:output_FR
+  |-> alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FR
+input.loopback-3622-15:input_FL
+  |<- vm_game:monitor_FL
+input.loopback-3622-15:input_FR
+  |<- vm_game:monitor_FR
+output.loopback-3622-16:output_FL
+  |-> alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FL
+output.loopback-3622-16:output_FR
+  |-> alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FR
+input.loopback-3622-16:input_FL
+  |<- vm_chat:monitor_FL
+input.loopback-3622-16:input_FR
+  |<- vm_chat:monitor_FR
+output.loopback-3622-17:output_FL
+  |-> alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FL
+output.loopback-3622-17:output_FR
+  |-> alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FR
+input.loopback-3622-17:input_FL
+  |<- vm_music:monitor_FL
+input.loopback-3622-17:input_FR
+  |<- vm_music:monitor_FR
+Lavf61.7.100:input_FL
+  |<- laptop_audio:monitor_FL
+Lavf61.7.100:input_FR
+  |<- laptop_audio:monitor_FR
+b1_mic:capture_FL
+  |-> Lavf61.7.100:input_FL
+b1_mic:capture_FR
+  |-> Lavf61.7.100:input_FR
+input.b1_mic:input_FL
+  |<- mic_b1:monitor_FL
+input.b1_mic:input_FR
+  |<- mic_b1:monitor_FR
+input.b2_mic:input_FL
+  |<- mic_b2:monitor_FL
+input.b2_mic:input_FR
+  |<- mic_b2:monitor_FR
+Lavf61.7.100:input_FL
+  |<- b1_mic:capture_FL
+Lavf61.7.100:input_FR
+  |<- b1_mic:capture_FR
+Carla:audio-out1
+  |-> mic_b1:playback_FL
+Carla:audio-out2
+  |-> mic_b1:playback_FR
+Carla:audio-in1
+  |<- sm7b_mono:capture_MONO
+Carla:audio-in2
+  |<- sm7b_mono:capture_MONO
+gst-launch-1.0:output_FL
+  |-> vm_game:playback_FL
+gst-launch-1.0:output_FR
+  |-> vm_game:playback_FR
+vesktop:output_FL
+  |-> vm_chat:playback_FL
+vesktop:output_FR
+  |-> vm_chat:playback_FR
+Roblox Studio:output_FL
+  |-> vm_game:playback_FL
+Roblox Studio:output_FR
+  |-> vm_game:playback_FR
+Roaring VU (internal):input_FL
+  |<- vm_game:monitor_FL
+Roaring VU (internal):input_FR
+  |<- vm_game:monitor_FR
+Roaring VU (internal):input_FL
+  |<- vm_chat:monitor_FL
+Roaring VU (internal):input_FR
+  |<- vm_chat:monitor_FR
+Roaring VU (internal):input_FL
+  |<- vm_music:monitor_FL
+Roaring VU (internal):input_FR
+  |<- vm_music:monitor_FR
+Roaring VU (internal):input_FL
+  |<- vm_share:monitor_FL
+Roaring VU (internal):input_FR
+  |<- vm_share:monitor_FR
+Roaring VU (internal):input_FL
+  |<- laptop_audio:monitor_FL
+Roaring VU (internal):input_FR
+  |<- laptop_audio:monitor_FR
+Roaring VU (internal):input_FL
+  |<- mic_b2:monitor_FL
+Roaring VU (internal):input_FR
+  |<- mic_b2:monitor_FR
+Roaring VU (internal):input_FL
+  |<- mic_b1:monitor_FL
+Roaring VU (internal):input_FR
+  |<- mic_b1:monitor_FR
+Firefox:output_FL
+  |-> vm_music:playback_FL
+Firefox:output_FR
+  |-> vm_music:playback_FR

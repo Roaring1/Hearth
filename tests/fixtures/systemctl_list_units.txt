@@ -1,0 +1,23 @@
+lpd8-mixer.service                   loaded active   running   LPD8 mixer (VM buses + Astro target control)
+roaring-audio-routesd.service        loaded active   running   Roaring routes daemon (vm_* -> Astro target)
+roaring-carla-backup.service         loaded inactive dead      Roaring Carla project backup
+roaring-carla-patch.service          loaded inactive dead      Patch Carla audio inputs (sm7b_mono -> Carla)
+roaring-carla-session.service        loaded active   running   Roaring Carla session (auto-load carxp)
+roaring-cd-presence-scan.service     loaded inactive dead      roaring-presence audio CD catch-up scan
+roaring-cmd-rx.service               loaded active   running   Roaring Mic command receiver (Windows → Linux UDP 46002)
+roaring-laptop-audio.service         loaded active   running   Roaring laptop audio → Windows host via UDP
+roaring-logrotate.service            loaded inactive dead      Roaring audio log rotation
+roaring-mic-busses.service           loaded active   running   Roaring Mic B1/B2 virtual busses (PipeWire-Pulse)
+roaring-mic-routesd.service          loaded active   running   Roaring mic router (SM7B/Astro -> B1/B2)
+roaring-moonlight-mic.service        loaded active   running   Roaring mic passthrough → Windows (Moonlight host) via UDP
+roaring-pipewire-restart.service     loaded inactive dead      Periodic PipeWire restart (pipewire-pulse memory reclaim)
+roaring-presenced.service            loaded inactive dead      roaring-presence Discord Rich Presence manager
+roaring-sober-mic-watch.service      loaded active   running   Sober mic router (Sober capture -> b1_mic)
+roaring-vesktop-mic-watchd.service   loaded active   running   Roaring Vesktop mic watchdog (prevents muted source-output)
+roaring-vesktop-stream-watch.service loaded active   running   Roaring Vesktop screenshare audio router (per-bus / per-app selection)
+roaring-vm-share.service             loaded inactive dead      Roaring VM-SHARE loopback (game+music only, excludes chat) for safe screen-sharing
+roaring-vm-sinks.service             loaded active   running   Roaring VM sinks (vm_game/vm_chat/vm_music)
+roaring-presenced.socket             loaded active   listening roaring-presence manager socket
+roaring-carla-backup.timer           loaded active   waiting   Roaring Carla backup timer
+roaring-logrotate.timer              loaded active   waiting   Roaring audio log rotation timer
+roaring-pipewire-restart.timer       loaded active   waiting   Weekly PipeWire restart (pipewire-pulse memory reclaim)

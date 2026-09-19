@@ -1,0 +1,3 @@
+Dir Device    Name
+IO  hw:5,0,0  Launchpad Mini MIDI 1
+IO  hw:6,0,0  LPD8 MIDI 1

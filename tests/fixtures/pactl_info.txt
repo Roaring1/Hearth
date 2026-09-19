@@ -1,0 +1,15 @@
+Server String: /run/user/1000/pulse/native
+Library Protocol Version: 35
+Server Protocol Version: 35
+Is Local: yes
+Client Index: 4625956
+Tile Size: 65472
+User Name: roaring
+Host Name: RoaringsPC
+Server Name: PulseAudio (on PipeWire 1.4.11)
+Server Version: 15.0.0
+Default Sample Specification: float32le 2ch 48000Hz
+Default Channel Map: front-left,front-right
+Default Sink: vm_game
+Default Source: b1_mic
+Cookie: 0d8b:4332

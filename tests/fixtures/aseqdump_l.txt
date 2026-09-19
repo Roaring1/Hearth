@@ -1,0 +1,7 @@
+ Port    Client name                      Port name
+  0:0    System                           Timer
+  0:1    System                           Announce
+ 14:0    Midi Through                     Midi Through Port-0
+ 36:0    Launchpad Mini                   Launchpad Mini MIDI 1
+ 40:0    LPD8                             LPD8 MIDI 1
+128:0    RtMidiOut Client                 RtMidi output

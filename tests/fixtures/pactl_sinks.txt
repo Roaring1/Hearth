@@ -1,0 +1,556 @@
+Sink #39
+	State: RUNNING
+	Name: vm_game
+	Description: VM-GAME
+	Driver: PipeWire
+	Sample Specification: float32le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Owner Module: 536870916
+	Mute: no
+	Volume: front-left: 36044 /  55% / -15.58 dB,   front-right: 36044 /  55% / -15.58 dB
+	        balance 0.00
+	Base Volume: 65536 / 100% / 0.00 dB
+	Monitor Source: vm_game.monitor
+	Latency: 0 usec, configured 0 usec
+	Flags: HARDWARE DECIBEL_VOLUME LATENCY 
+	Properties:
+		node.name = "vm_game"
+		device.description = "VM-GAME"
+		audio.channels = "2"
+		audio.position = "[ FL, FR ]"
+		media.class = "Audio/Sink"
+		factory.name = "support.null-audio-sink"
+		monitor.channel-volumes = "true"
+		monitor.passthrough = "true"
+		pulse.module.id = "536870916"
+		factory.id = "19"
+		clock.quantum-limit = "8192"
+		client.id = "37"
+		node.driver = "true"
+		port.group = "stream.0"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		object.id = "39"
+		object.serial = "39"
+		node.driver-id = "99"
+	Formats:
+		pcm
+
+Sink #42
+	State: RUNNING
+	Name: vm_chat
+	Description: VM-CHAT
+	Driver: PipeWire
+	Sample Specification: float32le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Owner Module: 536870917
+	Mute: no
+	Volume: front-left: 39321 /  60% / -13.31 dB,   front-right: 39321 /  60% / -13.31 dB
+	        balance 0.00
+	Base Volume: 65536 / 100% / 0.00 dB
+	Monitor Source: vm_chat.monitor
+	Latency: 0 usec, configured 0 usec
+	Flags: HARDWARE DECIBEL_VOLUME LATENCY 
+	Properties:
+		node.name = "vm_chat"
+		device.description = "VM-CHAT"
+		audio.channels = "2"
+		audio.position = "[ FL, FR ]"
+		media.class = "Audio/Sink"
+		factory.name = "support.null-audio-sink"
+		monitor.channel-volumes = "true"
+		monitor.passthrough = "true"
+		pulse.module.id = "536870917"
+		factory.id = "19"
+		clock.quantum-limit = "8192"
+		client.id = "38"
+		node.driver = "true"
+		port.group = "stream.0"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		object.id = "42"
+		object.serial = "42"
+		node.driver-id = "99"
+	Formats:
+		pcm
+
+Sink #45
+	State: RUNNING
+	Name: vm_music
+	Description: VM-MUSIC
+	Driver: PipeWire
+	Sample Specification: float32le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Owner Module: 536870918
+	Mute: no
+	Volume: front-left: 24248 /  37% / -25.91 dB,   front-right: 24248 /  37% / -25.91 dB
+	        balance 0.00
+	Base Volume: 65536 / 100% / 0.00 dB
+	Monitor Source: vm_music.monitor
+	Latency: 0 usec, configured 0 usec
+	Flags: HARDWARE DECIBEL_VOLUME LATENCY 
+	Properties:
+		node.name = "vm_music"
+		device.description = "VM-MUSIC"
+		audio.channels = "2"
+		audio.position = "[ FL, FR ]"
+		media.class = "Audio/Sink"
+		factory.name = "support.null-audio-sink"
+		monitor.channel-volumes = "true"
+		monitor.passthrough = "true"
+		pulse.module.id = "536870918"
+		factory.id = "19"
+		clock.quantum-limit = "8192"
+		client.id = "40"
+		node.driver = "true"
+		port.group = "stream.0"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		object.id = "45"
+		object.serial = "45"
+		node.driver-id = "99"
+	Formats:
+		pcm
+
+Sink #47
+	State: RUNNING
+	Name: vm_share
+	Description: VM-SHARE
+	Driver: PipeWire
+	Sample Specification: float32le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Owner Module: 536870919
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Base Volume: 65536 / 100% / 0.00 dB
+	Monitor Source: vm_share.monitor
+	Latency: 0 usec, configured 0 usec
+	Flags: HARDWARE DECIBEL_VOLUME LATENCY 
+	Properties:
+		node.name = "vm_share"
+		device.description = "VM-SHARE"
+		audio.channels = "2"
+		audio.position = "[ FL, FR ]"
+		media.class = "Audio/Sink"
+		factory.name = "support.null-audio-sink"
+		monitor.channel-volumes = "true"
+		monitor.passthrough = "true"
+		pulse.module.id = "536870919"
+		factory.id = "19"
+		clock.quantum-limit = "8192"
+		client.id = "43"
+		node.driver = "true"
+		port.group = "stream.0"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		object.id = "47"
+		object.serial = "47"
+		node.driver-id = "99"
+	Formats:
+		pcm
+
+Sink #64
+	State: IDLE
+	Name: laptop_audio
+	Description: Laptop
+	Driver: PipeWire
+	Sample Specification: float32le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Owner Module: 536870920
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Base Volume: 65536 / 100% / 0.00 dB
+	Monitor Source: laptop_audio.monitor
+	Latency: 0 usec, configured 0 usec
+	Flags: HARDWARE DECIBEL_VOLUME LATENCY 
+	Properties:
+		node.name = "laptop_audio"
+		device.description = "Laptop"
+		audio.channels = "2"
+		audio.position = "[ FL, FR ]"
+		media.class = "Audio/Sink"
+		factory.name = "support.null-audio-sink"
+		monitor.channel-volumes = "true"
+		monitor.passthrough = "true"
+		pulse.module.id = "536870920"
+		factory.id = "19"
+		clock.quantum-limit = "8192"
+		client.id = "63"
+		node.driver = "true"
+		port.group = "stream.0"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		object.id = "64"
+		object.serial = "64"
+	Formats:
+		pcm
+
+Sink #117
+	State: RUNNING
+	Name: mic_b1
+	Description: B1
+	Driver: PipeWire
+	Sample Specification: float32le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Owner Module: 536870921
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Base Volume: 65536 / 100% / 0.00 dB
+	Monitor Source: mic_b1.monitor
+	Latency: 0 usec, configured 0 usec
+	Flags: HARDWARE DECIBEL_VOLUME LATENCY 
+	Properties:
+		node.name = "mic_b1"
+		object.linger = "1"
+		device.description = "B1"
+		audio.rate = "48000"
+		audio.channels = "2"
+		audio.position = "[ FL, FR ]"
+		media.class = "Audio/Sink"
+		factory.name = "support.null-audio-sink"
+		monitor.channel-volumes = "true"
+		monitor.passthrough = "true"
+		pulse.module.id = "536870921"
+		factory.id = "19"
+		clock.quantum-limit = "8192"
+		node.driver = "true"
+		port.group = "stream.0"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		object.id = "79"
+		object.serial = "117"
+		node.driver-id = "69"
+	Formats:
+		pcm
+
+Sink #140
+	State: SUSPENDED
+	Name: alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00.Direct__Direct__sink
+	Description: Scarlett Solo (3rd Gen.) Direct Scarlett Solo USB
+	Driver: PipeWire
+	Sample Specification: s32le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Owner Module: 4294967295
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Base Volume: 65536 / 100% / 0.00 dB
+	Monitor Source: alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00.Direct__Direct__sink.monitor
+	Latency: 0 usec, configured 0 usec
+	Flags: HARDWARE DECIBEL_VOLUME LATENCY 
+	Properties:
+		object.path = "alsa:acp:USB:0:playback"
+		api.alsa.path = "hw:USB"
+		api.alsa.open.ucm = "true"
+		api.alsa.pcm.card = "4"
+		api.alsa.pcm.stream = "playback"
+		port.group = "playback"
+		device.icon_name = "audio-speakers"
+		device.bus = "usb"
+		audio.channels = "2"
+		audio.position = "FL,FR"
+		device.routes = "1"
+		alsa.mixer_device = "_ucm0003.hw:USB"
+		alsa.resolution_bits = "32"
+		alsa.card = "4"
+		alsa.card_name = "Scarlett Solo USB"
+		alsa.long_card_name = "Focusrite Scarlett Solo USB at usb-0000:00:14.0-12, high speed"
+		alsa.driver_name = "snd_usb_audio"
+		alsa.mixer_name = "USB Mixer"
+		alsa.components = "USB1235:8211"
+		alsa.id = "USB"
+		device.api = "alsa"
+		device.class = "sound"
+		alsa.class = "generic"
+		alsa.subclass = "generic-mix"
+		alsa.name = "USB Audio"
+		alsa.subdevice = "0"
+		alsa.subdevice_name = "subdevice #0"
+		alsa.device = "0"
+		alsa.sync.id = "00000000:00000000:00000000:00000000"
+		device.profile.name = "Direct: Direct: sink"
+		device.profile.description = "Direct Scarlett Solo USB"
+		card.profile.device = "0"
+		device.id = "80"
+		factory.name = "api.alsa.pcm.sink"
+		node.pause-on-idle = "false"
+		priority.driver = "1100"
+		priority.session = "1100"
+		media.class = "Audio/Sink"
+		node.name = "alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00.Direct__Direct__sink"
+		node.nick = "Scarlett Solo USB"
+		device.description = "Scarlett Solo (3rd Gen.)"
+		api.alsa.card.name = "Scarlett Solo USB"
+		api.alsa.card.longname = "Focusrite Scarlett Solo USB at usb-0000:00:14.0-12, high speed"
+		factory.id = "19"
+		clock.quantum-limit = "8192"
+		client.id = "61"
+		node.driver = "true"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		object.id = "46"
+		object.serial = "140"
+		device.enum.api = "udev"
+		api.alsa.card = "4"
+		device.plugged.usec = "5585013"
+		device.bus_path = "pci-0000:00:14.0-usb-0:12:1.0"
+		sysfs.path = "/devices/pci0000:00/0000:00:14.0/usb1/1-12/1-12:1.0/sound/card4"
+		device.bus-id = "usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00"
+		device.subsystem = "sound"
+		device.vendor.id = "0x1235"
+		device.vendor.name = "Focusrite-Novation"
+		device.product.id = "0x8211"
+		device.product.name = "Scarlett Solo (3rd Gen.)"
+		device.serial = "Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB"
+		device.name = "alsa_card.usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00"
+		device.nick = "Scarlett Solo USB"
+		api.alsa.use-acp = "true"
+		api.acp.auto-profile = "false"
+		api.acp.auto-port = "false"
+		api.dbus.ReserveDevice1.Priority = "-20"
+		api.alsa.split-enable = "true"
+		api.dbus.ReserveDevice1 = "Audio4"
+		spa.object.id = "10"
+		device.string = "4"
+	Ports:
+		[Out] Direct: Direct Scarlett Solo USB (type: Unknown, priority: 1000, availability unknown)
+	Active Port: [Out] Direct
+	Formats:
+		pcm
+
+Sink #147
+	State: SUSPENDED
+	Name: alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game
+	Description: Astro A50 Game
+	Driver: PipeWire
+	Sample Specification: s16le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Owner Module: 4294967295
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Base Volume: 65536 / 100% / 0.00 dB
+	Monitor Source: alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game.monitor
+	Latency: 0 usec, configured 0 usec
+	Flags: HARDWARE DECIBEL_VOLUME LATENCY 
+	Properties:
+		object.path = "alsa:acp:A50:4:playback"
+		api.alsa.path = "hw:3,1,0"
+		api.alsa.pcm.card = "3"
+		api.alsa.pcm.stream = "playback"
+		port.group = "playback"
+		device.icon_name = "audio-card-analog"
+		device.bus = "usb"
+		audio.channels = "2"
+		audio.position = "FL,FR"
+		device.routes = "1"
+		alsa.resolution_bits = "16"
+		alsa.card = "3"
+		alsa.card_name = "Astro A50"
+		alsa.long_card_name = "Astro Gaming Astro A50 at usb-0000:00:14.0-5.2, full speed"
+		alsa.driver_name = "snd_usb_audio"
+		alsa.mixer_name = "USB Mixer"
+		alsa.components = "USB9886:002c"
+		alsa.id = "A50"
+		device.api = "alsa"
+		device.class = "sound"
+		alsa.class = "generic"
+		alsa.subclass = "generic-mix"
+		alsa.name = "USB Audio #1"
+		alsa.subdevice = "0"
+		alsa.subdevice_name = "subdevice #0"
+		alsa.device = "1"
+		alsa.sync.id = "00000000:00000000:00000000:00000000"
+		device.profile.name = "stereo-game"
+		device.profile.description = "Game"
+		card.profile.device = "4"
+		device.id = "83"
+		factory.name = "api.alsa.pcm.sink"
+		node.pause-on-idle = "false"
+		priority.driver = "828"
+		priority.session = "828"
+		media.class = "Audio/Sink"
+		node.name = "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game"
+		node.nick = "USB Audio #1"
+		device.description = "Astro A50"
+		api.alsa.card.name = "Astro A50"
+		api.alsa.card.longname = "Astro Gaming Astro A50 at usb-0000:00:14.0-5.2, full speed"
+		api.alsa.headroom = "512"
+		factory.id = "19"
+		clock.quantum-limit = "8192"
+		client.id = "61"
+		node.driver = "true"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		object.id = "98"
+		object.serial = "147"
+		device.enum.api = "udev"
+		api.alsa.card = "3"
+		device.profile-set = "usb-gaming-headset.conf"
+		device.plugged.usec = "5561984"
+		device.bus_path = "pci-0000:00:14.0-usb-0:5.2:1.0"
+		sysfs.path = "/devices/pci0000:00/0000:00:14.0/usb1/1-5/1-5.2/1-5.2:1.0/sound/card3"
+		device.bus-id = "usb-Astro_Gaming_Astro_A50-00"
+		device.subsystem = "sound"
+		device.vendor.id = "0x9886"
+		device.vendor.name = "Astro Gaming"
+		device.product.id = "0x002c"
+		device.product.name = "Astro A50"
+		device.serial = "Astro_Gaming_Astro_A50"
+		device.name = "alsa_card.usb-Astro_Gaming_Astro_A50-00"
+		device.nick = "Astro A50"
+		api.alsa.use-acp = "true"
+		api.acp.auto-profile = "false"
+		api.acp.auto-port = "false"
+		api.dbus.ReserveDevice1.Priority = "-20"
+		api.alsa.split-enable = "true"
+		api.dbus.ReserveDevice1 = "Audio3"
+		spa.object.id = "8"
+		device.string = "3"
+	Ports:
+		usb-gaming-headset-output-stereo: Headphones (type: Headphones, priority: 0, availability unknown)
+	Active Port: usb-gaming-headset-output-stereo
+	Formats:
+		pcm
+
+Sink #148
+	State: RUNNING
+	Name: alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat
+	Description: Astro A50 Chat
+	Driver: PipeWire
+	Sample Specification: s16le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Owner Module: 4294967295
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Base Volume: 65536 / 100% / 0.00 dB
+	Monitor Source: alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat.monitor
+	Latency: 0 usec, configured 0 usec
+	Flags: HARDWARE DECIBEL_VOLUME LATENCY 
+	Properties:
+		object.path = "alsa:acp:A50:5:playback"
+		api.alsa.path = "hw:3,0,0"
+		api.alsa.pcm.card = "3"
+		api.alsa.pcm.stream = "playback"
+		port.group = "playback"
+		device.icon_name = "audio-card-analog"
+		device.bus = "usb"
+		audio.channels = "2"
+		audio.position = "FL,FR"
+		device.routes = "1"
+		device.intended_roles = "phone"
+		alsa.resolution_bits = "16"
+		alsa.card = "3"
+		alsa.card_name = "Astro A50"
+		alsa.long_card_name = "Astro Gaming Astro A50 at usb-0000:00:14.0-5.2, full speed"
+		alsa.driver_name = "snd_usb_audio"
+		alsa.mixer_name = "USB Mixer"
+		alsa.components = "USB9886:002c"
+		alsa.id = "A50"
+		device.api = "alsa"
+		device.class = "sound"
+		alsa.class = "generic"
+		alsa.subclass = "generic-mix"
+		alsa.name = "USB Audio"
+		alsa.subdevice = "0"
+		alsa.subdevice_name = "subdevice #0"
+		alsa.device = "0"
+		alsa.sync.id = "00000000:00000000:00000000:00000000"
+		device.profile.name = "stereo-chat"
+		device.profile.description = "Chat"
+		card.profile.device = "5"
+		device.id = "83"
+		factory.name = "api.alsa.pcm.sink"
+		node.pause-on-idle = "false"
+		priority.driver = "1100"
+		priority.session = "1100"
+		media.class = "Audio/Sink"
+		node.name = "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"
+		node.nick = "Astro A50"
+		device.description = "Astro A50"
+		api.alsa.card.name = "Astro A50"
+		api.alsa.card.longname = "Astro Gaming Astro A50 at usb-0000:00:14.0-5.2, full speed"
+		api.alsa.headroom = "640"
+		factory.id = "19"
+		clock.quantum-limit = "8192"
+		client.id = "61"
+		node.driver = "true"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		object.id = "99"
+		object.serial = "148"
+		node.max-latency = "16384/48000"
+		api.alsa.period-size = "128"
+		api.alsa.period-num = "256"
+		node.driver-id = "99"
+		device.enum.api = "udev"
+		api.alsa.card = "3"
+		device.profile-set = "usb-gaming-headset.conf"
+		device.plugged.usec = "5561984"
+		device.bus_path = "pci-0000:00:14.0-usb-0:5.2:1.0"
+		sysfs.path = "/devices/pci0000:00/0000:00:14.0/usb1/1-5/1-5.2/1-5.2:1.0/sound/card3"
+		device.bus-id = "usb-Astro_Gaming_Astro_A50-00"
+		device.subsystem = "sound"
+		device.vendor.id = "0x9886"
+		device.vendor.name = "Astro Gaming"
+		device.product.id = "0x002c"
+		device.product.name = "Astro A50"
+		device.serial = "Astro_Gaming_Astro_A50"
+		device.name = "alsa_card.usb-Astro_Gaming_Astro_A50-00"
+		device.nick = "Astro A50"
+		api.alsa.use-acp = "true"
+		api.acp.auto-profile = "false"
+		api.acp.auto-port = "false"
+		api.dbus.ReserveDevice1.Priority = "-20"
+		api.alsa.split-enable = "true"
+		api.dbus.ReserveDevice1 = "Audio3"
+		spa.object.id = "8"
+		device.string = "3"
+	Ports:
+		usb-gaming-headset-output-stereo: Headphones (type: Headphones, priority: 0, availability unknown)
+	Active Port: usb-gaming-headset-output-stereo
+	Formats:
+		pcm
+
+Sink #172
+	State: IDLE
+	Name: mic_b2
+	Description: B2
+	Driver: PipeWire
+	Sample Specification: float32le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Owner Module: 536870922
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Base Volume: 65536 / 100% / 0.00 dB
+	Monitor Source: mic_b2.monitor
+	Latency: 0 usec, configured 0 usec
+	Flags: HARDWARE DECIBEL_VOLUME LATENCY 
+	Properties:
+		node.name = "mic_b2"
+		object.linger = "1"
+		device.description = "B2"
+		audio.rate = "48000"
+		audio.channels = "2"
+		audio.position = "[ FL, FR ]"
+		media.class = "Audio/Sink"
+		factory.name = "support.null-audio-sink"
+		monitor.channel-volumes = "true"
+		monitor.passthrough = "true"
+		pulse.module.id = "536870922"
+		factory.id = "19"
+		clock.quantum-limit = "8192"
+		node.driver = "true"
+		port.group = "stream.0"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		object.id = "119"
+		object.serial = "172"
+		node.driver-id = "119"
+	Formats:
+		pcm

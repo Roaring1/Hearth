@@ -1,0 +1,17 @@
+39	vm_game.monitor	PipeWire	float32le 2ch 48000Hz	RUNNING
+42	vm_chat.monitor	PipeWire	float32le 2ch 48000Hz	RUNNING
+45	vm_music.monitor	PipeWire	float32le 2ch 48000Hz	RUNNING
+47	vm_share.monitor	PipeWire	float32le 2ch 48000Hz	RUNNING
+64	laptop_audio.monitor	PipeWire	float32le 2ch 48000Hz	IDLE
+117	mic_b1.monitor	PipeWire	float32le 2ch 48000Hz	RUNNING
+140	alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00.Direct__Direct__sink.monitor	PipeWire	s32le 2ch 48000Hz	SUSPENDED
+141	alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00.Direct__Direct__source	PipeWire	s32le 2ch 48000Hz	RUNNING
+145	alsa_input.usb-Microsoft_Microsoft___LifeCam_Studio_TM_-02.mono-fallback	PipeWire	s16le 1ch 48000Hz	SUSPENDED
+147	alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game.monitor	PipeWire	s16le 2ch 48000Hz	SUSPENDED
+148	alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat.monitor	PipeWire	s16le 2ch 48000Hz	RUNNING
+149	alsa_input.usb-Astro_Gaming_Astro_A50-00.mono-chat	PipeWire	s16le 1ch 16000Hz	SUSPENDED
+172	mic_b2.monitor	PipeWire	float32le 2ch 48000Hz	IDLE
+243	sm7b_mono	PipeWire	float32le 1ch 48000Hz	RUNNING
+252	astro_mic_48k	PipeWire	float32le 1ch 48000Hz	SUSPENDED
+429	b1_mic	PipeWire	float32le 2ch 48000Hz	RUNNING
+443	b2_mic	PipeWire	float32le 2ch 48000Hz	SUSPENDED

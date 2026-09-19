@@ -1,0 +1,20 @@
+BUSES   (bus taps are POST fader - the fader level is what
+         listeners hear; app: taps are PRE fader, always full)
+
+  ALIAS    BUS              STATE     FADER    NOTE
+  game     VM-GAME          MISSING   -        
+  chat     VM-CHAT          MISSING   -        carries call audio - needs --force
+  music    VM-MUSIC         MISSING   -        
+  laptop   Laptop           MISSING   -        
+  share    VM-SHARE         MISSING   -        
+  b1       B1               MISSING   -        
+  b2       B2               MISSING   -        
+  a1       Astro A50 Game   MISSING   -        
+  a2       Astro A50 Chat   MISSING   -        carries call audio - needs --force
+  a3       Scarlett Solo    MISSING   -        
+
+APPS PLAYING NOW
+  (nothing playing - paused apps do not appear)
+
+SELECTED
+  game, music

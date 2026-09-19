@@ -1,0 +1,53 @@
+1	libpipewire-module-rt	{
+            nice.level    = -11
+            rt.prio       = 60
+            #rt.time.soft = -1
+            #rt.time.hard = -1
+            #uclamp.min = 0
+            #uclamp.max = 1024
+        }	
+2	libpipewire-module-protocol-native	{
+            # List of server Unix sockets, and optionally permissions
+            #sockets = [ { name = "pipewire-0" }, { name = "pipewire-0-manager" } ]
+        }	
+4	libpipewire-module-profiler	{
+            #profile.interval.ms = 0
+        }	
+6	libpipewire-module-metadata		
+8	libpipewire-module-spa-device-factory		
+10	libpipewire-module-spa-node-factory		
+12	libpipewire-module-client-node		
+14	libpipewire-module-client-device		
+16	libpipewire-module-portal		
+17	libpipewire-module-access	{
+            # Socket-specific access permissions
+            #access.socket = { pipewire-0 = "default", pipewire-0-manager = "unrestricted" }
+
+            # Deprecated legacy mode (not socket-based),
+            # for now enabled by default if access.socket is not specified
+            #access.legacy = true
+        }	
+18	libpipewire-module-adapter		
+20	libpipewire-module-link-factory	{
+            #allow.link.passive = false
+	}	
+22	libpipewire-module-session-manager		
+29	libpipewire-module-raop-discover		
+536870912	module-always-sink		
+536870913	module-device-manager		
+536870914	module-device-restore		
+536870915	module-stream-restore		
+536870916	module-null-sink	sink_name=vm_game  sink_properties=device.description=VM-GAME	
+536870917	module-null-sink	sink_name=vm_chat  sink_properties=device.description=VM-CHAT	
+536870918	module-null-sink	sink_name=vm_music sink_properties=device.description=VM-MUSIC	
+536870919	module-null-sink	sink_name=vm_share sink_properties=device.description=VM-SHARE	
+536870920	module-null-sink	sink_name=laptop_audio sink_properties=device.description=Laptop Audio	
+536870921	module-null-sink	sink_name=mic_b1 object.linger=1 rate=48000 channels=2 channel_map=front-left,front-right sink_properties=device.description=B1	
+536870922	module-null-sink	sink_name=mic_b2 object.linger=1 rate=48000 channels=2 channel_map=front-left,front-right sink_properties=device.description=B2	
+536870923	module-remap-source	source_name=sm7b_mono master=alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00.Direct__Direct__source master_channel_map=front-left channels=1 channel_map=mono remix=no source_properties=device.description=SM7B Mono (L)	
+536870924	module-remap-source	source_name=astro_mic_48k master=alsa_input.usb-Astro_Gaming_Astro_A50-00.mono-chat rate=48000 channels=1 channel_map=mono remix=no source_properties=device.description=Astro Mic (48k)	
+536870925	module-loopback	source=vm_game.monitor sink=alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat latency_msec=12	
+536870926	module-loopback	source=vm_chat.monitor sink=alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat latency_msec=12	
+536870927	module-loopback	source=vm_music.monitor sink=alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat latency_msec=12	
+536870928	module-remap-source	source_name=b1_mic master=mic_b1.monitor remix=yes rate=48000 channels=2 channel_map=front-left,front-right source_properties=device.description=B1 Mic	
+536870929	module-remap-source	source_name=b2_mic master=mic_b2.monitor remix=yes rate=48000 channels=2 channel_map=front-left,front-right source_properties=device.description=B2 Mic	
