@@ -10,10 +10,19 @@ repos:
       - id: check-toml
       - id: check-yaml
       - id: check-merge-conflict
+      # tests/fixtures/ holds verbatim captures of real pactl / pw-link /
+      # systemctl output, which genuinely emits trailing tabs. The suite still
+      # passes with that whitespace stripped (checked: 249 passed either way),
+      # so this is about capture fidelity, not a current test dependency -- a
+      # fixture silently rewritten by a formatter is no longer evidence of what
+      # the tool actually printed.
       - id: end-of-file-fixer
+        exclude: ^tests/fixtures/
       - id: trailing-whitespace
+        exclude: ^tests/fixtures/
       - id: mixed-line-ending
         args: [--fix=lf]
+        exclude: ^tests/fixtures/
 
   # Keep this rev in step with the ruff pinned in pyproject's [dev] extra.
   # A drifted hook lints with different rules than scripts/check.sh: v0.8.6
