@@ -565,7 +565,13 @@ class MixerWindow(Gtk.ApplicationWindow):
     def _build_group(self, group: str, sinks: list[str]) -> Gtk.Box:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         box.add_css_class("grp")
+        # A group frame is a box drawn around the strips it holds, so it has
+        # to hug them on both axes. Left to fill, the single-strip mic group
+        # stretched into a mostly empty panel in the tall layout.
         box.set_valign(Gtk.Align.START)
+        box.set_halign(Gtk.Align.START)
+        box.set_hexpand(False)
+        box.set_vexpand(False)
         tag = Gtk.Label(label=self._group_tag(group), xalign=0.0)
         tag.add_css_class("grp-tag")
         self.group_tags[group] = tag
@@ -836,7 +842,21 @@ class MixerApp(Gtk.Application):
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the GTK4 mixer."""
+    """Run the GTK4 mixer.
+
+    When the user unit starts before the graphical session is ready, GTK
+    raises "Gtk couldn't be initialized" from deep inside the window
+    constructor and the mixer stays dead for the rest of the login. Check
+    for a display first and exit with a plain message instead, so the
+    unit's Restart=on-failure can simply try again a moment later.
+    """
+    if not Gtk.init_check() or Gdk.Display.get_default() is None:
+        print(
+            "hearth: no display yet (DISPLAY/WAYLAND_DISPLAY unset or refused);"
+            " waiting for the graphical session",
+            file=sys.stderr,
+        )
+        return 1
     return MixerApp().run(argv if argv is not None else [])
 
 
