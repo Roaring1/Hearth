@@ -1,0 +1,216 @@
+"""Palette and stylesheet for the GTK4 mixer.
+
+The palette comes from the desktop (``hearth.theme``) so the window matches
+Plasma instead of guessing. Everything the widgets draw and every CSS rule is
+derived from that one dict, which is why there are no hard-coded colours in
+the layout code.
+
+Colour meanings are fixed by the design brief and must not drift:
+
+* accent  - hardware touched this control
+* red     - a fault the user should act on
+* green   - running, or signal present
+* amber   - a meter above -6 dBFS, nothing else
+* lilac   - could not be checked
+"""
+
+from __future__ import annotations
+
+from hearth import theme as theme_mod
+
+__all__ = ["CSS", "palette"]
+
+#: Fixed meanings. These are not theme tokens: a fault is red on every desktop.
+_SIGNAL = {
+    "ok": "#30d158",
+    "hot": "#e0c14a",
+    "bad": "#ff453a",
+    "unknown": "#c8a2e0",
+    "meter-off": "#202020",
+}
+
+
+def palette() -> dict[str, str]:
+    """The token dict the widgets and the stylesheet both read."""
+    try:
+        desktop = theme_mod.read()
+        tokens = dict(desktop.tokens)
+        accent = desktop.accent
+    except Exception:  # pragma: no cover - a themeless session still gets a window
+        tokens = dict(theme_mod.FALLBACK)
+        accent = theme_mod.FALLBACK.get("selection-bg", "#e93a9a")
+
+    def token(name: str, default: str) -> str:
+        value = tokens.get(name) or default
+        return value if isinstance(value, str) and value.startswith("#") else default
+
+    pal = {
+        "win": token("window-bg", "#363636"),
+        "win-alt": token("window-bg-alt", "#424242"),
+        "view": token("view-bg", "#242424"),
+        "view-alt": token("view-bg-alt", "#303030"),
+        "fg": token("window-fg", "#fcfcfc"),
+        "fg-dim": token("window-fg-dim", "#a0a0a0"),
+        "button": token("button-bg", "#656565"),
+        "selection": token("selection-bg", "#ad3376"),
+        "accent": accent or "#e93a9a",
+    }
+    pal.update(_SIGNAL)
+    # Derived drawing tokens, named for what they are rather than where they sit.
+    pal["slot"] = pal["meter-off"]
+    pal["slot-fill"] = pal["view-alt"]
+    pal["cap"] = pal["button"]
+    pal["cap-groove"] = pal["view"]
+    pal["rule"] = pal["button"]
+    return pal
+
+
+def CSS(pal: dict[str, str]) -> str:
+    """The whole stylesheet, built from *pal*."""
+    return f"""
+window.hearth {{
+  background: {pal["win"]};
+  color: {pal["fg"]};
+  font-family: Tahoma, "Trebuchet MS", Verdana, sans-serif;
+  font-size: 11px;
+}}
+
+/* ---- groups ------------------------------------------------------- */
+.grp {{
+  background: {pal["win-alt"]};
+  border: 1px solid {pal["view"]};
+  border-radius: 6px;
+  padding: 6px;
+}}
+.grp-tag {{
+  color: {pal["fg-dim"]};
+  font-size: 9.5px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 0 2px 4px 2px;
+}}
+
+/* ---- strips ------------------------------------------------------- */
+.strip {{
+  background: {pal["view"]};
+  border: 1px solid {pal["win-alt"]};
+  border-radius: 5px;
+  padding: 6px;
+}}
+.strip.dead {{
+  background: {pal["view-alt"]};
+  border-color: {pal["bad"]};
+}}
+.strip.ghost {{
+  background: transparent;
+  border: 1px dashed {pal["button"]};
+}}
+.strip-name {{
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 0.6px;
+}}
+.strip.dead .strip-name {{ color: {pal["fg-dim"]}; }}
+
+.minbox, .sendbtn, .showbtn, .drawer, .railbtn {{
+  background: {pal["view-alt"]};
+  color: {pal["fg-dim"]};
+  border: 1px solid {pal["win-alt"]};
+  border-radius: 3px;
+  padding: 1px 6px;
+  min-height: 0;
+  font-size: 10px;
+}}
+.minbox {{ padding: 0 5px; }}
+.minbox:hover, .sendbtn:hover, .showbtn:hover, .drawer:hover, .railbtn:hover {{
+  color: {pal["fg"]};
+  border-color: {pal["button"]};
+}}
+.sendbtn.live {{ color: {pal["ok"]}; border-color: {pal["ok"]}; }}
+
+.value {{
+  font-family: "Andale Mono", monospace;
+  font-size: 17px;
+  color: {pal["fg"]};
+}}
+.strip.dead .value {{ color: {pal["fg-dim"]}; }}
+.bind {{
+  font-family: "Andale Mono", monospace;
+  font-size: 9px;
+  color: {pal["fg-dim"]};
+  background: {pal["view-alt"]};
+  border-radius: 3px;
+  padding: 1px 4px;
+}}
+.bind.hw {{ color: {pal["accent"]}; }}
+
+button.mute {{
+  background: {pal["view-alt"]};
+  color: {pal["fg-dim"]};
+  border: 1px solid {pal["win-alt"]};
+  border-radius: 3px;
+  padding: 2px 0;
+  min-height: 0;
+  font-size: 9.5px;
+  letter-spacing: 1px;
+}}
+button.mute:hover {{ color: {pal["fg"]}; }}
+button.mute:checked {{
+  background: {pal["bad"]};
+  color: #17110f;
+  border-color: {pal["bad"]};
+  font-weight: bold;
+}}
+
+.device {{
+  font-size: 9.5px;
+  color: {pal["fg-dim"]};
+  background: {pal["view-alt"]};
+  border-radius: 3px;
+  padding: 2px 5px;
+}}
+.device.missing {{ color: {pal["bad"]}; }}
+.device.unknown {{ color: {pal["unknown"]}; }}
+
+.mark {{
+  font-size: 9px;
+  font-weight: bold;
+  color: #10100f;
+  border-radius: 3px;
+  padding: 0 4px;
+  min-width: 10px;
+  background: #5a8f3a;
+}}
+.mark.discord {{ background: #5865f2; }}
+.mark.firefox {{ background: #d6642a; }}
+.mark.spotify {{ background: #1db954; }}
+.mark.chrome {{ background: #4a7fa5; }}
+.mark.obs {{ background: #8f949a; }}
+.mark.steam {{ background: #3f7fbf; }}
+.mark.vlc {{ background: #e8792a; }}
+.mark.more {{ background: {pal["view-alt"]}; color: {pal["fg-dim"]}; }}
+.listener {{ font-size: 9.5px; color: {pal["fg-dim"]}; }}
+.listener.muted {{ color: {pal["bad"]}; }}
+
+/* ---- share destination -------------------------------------------- */
+.dest {{
+  background: {pal["view"]};
+  border: 1px solid {pal["win-alt"]};
+  border-radius: 5px;
+  padding: 6px;
+}}
+.dest.bad {{ border-color: {pal["bad"]}; }}
+.dest-tag {{ font-size: 9px; color: {pal["fg-dim"]}; letter-spacing: 1px; }}
+.dest-warn {{ font-size: 9.5px; color: {pal["bad"]}; }}
+
+/* ---- rail and footer ---------------------------------------------- */
+.rail-tag {{ font-size: 9px; color: {pal["fg-dim"]}; letter-spacing: 1px; }}
+.footer {{ color: {pal["fg-dim"]}; font-size: 10px; }}
+.banner {{
+  background: {pal["view"]};
+  border-left: 3px solid {pal["bad"]};
+  border-radius: 3px;
+  padding: 3px 8px;
+}}
+.banner-text {{ color: {pal["bad"]}; font-size: 10px; }}
+"""
