@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 Roaring1 -->
+<component type="desktop-application">
+  <id>io.github.roaring1.Hearth</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>Hearth</name>
+  <summary>PipeWire mixer, mic routing and audio service control</summary>
+
+  <description>
+    <p>
+      Hearth is a control panel for a multi-bus PipeWire setup. It presents virtual
+      output buses as a mixer, routes microphones to separate streaming and chat
+      destinations, and shows the health of the systemd user services that keep the
+      routing in place.
+    </p>
+    <p>Hearth is built for people who run a Voicemeeter-style rig on Linux:</p>
+    <ul>
+      <li>Faders, mute and live level meters for each virtual bus</li>
+      <li>Per-application streams shown on the bus they are playing through</li>
+      <li>Microphone routing between stream and chat buses</li>
+      <li>Headset and monitor output switching</li>
+      <li>Start, stop and restart of the audio services, with failure states surfaced</li>
+      <li>A debug snapshot command for reporting problems</li>
+    </ul>
+    <p>
+      It talks to PipeWire through its PulseAudio compatibility layer and to systemd
+      through the user session, so it needs no daemon of its own.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.roaring1.Hearth.desktop</launchable>
+
+  <url type="homepage">https://github.com/Roaring1/Hearth</url>
+  <url type="bugtracker">https://github.com/Roaring1/Hearth/issues</url>
+  <url type="vcs-browser">https://github.com/Roaring1/Hearth</url>
+
+  <developer id="io.github.roaring1">
+    <name>Roaring1</name>
+  </developer>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+  </categories>
+
+  <keywords>
+    <keyword>audio</keyword>
+    <keyword>mixer</keyword>
+    <keyword>pipewire</keyword>
+    <keyword>routing</keyword>
+    <keyword>microphone</keyword>
+  </keywords>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="5.1.0" date="2026-09-19">
+      <description>
+        <p>Room-correction control, hardened single-instance messaging, and an
+        argv-only subprocess layer.</p>
+      </description>
+    </release>
+  </releases>
+</component>

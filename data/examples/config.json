@@ -1,0 +1,11 @@
+{
+  "astro_chat_sink": "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat",
+  "astro_game_sink": "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game",
+  "monitor_sink": "",
+  "monitor_sink_match": "Focusrite",
+  "laptop_host": "laptop",
+  "laptop_rtp_port": 46000,
+  "ssh_host": "",
+  "ssh_user": "",
+  "ssh_key": "~/.ssh/id_ed25519"
+}

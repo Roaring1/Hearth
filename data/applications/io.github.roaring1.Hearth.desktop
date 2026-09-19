@@ -1,0 +1,39 @@
+[Desktop Entry]
+# Version is the Desktop Entry Specification version, not Hearth's version.
+Version=1.5
+Type=Application
+Name=Hearth
+GenericName=Audio Mixer
+Comment=PipeWire mixer, mic routing, and audio service control
+# Requires ~/.local/bin/hearth (a symlink to hearth.py) on PATH.
+# See the Install section of README.md.
+TryExec=hearth
+Exec=hearth
+# Icon theme name, matching the file installed from
+# data/icons/hicolor/<size>/apps/io.github.roaring1.Hearth.png
+Icon=io.github.roaring1.Hearth
+Terminal=false
+Categories=AudioVideo;Audio;Mixer;
+Keywords=audio;mixer;pipewire;volume;fader;routing;mic;
+StartupNotify=true
+# Must match the window's WM class so Plasma groups the window with this
+# launcher instead of showing a second task entry.
+StartupWMClass=hearth
+SingleMainWindow=true
+Actions=show;unmute;dump;quit;
+
+[Desktop Action show]
+Name=Show Window
+Exec=hearth --show
+
+[Desktop Action unmute]
+Name=Unmute All Buses
+Exec=hearth --unmute
+
+[Desktop Action dump]
+Name=Write Debug Snapshot
+Exec=hearth --dump
+
+[Desktop Action quit]
+Name=Quit Hearth
+Exec=hearth --quit
