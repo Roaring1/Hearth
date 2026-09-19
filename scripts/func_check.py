@@ -110,6 +110,43 @@ class FuncApp(Gtk.Application):
         back = "vm_game" in win.strips and "vm_game" not in win.slivers
         check("rail click restores the strip", back)
 
+        # --- minimising most of the strips must not flip the layout ---
+        # Three of five folded away used to shrink the window, which made
+        # it taller than it was wide, which stacked the groups, which
+        # shrank it again: the UI ended up a broken vertical column.
+        for sink in ("vm_music", "vm_chat", "mic_b1"):
+            win.minimise(sink)
+        check(
+            "minimising three of five keeps the side-by-side layout",
+            not win._stacked and win.body.get_orientation() == Gtk.Orientation.HORIZONTAL,
+            f"stacked={win._stacked}",
+        )
+        for sink in ("vm_music", "vm_chat", "mic_b1"):
+            win.restore(sink)
+
+        # --- an app can be dragged from one bus to another ---
+        drop_ok = win.strips["vm_game"]._on_drop(None, "app:999999", 0.0, 0.0)
+        check("a dropped app is handled as a move", drop_ok is True)
+
+        # --- a mic bus offers real capture devices ---
+        mic = win.strips.get("mic_b1")
+        if mic is not None and mic.in_button is not None:
+            mic._fill_inputs()
+            child = mic.in_popover.get_child()
+            labels = []
+            row = child.get_first_child() if child is not None else None
+            while row is not None:
+                if isinstance(row, Gtk.CheckButton):
+                    labels.append(row.get_label())
+                row = row.get_next_sibling()
+            check(
+                "mic bus can be fed from the A50 boom mic",
+                "A50 boom mic" in labels,
+                f"{labels}",
+            )
+        else:
+            check("mic bus has an input chooser", False)
+
         # --- the fault banner knows which unit to restart ---
         win.banner_units = ()
         win._update_banner()

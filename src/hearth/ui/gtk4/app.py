@@ -105,6 +105,19 @@ UNIT_FOR_SINK: dict[str, str] = {
 #: Everywhere a bus can be sent. A bus is a null sink, so "output" means
 #: a ``module-loopback`` from its monitor into a real device. Naming them
 #: here keeps the popover honest: nothing appears that cannot be wired.
+#: Capture devices that can be poured into a mic bus. Until now a mic bus
+#: could only ever be whatever Carla happened to be feeding it, so the
+#: headset's own boom mic had no way in at all.
+MIC_SOURCES: tuple[tuple[str, str], ...] = (
+    ("SM7B (Carla)", "sm7b_mono"),
+    ("A50 boom mic", "alsa_input.usb-Astro_Gaming_Astro_A50-00.mono-chat"),
+    (
+        "Scarlett in",
+        "alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00.Direct__Direct__source",
+    ),
+    ("LifeCam", "alsa_input.usb-Microsoft_Microsoft___LifeCam_Studio_TM_-02.mono-fallback"),
+)
+
 OUTPUTS: tuple[tuple[str, str], ...] = (
     ("A50 game", "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game"),
     ("A50 chat", "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"),
@@ -128,6 +141,14 @@ APP_CLASSES = {
     "steam": "steam",
     "vlc": "vlc",
 }
+
+
+def _sources_safe() -> list:
+    """Live capture devices, or nothing if pactl is unreachable."""
+    try:
+        return pactl.sources()
+    except OSError:  # pragma: no cover - no pactl, no sources
+        return []
 
 
 def app_class(name: str) -> str:
@@ -308,6 +329,21 @@ class Strip(Gtk.Box):
         self.out_popover.connect("show", lambda _p: self._fill_outputs())
         brow.append(self.out_button)
 
+        # A mic bus also needs to say what feeds it. Everything else in
+        # this window routes sound outwards; a mic is the one direction
+        # the mixer never offered.
+        self.in_button: Gtk.MenuButton | None = None
+        if channel.group == "mic":
+            self.in_button = Gtk.MenuButton()
+            self.in_button.set_label("IN")
+            self.in_button.add_css_class("outbtn")
+            self.in_button.set_tooltip_text(f"Choose what feeds {channel.name}")
+            self.in_popover = Gtk.Popover()
+            self.in_popover.add_css_class("outpop")
+            self.in_button.set_popover(self.in_popover)
+            self.in_popover.connect("show", lambda _p: self._fill_inputs())
+            brow.append(self.in_button)
+
         # device line
         self.device = Gtk.Label(label="\u2026", xalign=0.0)
         self.device.set_tooltip_text(f"Where {channel.name} lands")
@@ -420,7 +456,14 @@ class Strip(Gtk.Box):
         self.add_controller(target)
 
     def _on_drop(self, _t: Gtk.DropTarget, value: str, _x: float, _y: float) -> bool:
-        self.win.reorder(str(value), self.channel.sink)
+        payload = str(value)
+        if payload.startswith("app:"):
+            # An application landed on this strip: move its stream here
+            # rather than reordering anything.
+            pactl.move_sink_input(payload[4:], self.channel.sink)
+            GLib.timeout_add(400, self._route_settled)
+            return True
+        self.win.reorder(payload, self.channel.sink)
         return True
 
     # -- user input ------------------------------------------------------
@@ -560,6 +603,36 @@ class Strip(Gtk.Box):
             box.append(check)
         self.out_popover.set_child(box)
 
+    def _fill_inputs(self) -> None:
+        """Which capture devices are poured into this mic bus."""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        hint = Gtk.Label(label="Feeding this mic bus", xalign=0.0)
+        hint.add_css_class("outhint")
+        box.append(hint)
+        live = {source for source, sinks in self.win._routes.items() if self.channel.sink in sinks}
+        present = {entry.name for entry in _sources_safe()}
+        for label, source in MIC_SOURCES:
+            check = Gtk.CheckButton(label=label)
+            check.set_active(source in live)
+            check.set_sensitive(source in present)
+            if source not in present:
+                check.set_tooltip_text("Not plugged in")
+            check.connect("toggled", self._on_mic_in, source)
+            box.append(check)
+        self.in_popover.set_child(box)
+
+    def _on_mic_in(self, check: Gtk.CheckButton, source: str) -> None:
+        """Wire or unwire one capture device into this mic bus."""
+        if check.get_active():
+            pactl.load_loopback(
+                source,
+                self.channel.sink,
+                latency_msec=int(self.win.cfg.get("latency_msec", 12) or 12),
+            )
+        else:
+            pactl.unload_loopbacks(source, [self.channel.sink])
+        GLib.timeout_add(400, self._route_settled)
+
     def _on_route(self, check: Gtk.CheckButton, sink: str) -> None:
         """Wire or unwire one destination for this bus."""
         source = f"{self.channel.sink}.monitor"
@@ -595,7 +668,19 @@ class Strip(Gtk.Box):
             # little mute box on the right, so one app can be silenced
             # without touching the bus everything else is riding on.
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-            row.append(self._mark(listener.name, 12))
+            mark = self._mark(listener.name, 12)
+            if listener.index:
+                # The icon is the handle: drag it onto another strip and
+                # the app itself moves to that bus.
+                grab = Gtk.DragSource()
+                grab.set_actions(Gdk.DragAction.MOVE)
+                grab.connect(
+                    "prepare",
+                    lambda *_a, idx=listener.index: Gdk.ContentProvider.new_for_value(f"app:{idx}"),
+                )
+                mark.add_controller(grab)
+                mark.set_tooltip_text(f"{listener.name} \u2014 drag onto another bus")
+            row.append(mark)
             name = Gtk.Label(label=listener.name, xalign=0.0)
             name.add_css_class("listener")
             name.set_ellipsize(3)
@@ -651,6 +736,8 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.absent: set[str] = set()
         #: source -> sinks, refreshed with every snapshot.
         self._routes: dict[str, set[str]] = {}
+        #: destinations that are muted at the device itself
+        self._muted_outs: set[str] = set()
         #: in-flight window resize, if any
         self._size_target: tuple[int, int] | None = None
         self._size_tick: int | None = None
@@ -741,7 +828,17 @@ class MixerWindow(Gtk.ApplicationWindow):
         width, height = self.get_width(), self.get_height()
         if width <= 1 or height <= 1:
             return False
-        return height > width
+        if self._size_tick is not None:
+            # Mid-animation the window is briefly any shape at all.
+            # Re-deciding the layout from those frames is what made
+            # minimising three of five strips thrash between shapes and
+            # end up as a broken vertical stack.
+            return self._stacked
+        if self._stacked:
+            # Hysteresis: once stacked, stay stacked until the window is
+            # clearly wide again, so one rebuild cannot cause the next.
+            return height > width * 0.85
+        return height > width * 1.4
 
     def rebuild(self) -> None:
         """Rebuild the strip area from order, hidden and minimised state."""
@@ -955,8 +1052,27 @@ class MixerWindow(Gtk.ApplicationWindow):
             return {}
         return routes
 
+    def _read_muted_outs(self) -> set[str]:
+        """Friendly names of destination devices that are muted themselves.
+
+        The LPD8 script mutes hardware endpoints directly, so the mixer can
+        show every bus open and the room can still be silent. This is the
+        one place that discrepancy becomes visible.
+        """
+        muted: set[str] = set()
+        wanted = {sink for _label, sink in OUTPUTS}
+        reachable = {entry.name for entry in pactl.sinks()} if wanted else set()
+        for label, sink in OUTPUTS:
+            if sink in reachable and pactl.is_muted(sink):
+                muted.add(label)
+        return muted
+
     def _apply_snapshot(self, snapshot) -> bool:
         self._routes = self._read_routes()
+        try:
+            self._muted_outs = self._read_muted_outs()
+        except OSError:  # pragma: no cover - pactl gone
+            self._muted_outs = set()
         # Snapshot keeps both of these as dicts keyed by sink name.
         sinks = dict(snapshot.sinks)
         streams: dict[str, list[Listener]] = {
@@ -1003,6 +1119,11 @@ class MixerWindow(Gtk.ApplicationWindow):
             # readout picked whichever A50 endpoint was RUNNING, and both
             # always are, so it said "A50 game" while the user listened on
             # chat.
+            muted = [name for name in routed if name in self._muted_outs]
+            if muted:
+                # A muted endpoint is silence with no explanation anywhere
+                # on screen, which is exactly how the A50 went quiet.
+                return " + ".join(routed) + "  \u2014 MUTED"
             return " + ".join(routed)
         if channel.sink == "laptop_audio":
             return "laptop in"

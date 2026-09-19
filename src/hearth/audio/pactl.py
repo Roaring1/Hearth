@@ -214,6 +214,23 @@ def set_mute(sink: str, muted: bool) -> None:
         proc.spawn(["pactl", "set-sink-mute", sink, "1" if muted else "0"])
 
 
+def move_sink_input(index: str, sink: str) -> None:
+    """Send one application's stream to a different bus."""
+    if index and sink:
+        proc.spawn(["pactl", "move-sink-input", str(index), sink])
+
+
+def is_source_muted(source: str) -> bool:
+    if not source:
+        return False
+    return "yes" in _text("get-source-mute", source).lower()
+
+
+def set_source_mute(source: str, muted: bool) -> None:
+    if source:
+        proc.spawn(["pactl", "set-source-mute", source, "1" if muted else "0"])
+
+
 def set_stream_mute(index: str, muted: bool) -> None:
     """Mute one sink input (a single application), not the whole bus."""
     if index:
