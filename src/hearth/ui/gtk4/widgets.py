@@ -94,7 +94,7 @@ class Meter(Gtk.DrawingArea):
     data can arrive later without a layout change.
     """
 
-    def __init__(self, palette: dict[str, str], width: int = 26, height: int = 76) -> None:
+    def __init__(self, palette: dict[str, str], width: int = 15, height: int = 76) -> None:
         super().__init__()
         self._pal = palette
         self._level = 0.0
@@ -131,12 +131,15 @@ class Meter(Gtk.DrawingArea):
         self.queue_draw()
 
     def _draw(self, _area: Gtk.DrawingArea, cr, w: int, h: int) -> None:
-        trough = parse_rgb(self._pal["meter-off"])
-        gap = 3.0
-        cw = (w - gap) / 2
+        trough = parse_rgb(self._pal["meter-dim"])
+        cr.set_source_rgb(*parse_rgb(self._pal["meter-off"]))
+        rounded(cr, 0, 0, w, h, 2)
+        cr.fill()
+        gap = 2.0
+        cw = (w - 2.0 - gap) / 2
         count = max(5, int(h // (_SEG_H + _SEG_GAP)))
         for col in range(2):
-            x = col * (cw + gap)
+            x = 1.0 + col * (cw + gap)
             for i in range(count):
                 frac = (i + 1) / count
                 y = h - (i + 1) * (_SEG_H + _SEG_GAP)
@@ -165,7 +168,7 @@ class Fader(Gtk.DrawingArea):
 
     __gsignals__: ClassVar[dict] = {"moved": (GObject.SignalFlags.RUN_FIRST, None, (int,))}
 
-    def __init__(self, palette: dict[str, str], width: int = 30, height: int = 76) -> None:
+    def __init__(self, palette: dict[str, str], width: int = 20, height: int = 76) -> None:
         super().__init__()
         self._pal = palette
         self._value = 0
@@ -231,24 +234,24 @@ class Fader(Gtk.DrawingArea):
         return True
 
     def _draw(self, _area: Gtk.DrawingArea, cr, w: int, h: int) -> None:
-        cx = w / 2
+        # The round-10 fader is a wide dark travel track, not a hairline slot:
+        # the cap has to read as a physical thing you can grab from across
+        # the room, the same way the hardware fader does.
+        track_w = max(10.0, w - 2.0)
+        track_x = (w - track_w) / 2
         cr.set_source_rgb(*parse_rgb(self._pal["slot"]))
-        rounded(cr, cx - 2.5, 2, 5, h - 4, 2)
+        rounded(cr, track_x, 0, track_w, h, 2)
         cr.fill()
         if self._dead:
             return
         frac = self._value / VMAX
-        y = h - 4 - frac * (h - 8)
-        cr.set_source_rgb(*parse_rgb(self._pal["slot-fill"]))
-        cr.rectangle(cx - 2.5, y, 5, (h - 2) - y)
-        cr.fill()
-        cap_w, cap_h = min(w - 2, 24), 11
-        cap_x, cap_y = cx - cap_w / 2, y - cap_h / 2
+        cap_h = 9.0
+        y = (h - cap_h) - frac * (h - cap_h)
         cr.set_source_rgb(*parse_rgb(self._pal["accent" if self._hw else "cap"]))
-        rounded(cr, cap_x, cap_y, cap_w, cap_h, 2.5)
+        rounded(cr, track_x + 0.5, y, track_w - 1, cap_h, 2)
         cr.fill()
         cr.set_source_rgb(*parse_rgb(self._pal["cap-groove"]))
-        cr.rectangle(cap_x + 2, cap_y + cap_h / 2 - 0.75, cap_w - 4, 1.5)
+        cr.rectangle(track_x + 2.5, y + cap_h / 2 - 0.5, track_w - 5, 1.0)
         cr.fill()
 
 
@@ -260,7 +263,7 @@ class Scale(Gtk.DrawingArea):
     def __init__(self, palette: dict[str, str], height: int) -> None:
         super().__init__()
         self._pal = palette
-        self.set_content_width(24)
+        self.set_content_width(21)
         self.set_content_height(height)
         self.set_draw_func(self._draw)
 

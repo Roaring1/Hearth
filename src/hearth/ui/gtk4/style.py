@@ -26,7 +26,8 @@ _SIGNAL = {
     "hot": "#e0c14a",
     "bad": "#ff453a",
     "unknown": "#c8a2e0",
-    "meter-off": "#202020",
+    "meter-off": "#1b1b1b",
+    "meter-dim": "#3b3b3b",
 }
 
 
@@ -79,23 +80,23 @@ window.hearth {{
 .grp {{
   background: {pal["win-alt"]};
   border: 1px solid {pal["view"]};
-  border-radius: 6px;
-  padding: 6px;
+  border-radius: 5px;
+  padding: 4px 5px 5px 5px;
 }}
 .grp-tag {{
+  font-family: "Andale Mono", monospace;
   color: {pal["fg-dim"]};
-  font-size: 9.5px;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  padding: 0 2px 4px 2px;
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  padding: 0 2px 2px 2px;
 }}
 
 /* ---- strips ------------------------------------------------------- */
 .strip {{
   background: {pal["view"]};
   border: 1px solid {pal["win-alt"]};
-  border-radius: 5px;
-  padding: 6px;
+  border-radius: 4px;
+  padding: 4px;
 }}
 .strip.dead {{
   background: {pal["view-alt"]};
@@ -112,7 +113,7 @@ window.hearth {{
 }}
 .strip.dead .strip-name {{ color: {pal["fg-dim"]}; }}
 
-.minbox, .sendbtn, .showbtn, .drawer, .railbtn {{
+.minbox, .sendbtn, .showbtn, .railbtn {{
   background: {pal["view-alt"]};
   color: {pal["fg-dim"]};
   border: 1px solid {pal["win-alt"]};
@@ -122,11 +123,13 @@ window.hearth {{
   font-size: 10px;
 }}
 .minbox {{ padding: 0 5px; }}
-.minbox:hover, .sendbtn:hover, .showbtn:hover, .drawer:hover, .railbtn:hover {{
+.minbox:hover, .sendbtn:hover, .showbtn:hover, .railbtn:hover {{
   color: {pal["fg"]};
   border-color: {pal["button"]};
 }}
-.sendbtn.live {{ color: {pal["ok"]}; border-color: {pal["ok"]}; }}
+.sendbtn {{ color: {pal["accent"]}; border-color: {pal["accent"]}; }}
+.sendbtn:disabled {{ color: {pal["fg-dim"]}; border-color: {pal["win-alt"]}; }}
+.sendbtn.live {{ color: {pal["accent"]}; border-color: {pal["accent"]}; }}
 
 .value {{
   font-family: "Andale Mono", monospace;
@@ -163,11 +166,13 @@ button.mute:checked {{
 }}
 
 .device {{
-  font-size: 9.5px;
+  font-family: "Andale Mono", monospace;
+  font-size: 9px;
   color: {pal["fg-dim"]};
   background: {pal["view-alt"]};
+  border: 1px solid {pal["win-alt"]};
   border-radius: 3px;
-  padding: 2px 5px;
+  padding: 1px 4px;
 }}
 .device.missing {{ color: {pal["bad"]}; }}
 .device.unknown {{ color: {pal["unknown"]}; }}
@@ -190,22 +195,48 @@ button.mute:checked {{
 .mark.vlc {{ background: #e8792a; }}
 .mark.more {{ background: {pal["view-alt"]}; color: {pal["fg-dim"]}; }}
 .listener {{ font-size: 9.5px; color: {pal["fg-dim"]}; }}
+.appmute {{
+  font-size: 8px;
+  color: {pal["fg-dim"]};
+  background: {pal["view-alt"]};
+  border-radius: 2px;
+  padding: 0 3px;
+}}
+.appmute.on {{ color: {pal["bad"]}; }}
 .listener.muted {{ color: {pal["bad"]}; }}
 
 /* ---- share destination -------------------------------------------- */
 .dest {{
   background: {pal["view"]};
   border: 1px solid {pal["win-alt"]};
-  border-radius: 5px;
-  padding: 6px;
+  border-radius: 4px;
+  padding: 4px;
 }}
 .dest.bad {{ border-color: {pal["bad"]}; }}
-.dest-tag {{ font-size: 9px; color: {pal["fg-dim"]}; letter-spacing: 1px; }}
+.dest-tag {{
+  font-family: "Andale Mono", monospace;
+  font-size: 9px;
+  color: {pal["fg-dim"]};
+}}
 .dest-warn {{ font-size: 9.5px; color: {pal["bad"]}; }}
 
 /* ---- rail and footer ---------------------------------------------- */
-.rail-tag {{ font-size: 9px; color: {pal["fg-dim"]}; letter-spacing: 1px; }}
-.footer {{ color: {pal["fg-dim"]}; font-size: 10px; }}
+.rail-tag {{
+  font-family: "Andale Mono", monospace;
+  font-size: 9px;
+  color: {pal["fg-dim"]};
+}}
+.footer {{ color: {pal["fg-dim"]}; font-size: 9.5px; }}
+button.drawer {{
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  color: {pal["fg-dim"]};
+  font-size: 9.5px;
+  min-height: 0;
+  padding: 0 4px;
+}}
+button.drawer:hover {{ color: {pal["fg"]}; background: transparent; }}
 .banner {{
   background: {pal["view"]};
   border-left: 3px solid {pal["bad"]};
