@@ -74,8 +74,8 @@ CHANNELS: tuple[Channel, ...] = (
     Channel("Chat", "vm_chat", "headset", "K6", "P2"),
     Channel("Music", "vm_music", "headset", "K5", "P1"),
     Channel("Laptop", "laptop_audio", "headset"),
-    Channel("Mic\u2192Stream", "mic_b1", "mic", "K8", "P6"),
-    Channel("Mic\u2192Discord", "mic_b2", "mic"),
+    Channel("Stream mic", "mic_b1", "mic", "K8", "P6"),
+    Channel("Discord mic", "mic_b2", "mic"),
 )
 
 #: Apps that actually appear on this desk get their own brand colour, defined
@@ -139,7 +139,7 @@ class Strip(Gtk.Box):
         self.channel = channel
         self.pal = window.pal
         self.add_css_class("strip")
-        self.set_size_request(98, -1)
+        self.set_size_request(108, -1)
         # Without this the lone strip in a group swallows every spare
         # pixel in the window and ends up three times its neighbours.
         self.set_hexpand(False)
@@ -150,12 +150,13 @@ class Strip(Gtk.Box):
         # header: grip, name, minimise
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         header.append(self._grip())
-        # Bus names that already carry a route (Mic→Discord) are long
-        # enough that shouting them just truncates them.
-        label = channel.name if "\u2192" in channel.name else channel.name.upper()
+        # Single-word bus names shout; a two-word name like "Discord mic"
+        # reads better as typed and would not fit the strip uppercased.
+        label = channel.name.upper() if " " not in channel.name else channel.name
         name = Gtk.Label(label=label, xalign=0.0)
         name.add_css_class("strip-name")
-        name.set_ellipsize(3)
+        # No ellipsize: a strip should grow to fit its own name rather
+        # than clip it, so "Discord mic" stays readable.
         name.set_hexpand(True)
         name.set_tooltip_text(channel.name)
         header.append(name)
@@ -356,6 +357,11 @@ class Strip(Gtk.Box):
             name = Gtk.Label(label=listener.name, xalign=0.0)
             name.add_css_class("listener")
             name.set_ellipsize(3)
+            # Cap the requested width: without this a long app name
+            # like "gst-launch-1.0" makes its whole strip wider than
+            # the others and the row of strips stops lining up.
+            name.set_max_width_chars(10)
+            name.set_width_chars(0)
             name.set_hexpand(True)
             name.set_tooltip_text(listener.name)
             if listener.muted:
