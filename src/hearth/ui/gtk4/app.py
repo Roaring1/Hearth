@@ -634,6 +634,15 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.expanded = True
         self.meter_h = METER_TALL
         self.hidden = set(self.cfg.get("mixer_hidden") or ["mic_b2"])
+        # A bus whose device is unplugged is not a fault, it is an
+        # absence: the laptop is only here sometimes. Absent buses fold
+        # away on their own and come back when the sink does, and they
+        # are deliberately not written to mixer_hidden -- hiding is the
+        # user's choice, absence is the world's.
+        self.absent: set[str] = set()
+        # Only a bus that was working and then vanished is worth a
+        # banner. One that was never there since launch is just unplugged.
+        self.ever_present: set[str] = set()
         self.minimised = set(self.cfg.get("mixer_minimised") or [])
         self.order = self._load_order()
         self.states: dict[str, ChannelState] = {c.sink: ChannelState() for c in CHANNELS}
@@ -746,6 +755,7 @@ class MixerWindow(Gtk.ApplicationWindow):
                 if (self._channel(s) is not None and self._channel(s).group == group)
                 and s not in self.minimised
                 and s not in self.hidden
+                and s not in self.absent
             ]
             if not sinks:
                 continue
@@ -793,6 +803,10 @@ class MixerWindow(Gtk.ApplicationWindow):
                 self.rail.remove(child)
             child = nxt
         for sink in self.order:
+            if sink in self.absent:
+                # No rail tag either: an unplugged device should leave
+                # no trace to click, or the click would do nothing.
+                continue
             if sink not in self.minimised and sink not in self.hidden:
                 continue
             channel = self._channel(sink)
@@ -905,6 +919,8 @@ class MixerWindow(Gtk.ApplicationWindow):
             state.muted = bool(sink.muted) if sink else False
             state.listeners = streams.get(channel.sink, [])
             state.device = self._device_label(channel, snapshot)
+        if self._track_absent():
+            self.rebuild()
         self.apply_states()
         self._update_banner()
         return False
@@ -939,9 +955,37 @@ class MixerWindow(Gtk.ApplicationWindow):
         for sink, strip in self.strips.items():
             strip.apply(self.states[sink])
 
+    def _track_absent(self) -> bool:
+        """Fold vanished buses away, unfold returning ones. True if changed.
+
+        A bus is only restored to the strip area if the *device* came
+        back; a bus the user hid or minimised by hand stays where they
+        put it, because the mixer must not undo a deliberate choice.
+        """
+        changed = False
+        for channel in CHANNELS:
+            sink = channel.sink
+            present = self.states[sink].present
+            if present:
+                self.ever_present.add(sink)
+                if sink in self.absent:
+                    self.absent.discard(sink)
+                    changed = True
+            elif sink not in self.absent:
+                self.absent.add(sink)
+                changed = True
+        return changed
+
     def _update_banner(self) -> None:
+        # Absence is handled by folding the strip away. The banner is
+        # kept for the case that really is a fault: a bus that was up
+        # this session and then died under us.
         missing = [
-            c for c in CHANNELS if not self.states[c.sink].present and c.sink not in self.hidden
+            c
+            for c in CHANNELS
+            if not self.states[c.sink].present
+            and c.sink not in self.hidden
+            and c.sink in self.ever_present
         ]
         if missing:
             names = ", ".join(c.name for c in missing)
@@ -1015,7 +1059,7 @@ class MixerWindow(Gtk.ApplicationWindow):
         if state.listeners or level > 0.02 or not state.present:
             self._laptop_busy = time.monotonic()
             return
-        if sink in self.minimised or sink in self.hidden:
+        if sink in self.minimised or sink in self.hidden or sink in self.absent:
             return
         if time.monotonic() - self._laptop_busy >= IDLE_COLLAPSE_S:
             self.minimise(sink)
