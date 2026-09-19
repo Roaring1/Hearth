@@ -1,0 +1,264 @@
+* { font-family: "Cantarell", "Noto Sans", "Helvetica Neue", sans-serif; }
+window { background-color: #1c1c1e; }
+
+button, togglebutton, .ch-strip, .svc-row, .mute-btn {
+    transition: background 160ms ease, color 160ms ease,
+                border-color 160ms ease, opacity 160ms ease;
+}
+notebook tab { transition: color 120ms ease; }
+
+@keyframes pulse-bad {
+    0%   { opacity: 1.0; }
+    50%  { opacity: 0.42; }
+    100% { opacity: 1.0; }
+}
+.pulse-bad { animation: pulse-bad 1.1s ease-in-out infinite; }
+
+/* top bar */
+.topbar {
+    background: #252527;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    padding: 3px 8px; min-height: 30px;
+}
+.app-logo {
+    font-size: 11px; font-weight: 800;
+    letter-spacing: 5px; color: #0a84ff;
+}
+.health-pill {
+    font-size: 9px; font-weight: 700; letter-spacing: 1px;
+    padding: 3px 9px; border-radius: 10px;
+    background: rgba(255,255,255,0.07); min-width: 60px;
+}
+.hp-ok   { color: #30d158; }
+.hp-warn { color: #ff9f0a; }
+.hp-bad  { color: #ff453a; font-weight: 900; animation: pulse-bad 1.1s ease-in-out infinite; }
+
+/* mixer */
+.mixer-area {
+    background: rgba(20,20,22,0.98);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+/* channel strip */
+.ch-strip {
+    background: rgba(40,40,44,0.80);
+    border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);
+    padding: 4px 4px 6px 4px; margin: 3px 2px; min-width: 64px;
+}
+.ch-strip:hover {
+    background: rgba(52,52,58,0.90);
+    border-color: rgba(255,255,255,0.12);
+}
+.ch-name {
+    font-size: 7.5px; font-weight: 700;
+    letter-spacing: 2px; color: rgba(255,255,255,0.35);
+    margin-bottom: 3px;
+}
+.ch-vol {
+    font-family: "JetBrains Mono","Fira Code","Courier New",monospace;
+    font-size: 12px; font-weight: 300;
+    color: rgba(255,255,255,0.82); margin-top: 1px;
+}
+.ch-st       { font-size: 7px; letter-spacing: 1px; color: rgba(255,255,255,0.20); }
+.ch-st-run   { color: #30d158; }
+.ch-st-idle  { color: rgba(255,255,255,0.20); }
+
+/* fader */
+scale trough {
+    background: rgba(255,255,255,0.07); border-radius: 3px;
+    min-height: 4px; min-width: 4px;
+}
+scale highlight { background: #0a84ff; border-radius: 3px; }
+scale slider {
+    background: white; border-radius: 5px;
+    min-width: 13px; min-height: 13px; margin: -5px 0;
+    transition: background 120ms ease;
+}
+scale slider:hover { background: #ddeeff; }
+
+/* mute button */
+.mute-btn {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 6px; padding: 3px 6px;
+    font-size: 7px; font-weight: 700;
+    letter-spacing: 1px; color: rgba(255,255,255,0.28);
+}
+.mute-btn:checked {
+    background: rgba(255,69,58,0.78); color: white;
+    border-color: rgba(255,69,58,0.38);
+}
+.mute-btn:hover { background: rgba(255,255,255,0.10); }
+
+/* hardware panel */
+.hw-panel  { padding: 7px 6px; min-width: 72px; }
+.hw-ok     { color: #30d158; font-size: 9px; }
+.hw-idle   { color: rgba(255,255,255,0.26); font-size: 9px; }
+.hw-bad    { color: #ff453a; font-size: 9px; font-weight: 700;
+             animation: pulse-bad 1.1s ease-in-out infinite; }
+
+.mic-panel { padding: 5px 5px; min-width: 88px; }
+
+/* expander in overview (LPD8 reference) */
+expander title { font-size: 8px; color: rgba(255,255,255,0.30); }
+
+/* buttons */
+.btn-emu {
+    background: #ff9f0a; color: #1c1c1e; border: none;
+    font-weight: 800; font-size: 9px; letter-spacing: 0.5px;
+    padding: 4px 10px; border-radius: 7px;
+}
+.btn-emu:hover { background: #ffb340; }
+.btn-emu.alert { background: #ff453a; color: white; }
+
+.btn-pri {
+    background: #0a84ff; color: white; border: none;
+    font-weight: 700; font-size: 9px;
+    padding: 5px 12px; border-radius: 8px;
+}
+.btn-pri:hover { background: #2a9aff; }
+
+button.act {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 7px; padding: 4px 10px;
+    color: rgba(255,255,255,0.70); font-size: 9px;
+}
+button.act:hover  { background: rgba(255,255,255,0.12); }
+button.act:active { background: rgba(255,255,255,0.17); }
+
+.btn-xs {
+    padding: 2px 6px; font-size: 8px;
+    min-width: 0; border-radius: 5px;
+}
+.btn-ssh {
+    background: rgba(10,132,255,0.16);
+    border: 1px solid rgba(10,132,255,0.28);
+    border-radius: 7px; padding: 4px 10px;
+    color: #4db0ff; font-size: 9px;
+}
+.btn-ssh:hover { background: rgba(10,132,255,0.30); }
+
+/* notebook */
+notebook header {
+    background: #1c1c1e;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+notebook tab {
+    padding: 5px 16px; font-size: 9px;
+    letter-spacing: 1px; color: rgba(255,255,255,0.32);
+}
+notebook tab:checked {
+    color: rgba(255,255,255,0.85);
+    border-bottom: 2px solid #0a84ff;
+}
+notebook tab:hover { color: rgba(255,255,255,0.55); }
+
+/* service rows */
+.svc-row {
+    background: rgba(255,255,255,0.035);
+    border-radius: 6px; border: 1px solid rgba(255,255,255,0.04);
+    padding: 4px 7px; margin: 1px 0;
+}
+.svc-row:hover { background: rgba(255,255,255,0.07); }
+.svc-name { font-size: 9.5px; color: rgba(255,255,255,0.68); }
+.s-ok   { color: #30d158; font-size: 8.5px; }
+.s-warn { color: #ff9f0a; font-size: 8.5px; }
+.s-bad  { color: #ff453a; font-size: 8.5px; font-weight: 700; }
+.s-dim  { color: rgba(255,255,255,0.26); font-size: 8.5px; }
+
+textview, textview text {
+    background: rgba(16,16,18,0.96); color: rgba(255,255,255,0.62);
+    font-family: "JetBrains Mono","Fira Code","Courier New",monospace;
+    font-size: 10px;
+}
+.log-tv, .log-tv text {
+    font-size: 9px; background: rgba(14,14,16,0.98);
+    color: rgba(255,255,255,0.45);
+}
+scrolledwindow { border: 1px solid rgba(255,255,255,0.07); border-radius: 7px; }
+
+.ptitle {
+    font-size: 8px; font-weight: 700;
+    letter-spacing: 3px; color: rgba(255,255,255,0.24);
+    margin-bottom: 2px;
+}
+.sec-hdr {
+    font-size: 11px; font-weight: 600;
+    color: rgba(255,255,255,0.62); margin-bottom: 2px;
+}
+.dim-s { color: rgba(255,255,255,0.34); font-size: 9px; }
+.ok    { color: #30d158; }
+.wrn   { color: #ff9f0a; }
+.bad   { color: #ff453a; font-weight: 700; }
+
+/* config form */
+.cfg-field {
+    background: rgba(255,255,255,0.04);
+    border-radius: 9px; border: 1px solid rgba(255,255,255,0.07);
+    padding: 9px 12px; margin: 3px 0;
+}
+.cfg-label { font-size: 9px; font-weight: 600; color: rgba(255,255,255,0.50); }
+.cfg-note  { font-size: 8px; color: rgba(255,255,255,0.24); }
+
+.statusbar {
+    font-family: "JetBrains Mono","Fira Code","Courier New",monospace;
+    font-size: 8px; padding: 2px 10px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    color: rgba(255,255,255,0.26); background: rgba(18,18,20,0.99);
+}
+.statusbar.alert { color: #ff453a; font-weight: 700; }
+separator { background: rgba(255,255,255,0.06); }
+
+.app-row-name {
+    font-size: 7px; color: rgba(255,255,255,0.52);
+}
+.app-move-btn {
+    font-size: 8px; min-width: 0; padding: 0 2px;
+    color: rgba(255,255,255,0.30); border-radius: 3px;
+    border: none; background: transparent;
+}
+.app-move-btn:hover { background: rgba(255,255,255,0.10); }
+.app-list-lbl { font-size: 7.5px; color: rgba(255,255,255,0.35); }
+
+.si-mute-btn {
+    font-size: 8px; min-width: 0; padding: 0 2px;
+    border-radius: 3px; border: none; background: transparent;
+    color: rgba(255,255,255,0.45);
+}
+.si-mute-btn:checked {
+    color: #ff453a; background: rgba(255,69,58,0.18);
+}
+.si-mute-btn:hover { background: rgba(255,255,255,0.10); }
+.si-vol-slider trough {
+    min-height: 3px; border-radius: 2px;
+    background: rgba(255,255,255,0.12);
+}
+.si-vol-slider highlight {
+    min-height: 3px; border-radius: 2px;
+    background: rgba(48,209,88,0.65);
+}
+.si-vol-slider slider {
+    min-width: 8px; min-height: 8px;
+    border-radius: 4px; background: rgba(255,255,255,0.70);
+    border: none;
+}
+.si-vol-lbl {
+    font-size: 7px; color: rgba(255,255,255,0.38);
+}
+
+/* LPD8 pad reference */
+.pad-btn {
+    background: rgba(36,36,42,0.90);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 5px; font-size: 7px; font-weight: 600;
+    letter-spacing: 0.3px; color: rgba(255,255,255,0.36);
+    padding: 3px 2px;
+    transition: background 160ms ease;
+}
+.pad-mute   { border-color: rgba(255,159,10,0.28); color: rgba(255,159,10,0.60); }
+.pad-action { background: rgba(8,44,84,0.60);
+              border-color: rgba(10,132,255,0.30); color: rgba(100,168,255,0.70); }
+.pad-danger { background: rgba(72,12,12,0.70);
+              border-color: rgba(255,69,58,0.38); color: rgba(255,105,96,0.80);
+              animation: pulse-bad 1.8s ease-in-out infinite; }
