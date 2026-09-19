@@ -113,7 +113,7 @@ window.hearth {{
 }}
 .strip.dead .strip-name {{ color: {pal["fg-dim"]}; }}
 
-.minbox, .sendbtn, .showbtn, .railbtn {{
+.minbox, .showbtn, .railbtn {{
   background: {pal["view-alt"]};
   color: {pal["fg-dim"]};
   border: 1px solid {pal["win-alt"]};
@@ -123,14 +123,10 @@ window.hearth {{
   font-size: 10px;
 }}
 .minbox {{ padding: 0 5px; }}
-.minbox:hover, .sendbtn:hover, .showbtn:hover, .railbtn:hover {{
+.minbox:hover, .showbtn:hover, .railbtn:hover {{
   color: {pal["fg"]};
   border-color: {pal["button"]};
 }}
-.sendbtn {{ color: {pal["accent"]}; border-color: {pal["accent"]}; }}
-.sendbtn:disabled {{ color: {pal["fg-dim"]}; border-color: {pal["win-alt"]}; }}
-.sendbtn.live {{ color: {pal["accent"]}; border-color: {pal["accent"]}; }}
-
 .value {{
   font-family: "Andale Mono", monospace;
   font-size: 17px;
@@ -165,14 +161,15 @@ button.mute:checked {{
   font-weight: bold;
 }}
 
+/* A readout, not a chooser: the boxed-and-bordered version read as a
+   dropdown and invited clicks that go nowhere. */
 .device {{
   font-family: "Andale Mono", monospace;
   font-size: 9px;
   color: {pal["fg-dim"]};
-  background: {pal["view-alt"]};
-  border: 1px solid {pal["win-alt"]};
-  border-radius: 3px;
-  padding: 1px 4px;
+  background: transparent;
+  border: none;
+  padding: 0 1px;
 }}
 .device.missing {{ color: {pal["bad"]}; }}
 .device.unknown {{ color: {pal["unknown"]}; }}
@@ -228,23 +225,12 @@ button.mute:checked {{
 }}
 .dest-warn {{ font-size: 9.5px; color: {pal["bad"]}; }}
 
-/* ---- rail and footer ---------------------------------------------- */
+/* ---- rail ---------------------------------------------------------- */
 .rail-tag {{
   font-family: "Andale Mono", monospace;
   font-size: 9px;
   color: {pal["fg-dim"]};
 }}
-.footer {{ color: {pal["fg-dim"]}; font-size: 9.5px; }}
-button.drawer {{
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  color: {pal["fg-dim"]};
-  font-size: 9.5px;
-  min-height: 0;
-  padding: 0 4px;
-}}
-button.drawer:hover {{ color: {pal["fg"]}; background: transparent; }}
 .banner {{
   background: {pal["view"]};
   border-left: 3px solid {pal["bad"]};

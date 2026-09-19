@@ -46,11 +46,6 @@ APP_ID = "co.roaring.Hearth"
 METER_TALL = 96
 METER_SHORT = 72
 
-#: Distance from the top of a group row to the top of a strip's meter:
-#: strip padding, header, icon row and the two gaps between them. The dB
-#: ruler is offset by this so its labels sit against the lamps they name.
-SCALE_TOP = 4 + 12 + 3 + 13 + 3
-
 #: How long a fader stays "held" after the user touches it, so an in-flight
 #: snapshot cannot yank the cap back under their finger.
 HOLD_S = 1.2
@@ -180,8 +175,13 @@ class Strip(Gtk.Box):
         self.meter = Meter(self.pal, height=window.meter_h)
         self.fader = Fader(self.pal, height=window.meter_h)
         self.fader.connect("moved", self._on_moved)
+        # The ruler used to be drawn once per group, hanging off the right
+        # edge where it read as clipped and belonged to nothing. One per
+        # strip, inside the strip, is what the design actually shows.
+        self.scale = Scale(self.pal, window.meter_h)
         row.append(self.meter)
         row.append(self.fader)
+        row.append(self.scale)
         self.append(row)
 
         # value + bind chip
@@ -205,16 +205,11 @@ class Strip(Gtk.Box):
         self.mute.set_hexpand(True)
         self._mute_handler = self.mute.connect("toggled", self._on_mute)
         brow.append(self.mute)
-        self.send = Gtk.Button(label="\u2197")
-        self.send.add_css_class("sendbtn")
-        self.send.set_tooltip_text(f"{channel.name} is sent to the share bus")
-        self.send.set_sensitive(False)
-        brow.append(self.send)
         self.append(brow)
 
         # device line
         self.device = Gtk.Label(label="\u2026", xalign=0.0)
-        self.device.set_tooltip_text("Where this bus lands")
+        self.device.set_tooltip_text(f"Where {channel.name} lands")
         self.device.add_css_class("device")
         self.device.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
         self.append(self.device)
@@ -278,6 +273,7 @@ class Strip(Gtk.Box):
     def set_meter_height(self, height: int) -> None:
         self.meter.set_content_height(height)
         self.fader.set_content_height(height)
+        self.scale.set_meter_height(height)
 
     def set_expanded(self, expanded: bool) -> None:
         self.listeners.set_visible(expanded)
@@ -301,9 +297,9 @@ class Strip(Gtk.Box):
         self.device.remove_css_class("missing")
         if dead:
             self.device.add_css_class("missing")
-            self.device.set_text("no device  \u25be")
+            self.device.set_text("no device")
         else:
-            self.device.set_text((state.device or "\u2014") + "  \u25be")
+            self.device.set_text(state.device or "\u2014")
 
         self._fill_icons(state.listeners)
         self._fill_listeners(state.listeners)
@@ -407,8 +403,10 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.add_css_class("hearth")
         self.pal = app.pal
         self.cfg = settings_mod.load()
-        self.expanded = not bool(self.cfg.get("mixer_collapsed", False))
-        self.meter_h = METER_TALL if self.expanded else METER_SHORT
+        # The app rows are the point of the mixer, so they are always on:
+        # the drawer toggle that used to hide them is gone.
+        self.expanded = True
+        self.meter_h = METER_TALL
         self.hidden = set(self.cfg.get("mixer_hidden") or ["mic_b1"])
         self.minimised = set(self.cfg.get("mixer_minimised") or [])
         self.order = self._load_order()
@@ -416,6 +414,7 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.strips: dict[str, Strip] = {}
         self.slivers: dict[str, Sliver] = {}
         self.group_tags: dict[str, Gtk.Label] = {}
+        self._stacked = False
 
         # Width is remembered; height follows the content. A mixer with a
         # fixed strip height has one correct height, and restoring a taller
@@ -452,9 +451,6 @@ class MixerWindow(Gtk.ApplicationWindow):
         rail_tag.add_css_class("rail-tag")
         self.rail.append(rail_tag)
 
-        self.footer = self._build_footer()
-        self.root.append(self.footer)
-
         self.rebuild()
         self._start_backends()
         self.connect("close-request", self._on_close)
@@ -467,30 +463,35 @@ class MixerWindow(Gtk.ApplicationWindow):
         ordered += [s for s in known if s not in ordered]
         return ordered
 
-    def _build_footer(self) -> Gtk.Box:
-        footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        footer.add_css_class("footer")
-        self.hidden_label = Gtk.Label(label="", xalign=0.0)
-        self.hidden_label.add_css_class("footer")
-        self.hidden_label.set_hexpand(True)
-        footer.append(self.hidden_label)
-        self.drawer = Gtk.Button(label="show apps \u25be")
-        self.drawer.add_css_class("drawer")
-        self.drawer.connect("clicked", self._toggle_expanded)
-        footer.append(self.drawer)
-        spacer = Gtk.Label(label="")
-        spacer.set_hexpand(True)
-        footer.append(spacer)
-        return footer
-
     def _channel(self, sink: str) -> Channel | None:
         for channel in CHANNELS:
             if channel.sink == sink:
                 return channel
         return None
 
+    def _should_stack(self) -> bool:
+        """Is the window taller than it is wide?
+
+        A mixer dragged tall and narrow should stack its groups and lay the
+        rail along the bottom; a wide one keeps groups side by side with the
+        rail down the right edge. Collapsing the same way in both shapes is
+        what left strips squeezed off the edge.
+        """
+        width, height = self.get_width(), self.get_height()
+        if width <= 1 or height <= 1:
+            return False
+        return height > width
+
     def rebuild(self) -> None:
         """Rebuild the strip area from order, hidden and minimised state."""
+        self._stacked = self._should_stack()
+        self.body.set_orientation(
+            Gtk.Orientation.VERTICAL if self._stacked else Gtk.Orientation.HORIZONTAL
+        )
+        self.rail.set_orientation(
+            Gtk.Orientation.HORIZONTAL if self._stacked else Gtk.Orientation.VERTICAL
+        )
+        self.rail.set_valign(Gtk.Align.CENTER if self._stacked else Gtk.Align.START)
         child = self.body.get_first_child()
         while child is not None:
             nxt = child.get_next_sibling()
@@ -514,7 +515,6 @@ class MixerWindow(Gtk.ApplicationWindow):
 
         self._build_rail()
         self.body.append(self.rail)
-        self._refresh_footer()
         self.apply_states()
 
     def _build_group(self, group: str, sinks: list[str]) -> Gtk.Box:
@@ -534,10 +534,6 @@ class MixerWindow(Gtk.ApplicationWindow):
             strip = Strip(self, channel)
             self.strips[sink] = strip
             row.append(strip)
-        scale = Scale(self.pal, self.meter_h)
-        scale.set_valign(Gtk.Align.START)
-        scale.set_margin_top(SCALE_TOP)
-        row.append(scale)
         box.append(row)
         return box
 
@@ -560,7 +556,12 @@ class MixerWindow(Gtk.ApplicationWindow):
             channel = self._channel(sink)
             if channel is None:
                 continue
-            sliver = Sliver(self.pal, channel.name, self.meter_h + 52)
+            sliver = Sliver(
+                self.pal,
+                channel.name,
+                self.meter_h + 52,
+                horizontal=self._stacked,
+            )
             click = Gtk.GestureClick()
             click.connect("released", lambda *_a, s=sink: self.restore(s))
             sliver.add_css_class("sliver")
@@ -570,18 +571,7 @@ class MixerWindow(Gtk.ApplicationWindow):
             self.slivers[sink] = sliver
         self.rail.set_visible(bool(self.minimised or self.hidden))
 
-    def _refresh_footer(self) -> None:
-        count = len(self.hidden)
-        self.hidden_label.set_text(f"{count} in the rail" if count else "")
-        self.drawer.set_label("hide apps \u25b4" if self.expanded else "show apps \u25be")
-
     # -- user actions ------------------------------------------------------
-    def _toggle_expanded(self, _button: Gtk.Button) -> None:
-        self.expanded = not self.expanded
-        self.meter_h = METER_TALL if self.expanded else METER_SHORT
-        self.rebuild()
-        self._save()
-
     def minimise(self, sink: str) -> None:
         self.minimised.add(sink)
         self.rebuild()
@@ -711,6 +701,11 @@ class MixerWindow(Gtk.ApplicationWindow):
         for sink, sliver in self.slivers.items():
             level = self.peaks.level(f"{sink}.monitor") if available else 0.0
             sliver.feed(level, self.states[sink].muted)
+        # GTK has no "the user finished resizing" signal worth trusting, and
+        # this frame tick is already running; a rebuild only happens on the
+        # frame where the window actually changes shape.
+        if self._should_stack() != self._stacked:
+            self.rebuild()
         return True
 
     def _on_close(self, *_args) -> bool:

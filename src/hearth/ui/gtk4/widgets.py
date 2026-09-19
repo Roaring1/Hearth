@@ -27,6 +27,9 @@ __all__ = ["VMAX", "Fader", "Meter", "Scale", "Sliver", "parse_rgb"]
 #: Faders run to 150 %, matching pactl and what the GTK3 window allowed.
 VMAX = 150
 
+#: Where a double click puts a fader: unity, not silence and not the top.
+DEFAULT_VOLUME = 100
+
 #: A 3 px lamp with a 1 px gap reads as a ladder rather than a bar.
 _SEG_H = 3.0
 _SEG_GAP = 1.0
@@ -179,9 +182,15 @@ class Fader(Gtk.DrawingArea):
         self.set_draw_func(self._draw)
 
         click = Gtk.GestureClick()
+        click.set_button(1)
+        # The drag gesture claims the pointer the moment a press lands, which
+        # swallowed the second press and left double-click-to-reset dead.
+        # Seeing presses during capture keeps the click count intact.
+        click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         click.connect("pressed", self._on_press)
         self.add_controller(click)
         drag = Gtk.GestureDrag()
+        drag.set_button(1)
         drag.connect("drag-update", self._on_drag)
         self.add_controller(drag)
         scroll = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL)
@@ -217,13 +226,20 @@ class Fader(Gtk.DrawingArea):
         self.emit("moved", self._value)
 
     def _on_press(self, _g: Gtk.GestureClick, n_press: int, _x: float, y: float) -> None:
+        if self._dead:
+            return
         if n_press >= 2:
-            self.set_value(100)
-            self.emit("moved", 100)
+            self.set_value(DEFAULT_VOLUME)
+            self.emit("moved", DEFAULT_VOLUME)
             return
         self._emit_from_y(y)
 
     def _on_drag(self, gesture: Gtk.GestureDrag, _dx: float, dy: float) -> None:
+        # A hand never holds perfectly still through a double click, so a
+        # pixel or two of travel must not count as a drag and overwrite the
+        # reset the second press just made.
+        if abs(dy) < 3.0:
+            return
         ok, _sx, sy = gesture.get_start_point()
         if ok:
             self._emit_from_y(sy + dy)
@@ -256,14 +272,14 @@ class Fader(Gtk.DrawingArea):
 
 
 class Scale(Gtk.DrawingArea):
-    """The group's dB ruler, drawn once per group on the group's right edge."""
+    """A strip's dB ruler, drawn beside that strip's own meter."""
 
     MARKS = ((0.94, "0"), (0.72, "-6"), (0.48, "-18"), (0.18, "-42"))
 
     def __init__(self, palette: dict[str, str], height: int) -> None:
         super().__init__()
         self._pal = palette
-        self.set_content_width(21)
+        self.set_content_width(19)
         self.set_content_height(height)
         self.set_draw_func(self._draw)
 
@@ -287,14 +303,23 @@ class Scale(Gtk.DrawingArea):
 class Sliver(Gtk.DrawingArea):
     """A minimised channel in the right rail: name on its side, one state dot."""
 
-    def __init__(self, palette: dict[str, str], name: str, height: int) -> None:
+    def __init__(
+        self,
+        palette: dict[str, str],
+        name: str,
+        length: int,
+        horizontal: bool = False,
+    ) -> None:
         super().__init__()
         self._pal = palette
         self._name = name
         self._level = 0.0
         self._muted = False
-        self.set_content_width(24)
-        self.set_content_height(height)
+        self._horizontal = horizontal
+        # ``length`` is the long axis either way: a rail along the bottom of
+        # the window wants wide, short slivers, not rotated tall ones.
+        self.set_content_width(length if horizontal else 24)
+        self.set_content_height(24 if horizontal else length)
         self.set_draw_func(self._draw)
 
     def feed(self, level: float, muted: bool) -> None:
@@ -312,13 +337,19 @@ class Sliver(Gtk.DrawingArea):
         else:
             dot = self._pal["fg-dim"]
         cr.set_source_rgb(*parse_rgb(dot))
-        cr.arc(w / 2, 9, 3, 0, 2 * math.pi)
+        if self._horizontal:
+            cr.arc(9, h / 2, 3, 0, 2 * math.pi)
+        else:
+            cr.arc(w / 2, 9, 3, 0, 2 * math.pi)
         cr.fill()
         cr.save()
         cr.set_source_rgb(*parse_rgb(self._pal["fg-dim"]))
         cr.select_font_face("Trebuchet MS")
         cr.set_font_size(9.5)
-        cr.translate(w / 2 + 3.5, h - 12)
-        cr.rotate(-math.pi / 2)
+        if self._horizontal:
+            cr.translate(18, h / 2 + 3.5)
+        else:
+            cr.translate(w / 2 + 3.5, h - 12)
+            cr.rotate(-math.pi / 2)
         cr.show_text(self._name)
         cr.restore()
