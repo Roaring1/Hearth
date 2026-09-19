@@ -34,8 +34,10 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402 - must follow require_version
 
 from hearth import collector as collector_mod  # noqa: E402
+from hearth import leds  # noqa: E402
 from hearth import lpd8map  # noqa: E402
 from hearth import meters as meters_mod  # noqa: E402
+from hearth import mic_routes  # noqa: E402
 from hearth import services as services_mod  # noqa: E402
 from hearth import settings as settings_mod  # noqa: E402
 from hearth.audio import pactl  # noqa: E402
@@ -108,9 +110,13 @@ UNIT_FOR_SINK: dict[str, str] = {
 #: Capture devices that can be poured into a mic bus. Until now a mic bus
 #: could only ever be whatever Carla happened to be feeding it, so the
 #: headset's own boom mic had no way in at all.
+#: ``sm7b_mono`` is the tap *before* Carla, so calling it "SM7B (Carla)"
+#: described the wrong end of the chain -- the processed feed is the
+#: separate "SM7B via Carla" entry. ``astro_mic_48k`` rather than the raw
+#: ALSA node because that is the resampled source the router daemon owns.
 MIC_SOURCES: tuple[tuple[str, str], ...] = (
-    ("SM7B (Carla)", "sm7b_mono"),
-    ("A50 boom mic", "alsa_input.usb-Astro_Gaming_Astro_A50-00.mono-chat"),
+    ("SM7B (raw)", "sm7b_mono"),
+    ("A50 boom mic", "astro_mic_48k"),
     (
         "Scarlett in",
         "alsa_input.usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00.Direct__Direct__source",
@@ -127,6 +133,19 @@ OUTPUTS: tuple[tuple[str, str], ...] = (
     ),
     ("Share", "vm_share"),
 )
+
+#: The A50 presents two endpoints of one pair of speakers. Sending a bus
+#: to both does not make it louder in two places -- it plays the same bus
+#: into the same ears twice, out of phase with itself. Ticking one
+#: endpoint therefore unticks the other.
+EXCLUSIVE: dict[str, str] = {
+    "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game": (
+        "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"
+    ),
+    "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat": (
+        "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game"
+    ),
+}
 
 #: Apps that actually appear on this desk get their own brand colour, defined
 #: as a CSS class in the stylesheet. Anything else keeps the neutral mark.
@@ -227,6 +246,9 @@ class Strip(Gtk.Box):
         self.set_valign(Gtk.Align.START)
         self._held_until = 0.0
         self._hw_until = 0.0
+        # Destination checkboxes, kept so one endpoint can untick another.
+        self._out_checks: dict[str, Gtk.CheckButton] = {}
+        self._routing = False
 
         # header: grip, name, minimise
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -594,12 +616,14 @@ class Strip(Gtk.Box):
             hint.set_wrap(True)
             hint.set_max_width_chars(28)
             box.append(hint)
+        self._out_checks = {}
         for label, sink in OUTPUTS:
             if sink == self.channel.sink:
                 continue
             check = Gtk.CheckButton(label=label)
             check.set_active(sink in live)
             check.connect("toggled", self._on_route, sink)
+            self._out_checks[sink] = check
             box.append(check)
         self.out_popover.set_child(box)
 
@@ -611,9 +635,24 @@ class Strip(Gtk.Box):
         box.append(hint)
         live = {source for source, sinks in self.win._routes.items() if self.channel.sink in sinks}
         present = {entry.name for entry in _sources_safe()}
+        conf = mic_routes.read()
+
+        # Carla's processed chain comes first because on this rig it is the
+        # microphone: the raw entries below it are the pre-Carla taps. It
+        # used to be wired into both mic buses at login with no way to say
+        # no, so B2 was a copy of B1 whether or not anyone asked.
+        carla = Gtk.CheckButton(label="SM7B via Carla")
+        carla.set_active(mic_routes.carla_enabled(conf, self.channel.sink))
+        carla.set_tooltip_text("2i2 \u2192 Carla \u2192 this bus")
+        carla.connect("toggled", self._on_carla_in)
+        box.append(carla)
+
         for label, source in MIC_SOURCES:
             check = Gtk.CheckButton(label=label)
-            check.set_active(source in live)
+            known = source in mic_routes.RAW_TOKEN
+            check.set_active(
+                mic_routes.raw_enabled(conf, self.channel.sink, source) if known else source in live
+            )
             check.set_sensitive(source in present)
             if source not in present:
                 check.set_tooltip_text("Not plugged in")
@@ -621,9 +660,26 @@ class Strip(Gtk.Box):
             box.append(check)
         self.in_popover.set_child(box)
 
+    def _on_carla_in(self, check: Gtk.CheckButton) -> None:
+        """Turn Carla's processed output into this bus on or off."""
+        mic_routes.set_carla(self.channel.sink, check.get_active())
+        GLib.timeout_add(400, self._route_settled)
+
     def _on_mic_in(self, check: Gtk.CheckButton, source: str) -> None:
-        """Wire or unwire one capture device into this mic bus."""
-        if check.get_active():
+        """Wire or unwire one capture device into this mic bus.
+
+        For the two sources the router daemon manages this writes the
+        config and lets the daemon converge -- doing it with ``pactl``
+        here looked like it worked and was undone three seconds later.
+        Anything else is a plain loopback, which nothing else touches.
+        """
+        wanted = check.get_active()
+        if source in mic_routes.RAW_TOKEN:
+            conf = mic_routes.read()
+            mic_routes.write(mic_routes.raw_edits(conf, self.channel.sink, source, wanted))
+            GLib.timeout_add_seconds(4, self._route_settled)
+            return
+        if wanted:
             pactl.load_loopback(
                 source,
                 self.channel.sink,
@@ -635,11 +691,28 @@ class Strip(Gtk.Box):
 
     def _on_route(self, check: Gtk.CheckButton, sink: str) -> None:
         """Wire or unwire one destination for this bus."""
+        if self._routing:
+            # A partner checkbox is being corrected; its toggle is not a
+            # user decision and must not re-enter this handler.
+            return
         source = f"{self.channel.sink}.monitor"
         if check.get_active():
             pactl.load_loopback(
                 source, sink, latency_msec=int(self.win.cfg.get("latency_msec", 12) or 12)
             )
+            partner = EXCLUSIVE.get(sink)
+            if partner:
+                # Both A50 endpoints were ending up ticked, so a bus played
+                # into the same ears twice. Choosing one endpoint is
+                # choosing, not adding.
+                pactl.unload_loopbacks(source, [partner])
+                widget = self._out_checks.get(partner)
+                if widget is not None and widget.get_active():
+                    self._routing = True
+                    try:
+                        widget.set_active(False)
+                    finally:
+                        self._routing = False
         else:
             pactl.unload_loopbacks(source, [sink])
         GLib.timeout_add_seconds(1, self._route_settled)
@@ -670,16 +743,18 @@ class Strip(Gtk.Box):
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
             mark = self._mark(listener.name, 12)
             if listener.index:
-                # The icon is the handle: drag it onto another strip and
-                # the app itself moves to that bus.
+                # The whole row is the handle. A 12 px icon was a
+                # pixel-hunt: miss it and the press did nothing, which
+                # reads as a broken feature rather than a small target.
+                # Grabbing anywhere on the row drags the app to another bus.
                 grab = Gtk.DragSource()
                 grab.set_actions(Gdk.DragAction.MOVE)
                 grab.connect(
                     "prepare",
                     lambda *_a, idx=listener.index: Gdk.ContentProvider.new_for_value(f"app:{idx}"),
                 )
-                mark.add_controller(grab)
-                mark.set_tooltip_text(f"{listener.name} \u2014 drag onto another bus")
+                row.add_controller(grab)
+                row.set_tooltip_text(f"{listener.name} \u2014 drag onto another bus")
             row.append(mark)
             name = Gtk.Label(label=listener.name, xalign=0.0)
             name.add_css_class("listener")
@@ -750,7 +825,9 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.strips: dict[str, Strip] = {}
         self.slivers: dict[str, Sliver] = {}
         self.group_tags: dict[str, Gtk.Label] = {}
-        self._stacked = False
+        # Looked up lazily: the controller is often not plugged in, and
+        # asking ALSA at startup would slow every launch for a lamp.
+        self._led_port: str | None = None
         # Laptop audio is plugged in occasionally; when it has been
         # silent and unused for a while it should get out of the way
         # rather than hold a full strip open.
@@ -764,12 +841,12 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.set_default_size(-1, -1)
         self.set_resizable(True)
 
-        self.root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        self.root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.root.set_valign(Gtk.Align.START)
-        self.root.set_margin_top(7)
-        self.root.set_margin_bottom(5)
-        self.root.set_margin_start(7)
-        self.root.set_margin_end(7)
+        self.root.set_margin_top(5)
+        self.root.set_margin_bottom(4)
+        self.root.set_margin_start(5)
+        self.root.set_margin_end(5)
         self.set_child(self.root)
 
         self.banner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -788,12 +865,12 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.banner.set_visible(False)
         self.root.append(self.banner)
 
-        self.body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=7)
+        self.body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
         self.body.set_vexpand(False)
         self.body.set_valign(Gtk.Align.START)
         self.root.append(self.body)
 
-        self.rail = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.rail = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         self.rail.set_valign(Gtk.Align.START)
         rail_tag = Gtk.Label(label="min")
         rail_tag.add_css_class("rail-tag")
@@ -817,39 +894,13 @@ class MixerWindow(Gtk.ApplicationWindow):
                 return channel
         return None
 
-    def _should_stack(self) -> bool:
-        """Is the window taller than it is wide?
-
-        A mixer dragged tall and narrow should stack its groups and lay the
-        rail along the bottom; a wide one keeps groups side by side with the
-        rail down the right edge. Collapsing the same way in both shapes is
-        what left strips squeezed off the edge.
-        """
-        width, height = self.get_width(), self.get_height()
-        if width <= 1 or height <= 1:
-            return False
-        if self._size_tick is not None:
-            # Mid-animation the window is briefly any shape at all.
-            # Re-deciding the layout from those frames is what made
-            # minimising three of five strips thrash between shapes and
-            # end up as a broken vertical stack.
-            return self._stacked
-        if self._stacked:
-            # Hysteresis: once stacked, stay stacked until the window is
-            # clearly wide again, so one rebuild cannot cause the next.
-            return height > width * 0.85
-        return height > width * 1.4
-
     def rebuild(self) -> None:
         """Rebuild the strip area from order, hidden and minimised state."""
-        self._stacked = self._should_stack()
-        self.body.set_orientation(
-            Gtk.Orientation.VERTICAL if self._stacked else Gtk.Orientation.HORIZONTAL
-        )
-        self.rail.set_orientation(
-            Gtk.Orientation.HORIZONTAL if self._stacked else Gtk.Orientation.VERTICAL
-        )
-        self.rail.set_valign(Gtk.Align.CENTER if self._stacked else Gtk.Align.START)
+        # One shape, always: groups side by side, rail locked to the right
+        # edge. Round 19 flipped both axes once the window was taller than
+        # wide -- and folding strips is exactly what made it taller than
+        # wide, so minimising a few channels rewrote the whole layout under
+        # the user's hand and left strips squeezed off the edge.
         child = self.body.get_first_child()
         while child is not None:
             nxt = child.get_next_sibling()
@@ -887,7 +938,12 @@ class MixerWindow(Gtk.ApplicationWindow):
         """
         _minw, nat_w, _a, _b = self.root.measure(Gtk.Orientation.HORIZONTAL, -1)
         _minh, nat_h, _c, _d = self.root.measure(Gtk.Orientation.VERTICAL, nat_w)
-        target = (nat_w + 14, nat_h + 12)
+        # No padding term here. ``measure`` already includes the root's
+        # margins, so the old ``+14 / +12`` added them a second time and
+        # every rebuild left the window a little larger than the size its
+        # own contents asked for -- which is why resizing never came back
+        # to the same place.
+        target = (nat_w, nat_h)
         if self.get_width() <= 1:
             # First layout: nothing to animate from, just be the right size.
             self.set_default_size(*target)
@@ -967,7 +1023,7 @@ class MixerWindow(Gtk.ApplicationWindow):
                 self.pal,
                 channel.name,
                 self.meter_h + 52,
-                horizontal=self._stacked,
+                horizontal=False,
             )
             click = Gtk.GestureClick()
             click.connect("released", lambda *_a, s=sink: self.restore(s))
@@ -1097,7 +1153,14 @@ class MixerWindow(Gtk.ApplicationWindow):
                 and not strip.held
             ):
                 strip.mark_hardware()
+            was_muted, first = state.muted, not was_seen
             state.muted = bool(sink.muted) if sink else False
+            if state.present and (first or state.muted != was_muted):
+                # Done here rather than in the mute handler so a mute from
+                # anywhere -- this window, a pad, pavucontrol, a script --
+                # reaches the pad LED. The surface has no screen; a lit pad
+                # over a silent bus is the whole problem.
+                self._push_led(channel.sink, state.muted)
             state.listeners = streams.get(channel.sink, [])
             state.device = self._device_label(channel, snapshot)
         if self._track_absent():
@@ -1105,6 +1168,29 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.apply_states()
         self._update_banner()
         return False
+
+    def _push_led(self, sink: str, muted: bool) -> None:
+        """Mirror one bus's mute state onto its LPD8 pad.
+
+        The port is looked up once and re-looked-up only after a failed
+        write, so an unplugged controller costs one failed ``amidi`` call
+        rather than one per snapshot.
+        """
+        if leds.pad_for_sink(sink) is None:
+            return
+        if self._led_port is None:
+            self._led_port = leds.find_port()
+            if self._led_port is None:
+                return
+        channel = int(
+            self.cfg.get("led_midi_channel", leds.DEFAULT_CHANNEL) or leds.DEFAULT_CHANNEL
+        )
+        try:
+            sent = leds.set_sink_mute(self._led_port, sink, muted, channel)
+        except OSError:  # pragma: no cover - the surface is not load-bearing
+            sent = False
+        if not sent:
+            self._led_port = None
 
     def _device_label(self, channel: Channel, snapshot) -> str:
         """Where this bus lands. Short, real, and never a routing path."""
@@ -1238,11 +1324,6 @@ class MixerWindow(Gtk.ApplicationWindow):
         for sink, sliver in self.slivers.items():
             level = self.peaks.level(f"{sink}.monitor") if available else 0.0
             sliver.feed(level, self.states[sink].muted)
-        # GTK has no "the user finished resizing" signal worth trusting, and
-        # this frame tick is already running; a rebuild only happens on the
-        # frame where the window actually changes shape.
-        if self._should_stack() != self._stacked:
-            self.rebuild()
         self._tick_laptop_idle()
         return True
 
