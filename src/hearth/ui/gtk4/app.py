@@ -20,6 +20,7 @@ onto the main loop with ``GLib.idle_add`` before a widget is touched.
 
 from __future__ import annotations
 
+import logging
 import sys
 import time
 from dataclasses import dataclass, field
@@ -32,6 +33,7 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402 - must follow require_version
 
 from hearth import collector as collector_mod  # noqa: E402
+from hearth import lpd8map  # noqa: E402
 from hearth import meters as meters_mod  # noqa: E402
 from hearth import services as services_mod  # noqa: E402
 from hearth import settings as settings_mod  # noqa: E402
@@ -39,6 +41,8 @@ from hearth.audio import pactl  # noqa: E402
 from hearth.ui.gtk4 import icons as icons_mod  # noqa: E402
 from hearth.ui.gtk4 import style as style_mod  # noqa: E402
 from hearth.ui.gtk4.widgets import Fader, Meter, Scale, Sliver, parse_rgb, rounded  # noqa: E402
+
+log = logging.getLogger(__name__)
 
 APP_ID = "co.roaring.Hearth"
 
@@ -246,11 +250,21 @@ class Strip(Gtk.Box):
         self.value.add_css_class("value")
         self.value.set_hexpand(True)
         vrow.append(self.value)
+        # The bind chip was a readout of something the user could only
+        # change by editing a shell script. It is now the control: click
+        # it and pick the knob that should drive this bus.
+        self.bind_button = None
         if channel.bind:
-            chip = Gtk.Label(label=channel.bind)
+            chip = Gtk.MenuButton()
+            chip.set_label(channel.bind)
             chip.add_css_class("bind")
             chip.set_valign(Gtk.Align.CENTER)
             chip.set_tooltip_text(self._bind_tip())
+            self.bind_popover = Gtk.Popover()
+            self.bind_popover.add_css_class("outpop")
+            chip.set_popover(self.bind_popover)
+            self.bind_popover.connect("show", lambda _p: self._fill_binds())
+            self.bind_button = chip
             vrow.append(chip)
         self.append(vrow)
 
@@ -308,7 +322,68 @@ class Strip(Gtk.Box):
 
     def _bind_tip(self) -> str:
         pad = f", pad {self.channel.pad}" if self.channel.pad else ""
-        return f"LPD8 knob {self.channel.bind}{pad}"
+        return f"LPD8 knob {self.channel.bind}{pad} \u2014 click to remap"
+
+    def _assignment(self) -> lpd8map.Assignment | None:
+        """The script constant that drives this bus, if any."""
+        for assignment in lpd8map.ASSIGNMENTS:
+            if assignment.sink == self.channel.sink:
+                return assignment
+        return None
+
+    def _fill_binds(self) -> None:
+        """Offer the eight knobs, ticking the one wired to this bus.
+
+        The list is rebuilt from the script every time it opens, because
+        the script is the thing the hardware service reads: showing a
+        cached map would be showing a wish rather than the wiring.
+        """
+        assignment = self._assignment()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        if assignment is None:
+            box.append(Gtk.Label(label="No LPD8 binding for this bus", xalign=0.0))
+            self.bind_popover.set_child(box)
+            return
+        mapping = lpd8map.read_map()
+        current = lpd8map.cc_to_knob(mapping.get(assignment.const, -1))
+        head = Gtk.Label(label=f"Knob for {assignment.label}", xalign=0.0)
+        head.add_css_class("outhint")
+        box.append(head)
+        group: Gtk.CheckButton | None = None
+        for knob in lpd8map.KNOBS:
+            item = Gtk.CheckButton(label=f"K{knob}")
+            if group is None:
+                group = item
+            else:
+                item.set_group(group)
+            item.set_active(knob == current)
+            item.connect("toggled", self._on_bind, assignment.const, knob)
+            box.append(item)
+        note = Gtk.Label(
+            label="Saves to lpd8_mixer.sh and restarts the knob service.",
+            xalign=0.0,
+        )
+        note.add_css_class("outhint")
+        note.set_wrap(True)
+        note.set_max_width_chars(26)
+        box.append(note)
+        self.bind_popover.set_child(box)
+
+    def _on_bind(self, item: Gtk.CheckButton, const: str, knob: int) -> None:
+        if not item.get_active():
+            return
+        try:
+            changed = lpd8map.set_knob(const, knob)
+        except (OSError, ValueError) as exc:  # pragma: no cover - surfaced, not raised
+            log.warning("could not remap %s: %s", const, exc)
+            if self.bind_button is not None:
+                self.bind_button.set_tooltip_text(f"Remap failed: {exc}")
+            return
+        if not changed:
+            return
+        if self.bind_button is not None:
+            self.bind_button.set_label(f"K{knob}")
+        services_mod.restart(lpd8map.UNIT)
 
     def _add_drag(self, handle: Gtk.Widget) -> None:
         # The drag source used to sit on the whole strip, so a press on
