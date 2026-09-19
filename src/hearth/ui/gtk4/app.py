@@ -757,6 +757,12 @@ class MixerWindow(Gtk.ApplicationWindow):
             self.banner_units = tuple(units)
             self.banner_button.set_visible(bool(units))
             self.banner_button.set_tooltip_text("Restart " + ", ".join(units) if units else "")
+        else:
+            # The banner hides, but the button underneath stayed armed with
+            # the units from the last fault. Disarm it when the graph is well.
+            self.banner_units = ()
+            self.banner_button.set_visible(False)
+            self.banner_button.set_sensitive(True)
         self.banner.set_visible(bool(missing))
 
     def _on_restart(self, _button: Gtk.Button) -> None:
