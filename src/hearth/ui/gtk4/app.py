@@ -291,7 +291,7 @@ class Strip(Gtk.Box):
         """True while the user's own drag owns this fader."""
         return time.monotonic() <= self._held_until
 
-    def mark_hardware(self, seconds: float = 1.6) -> None:
+    def mark_hardware(self, seconds: float = 2.5) -> None:
         """Light the cap: something outside this window moved the fader.
 
         The LPD8 knobs write straight to PulseAudio, so the only honest
