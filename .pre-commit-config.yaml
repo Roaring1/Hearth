@@ -1,0 +1,41 @@
+# pre-commit install   # once, after: pip install -e '.[dev]'
+minimum_pre_commit_version: "3.8.0"
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-json
+      - id: check-toml
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+
+  - repo: local
+    hooks:
+      - id: desktop-file-validate
+        name: validate desktop entries
+        entry: desktop-file-validate
+        language: system
+        files: \.desktop$
+      - id: appstream-validate
+        name: validate appstream metainfo
+        entry: appstreamcli validate --pedantic
+        language: system
+        files: \.(metainfo|appdata)\.xml$
