@@ -276,6 +276,15 @@ class Strip(Gtk.Box):
             self.bind_popover.connect("show", lambda _p: self._fill_binds())
             self.bind_button = chip
             vrow.append(chip)
+        else:
+            # A bus with no knob still owes the row the chip's height, or
+            # its strip ends higher than every other strip.
+            spacer = Gtk.Label(label="K0")
+            spacer.add_css_class("bind")
+            spacer.add_css_class("empty")
+            spacer.set_valign(Gtk.Align.CENTER)
+            spacer.set_can_target(False)
+            vrow.append(spacer)
         self.append(vrow)
 
         # mute + send
@@ -640,6 +649,11 @@ class MixerWindow(Gtk.ApplicationWindow):
         # are deliberately not written to mixer_hidden -- hiding is the
         # user's choice, absence is the world's.
         self.absent: set[str] = set()
+        #: source -> sinks, refreshed with every snapshot.
+        self._routes: dict[str, set[str]] = {}
+        #: in-flight window resize, if any
+        self._size_target: tuple[int, int] | None = None
+        self._size_tick: int | None = None
         # Only a bus that was working and then vanished is worth a
         # banner. One that was never there since launch is just unplugged.
         self.ever_present: set[str] = set()
@@ -764,6 +778,46 @@ class MixerWindow(Gtk.ApplicationWindow):
         self._build_rail()
         self.body.append(self.rail)
         self.apply_states()
+        self._settle_size()
+
+    def _settle_size(self) -> None:
+        """Ease the window to the size its contents now want.
+
+        Hiding a strip used to leave the window at its old width with a band
+        of empty grey, because GTK only shrinks a window when it is told to.
+        The natural size is measured after the rebuild and the window walks
+        to it over a few frames, so the change reads as movement.
+        """
+        _minw, nat_w, _a, _b = self.root.measure(Gtk.Orientation.HORIZONTAL, -1)
+        _minh, nat_h, _c, _d = self.root.measure(Gtk.Orientation.VERTICAL, nat_w)
+        target = (nat_w + 14, nat_h + 12)
+        if self.get_width() <= 1:
+            # First layout: nothing to animate from, just be the right size.
+            self.set_default_size(*target)
+            return
+        self._size_target = target
+        if self._size_tick is None:
+            self._size_tick = GLib.timeout_add(16, self._step_size)
+
+    def _step_size(self) -> bool:
+        target = self._size_target
+        if target is None:
+            self._size_tick = None
+            return False
+        width, height = self.get_width(), self.get_height()
+        dw, dh = target[0] - width, target[1] - height
+        if abs(dw) < 2 and abs(dh) < 2:
+            self.set_default_size(*target)
+            self._size_tick = None
+            self._size_target = None
+            return False
+        # Exponential ease: quick at the start, gentle at the end, and it
+        # cannot overshoot however far it has to travel.
+        self.set_default_size(
+            max(1, int(width + dw * 0.34)),
+            max(1, int(height + dh * 0.34)),
+        )
+        return True
 
     def _build_group(self, group: str, sinks: list[str]) -> Gtk.Box:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
@@ -891,7 +945,18 @@ class MixerWindow(Gtk.ApplicationWindow):
     def _on_snapshot(self, snapshot) -> None:
         GLib.idle_add(self._apply_snapshot, snapshot)
 
+    def _read_routes(self) -> dict[str, set[str]]:
+        """source -> sinks, straight from the live module table."""
+        routes: dict[str, set[str]] = {}
+        try:
+            for loop in pactl.select_loopbacks(pactl.modules()):
+                routes.setdefault(loop.source, set()).add(loop.sink)
+        except OSError:  # pragma: no cover - no pactl means no routing
+            return {}
+        return routes
+
     def _apply_snapshot(self, snapshot) -> bool:
+        self._routes = self._read_routes()
         # Snapshot keeps both of these as dicts keyed by sink name.
         sinks = dict(snapshot.sinks)
         streams: dict[str, list[Listener]] = {
@@ -932,9 +997,25 @@ class MixerWindow(Gtk.ApplicationWindow):
             # chain first, so what this bus carries is the processed
             # signal, and the readout has to say so.
             return "2i2 \u2192 Carla \u2192 apps"
+        routed = self._routed_labels(channel.sink)
+        if routed:
+            # Name the endpoints this bus is actually wired to. The old
+            # readout picked whichever A50 endpoint was RUNNING, and both
+            # always are, so it said "A50 game" while the user listened on
+            # chat.
+            return " + ".join(routed)
         if channel.sink == "laptop_audio":
             return "laptop in"
-        return self._headset_target(snapshot)
+        return "not routed" if self.states[channel.sink].present else "\u2014"
+
+    def _routed_labels(self, sink: str) -> list[str]:
+        """Friendly names of the sinks this bus loops back into."""
+        dests = self._routes.get(f"{sink}.monitor", set())
+        names = [label for label, target in OUTPUTS if target in dests]
+        known = {target for _label, target in OUTPUTS}
+        # A destination we have no name for is still a destination.
+        names += [d.split(".")[-1] for d in sorted(dests) if d not in known]
+        return names
 
     def _headset_target(self, snapshot) -> str:
         """Which A50 endpoint is live. The pair flips between game and chat.

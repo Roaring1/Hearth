@@ -129,6 +129,26 @@ window.hearth {{
   font-size: 9.5px;
 }}
 .outbtn:hover {{ color: {pal["fg"]}; border-color: {pal["button"]}; }}
+/* A Gtk.MenuButton is a wrapper: the CSS class lands on the wrapper while
+   the desktop theme goes on styling the real button inside it. That is why
+   OUT and the knob chip came out fat and Breeze-shaped. */
+.outbtn > button, .bind > button {{
+  background: transparent;
+  background-image: none;
+  box-shadow: none;
+  border: none;
+  outline: none;
+  min-height: 0;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
+}}
+.outbtn > button > *, .bind > button > * {{ min-height: 0; }}
+/* The arrow is the widest thing in the chip and says nothing the pointer
+   does not already say. */
+.outbtn arrow, .bind arrow {{ min-width: 0; min-height: 0; -gtk-icon-size: 8px; }}
 .outpop contents {{
   background: {pal["win-alt"]};
   border: 1px solid {pal["view"]};
@@ -190,17 +210,28 @@ window.hearth {{
   padding: 1px 4px;
 }}
 .bind.hw {{ color: {pal["accent"]}; }}
+/* B2 has no knob. Rather than let its strip end higher than the rest, it
+   keeps the chip's footprint and draws nothing in it. */
+.bind.empty {{ background: transparent; color: transparent; }}
 
 button.mute {{
   background: {pal["view-alt"]};
   color: {pal["fg-dim"]};
   border: 1px solid {pal["win-alt"]};
   border-radius: 3px;
-  padding: 2px 0;
+  padding: 1px 0;
   min-height: 0;
+  min-width: 0;
+  margin: 0;
+  background-image: none;
+  box-shadow: none;
   font-size: 9.5px;
   letter-spacing: 1px;
 }}
+/* Same story as the MenuButton: the theme's minimum metrics have to be
+   beaten on every button this window draws, or one stray control sets the
+   height of the whole row. */
+.strip button, .grp button {{ min-height: 0; min-width: 0; }}
 button.mute:hover {{ color: {pal["fg"]}; }}
 button.mute:checked {{
   background: {pal["bad"]};
