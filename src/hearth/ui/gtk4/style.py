@@ -107,9 +107,9 @@ window.hearth {{
   border: 1px dashed {pal["button"]};
 }}
 .strip-name {{
-  font-size: 11px;
+  font-size: 10px;
   font-weight: bold;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.3px;
 }}
 .strip.dead .strip-name {{ color: {pal["fg-dim"]}; }}
 

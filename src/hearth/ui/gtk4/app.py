@@ -35,6 +35,7 @@ from hearth import collector as collector_mod  # noqa: E402
 from hearth import meters as meters_mod  # noqa: E402
 from hearth import settings as settings_mod  # noqa: E402
 from hearth.audio import pactl  # noqa: E402
+from hearth.ui.gtk4 import icons as icons_mod  # noqa: E402
 from hearth.ui.gtk4 import style as style_mod  # noqa: E402
 from hearth.ui.gtk4.widgets import Fader, Meter, Scale, Sliver, parse_rgb, rounded  # noqa: E402
 
@@ -73,11 +74,9 @@ CHANNELS: tuple[Channel, ...] = (
     Channel("Chat", "vm_chat", "headset", "K6", "P2"),
     Channel("Music", "vm_music", "headset", "K5", "P1"),
     Channel("Laptop", "laptop_audio", "headset"),
-    Channel("Stream", "mic_b1", "mic", "K8", "P6"),
-    Channel("Discord", "mic_b2", "mic"),
+    Channel("Mic\u2192Stream", "mic_b1", "mic", "K8", "P6"),
+    Channel("Mic\u2192Discord", "mic_b2", "mic"),
 )
-
-SHARE_SINK = "vm_share"
 
 #: Apps that actually appear on this desk get their own brand colour, defined
 #: as a CSS class in the stylesheet. Anything else keeps the neutral mark.
@@ -140,16 +139,25 @@ class Strip(Gtk.Box):
         self.channel = channel
         self.pal = window.pal
         self.add_css_class("strip")
-        self.set_size_request(88, -1)
+        self.set_size_request(98, -1)
+        # Without this the lone strip in a group swallows every spare
+        # pixel in the window and ends up three times its neighbours.
+        self.set_hexpand(False)
+        self.set_halign(Gtk.Align.START)
         self.set_valign(Gtk.Align.START)
         self._held_until = 0.0
 
         # header: grip, name, minimise
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         header.append(self._grip())
-        name = Gtk.Label(label=channel.name.upper(), xalign=0.0)
+        # Bus names that already carry a route (Mic→Discord) are long
+        # enough that shouting them just truncates them.
+        label = channel.name if "\u2192" in channel.name else channel.name.upper()
+        name = Gtk.Label(label=label, xalign=0.0)
         name.add_css_class("strip-name")
+        name.set_ellipsize(3)
         name.set_hexpand(True)
+        name.set_tooltip_text(channel.name)
         header.append(name)
         minimise = Gtk.Button(label="\u2013")
         minimise.add_css_class("minbox")
@@ -310,16 +318,25 @@ class Strip(Gtk.Box):
             box.remove(child)
             child = nxt
 
+    def _mark(self, app: str, size: int) -> Gtk.Widget:
+        """The installed icon for an app, falling back to a letter chip."""
+        image = icons_mod.icon_image(app, size)
+        if image is not None:
+            image.set_valign(Gtk.Align.CENTER)
+            return image
+        chip = Gtk.Label(label=app[:1].upper() or "?")
+        chip.add_css_class("mark")
+        chip.set_valign(Gtk.Align.CENTER)
+        chip.set_tooltip_text(app)
+        brand = app_class(app)
+        if brand:
+            chip.add_css_class(brand)
+        return chip
+
     def _fill_icons(self, listeners: list[Listener]) -> None:
         self._clear(self.icons)
         for listener in listeners[:4]:
-            mark = Gtk.Label(label=listener.name[:1].upper() or "?")
-            mark.add_css_class("mark")
-            mark.set_tooltip_text(listener.name)
-            brand = app_class(listener.name)
-            if brand:
-                mark.add_css_class(brand)
-            self.icons.append(mark)
+            self.icons.append(self._mark(listener.name, 13))
         extra = len(listeners) - 4
         if extra > 0:
             more = Gtk.Label(label=f"+{extra}")
@@ -335,13 +352,7 @@ class Strip(Gtk.Box):
             # little mute box on the right, so one app can be silenced
             # without touching the bus everything else is riding on.
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-            chip = Gtk.Label(label=listener.name[:1].upper() or "?")
-            chip.add_css_class("mark")
-            brand = app_class(listener.name)
-            if brand:
-                chip.add_css_class(brand)
-            chip.set_valign(Gtk.Align.CENTER)
-            row.append(chip)
+            row.append(self._mark(listener.name, 12))
             name = Gtk.Label(label=listener.name, xalign=0.0)
             name.add_css_class("listener")
             name.set_ellipsize(3)
@@ -365,96 +376,6 @@ class Strip(Gtk.Box):
             self.listeners.append(empty)
 
 
-class Ghost(Gtk.Box):
-    """A hidden channel, shown in place as a dashed outline with SHOW."""
-
-    def __init__(self, window: MixerWindow, channel: Channel) -> None:
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        self.add_css_class("strip")
-        self.add_css_class("ghost")
-        self.set_size_request(88, window.meter_h + 78)
-        self.set_valign(Gtk.Align.START)
-        name = Gtk.Label(label=channel.name.upper())
-        name.add_css_class("strip-name")
-        name.set_valign(Gtk.Align.CENTER)
-        name.set_vexpand(True)
-        self.append(name)
-        show = Gtk.Button(label="SHOW")
-        show.add_css_class("showbtn")
-        show.connect("clicked", lambda _b: window.unhide(channel.sink))
-        self.append(show)
-
-
-class ShareTile(Gtk.Box):
-    """The share destination: what the stream is actually hearing."""
-
-    def __init__(self, window: MixerWindow) -> None:
-        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        self.win = window
-        self.pal = window.pal
-        self.add_css_class("dest")
-        self.set_size_request(96, -1)
-        self.set_valign(Gtk.Align.START)
-        self._level = 0.0
-
-        tag = Gtk.Label(label="to stream", xalign=0.0)
-        tag.add_css_class("dest-tag")
-        self.append(tag)
-        name = Gtk.Label(label="SHARE", xalign=0.0)
-        name.add_css_class("strip-name")
-        self.append(name)
-
-        self.bar = Gtk.DrawingArea()
-        self.bar.set_content_height(9)
-        self.bar.set_draw_func(self._draw_bar)
-        self.append(self.bar)
-
-        self.warn = Gtk.Label(label="", xalign=0.0)
-        self.warn.add_css_class("dest-warn")
-        self.warn.set_visible(False)
-        self.append(self.warn)
-
-        self.feeders = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        self.append(self.feeders)
-
-    def _draw_bar(self, _a, cr, w: int, h: int) -> None:
-        cr.set_source_rgb(*parse_rgb(self.pal["meter-off"]))
-        rounded(cr, 0, 0, w, h, 3)
-        cr.fill()
-        if self._level <= 0.005:
-            return
-        colour = "bad" if self._level > 0.9 else ("hot" if self._level > 0.74 else "ok")
-        cr.set_source_rgb(*parse_rgb(self.pal[colour]))
-        rounded(cr, 0, 0, max(3.0, w * self._level), h, 3)
-        cr.fill()
-
-    def feed(self, level: float) -> None:
-        self._level = max(0.0, min(1.0, level))
-        self.bar.queue_draw()
-
-    def apply(self, feeders: list[Listener], present: bool) -> None:
-        child = self.feeders.get_first_child()
-        while child is not None:
-            nxt = child.get_next_sibling()
-            self.feeders.remove(child)
-            child = nxt
-        for feeder in feeders[:6]:
-            row = Gtk.Label(label=feeder.name, xalign=0.0)
-            row.add_css_class("listener")
-            row.set_ellipsize(3)
-            self.feeders.append(row)
-        bad = present and not feeders
-        self.warn.set_visible(bad or not present)
-        if not present:
-            self.warn.set_text("share bus is missing")
-        elif bad:
-            self.warn.set_text("nothing is feeding it")
-        if bad or not present:
-            self.add_css_class("bad")
-        else:
-            self.remove_css_class("bad")
-
-
 class MixerWindow(Gtk.ApplicationWindow):
     """The whole window. Groups on the left, share, then the minimise rail."""
 
@@ -469,8 +390,6 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.minimised = set(self.cfg.get("mixer_minimised") or [])
         self.order = self._load_order()
         self.states: dict[str, ChannelState] = {c.sink: ChannelState() for c in CHANNELS}
-        self.share_state = ChannelState()
-        self.share_feeders: list[Listener] = []
         self.strips: dict[str, Strip] = {}
         self.slivers: dict[str, Sliver] = {}
         self.group_tags: dict[str, Gtk.Label] = {}
@@ -478,7 +397,9 @@ class MixerWindow(Gtk.ApplicationWindow):
         # Width is remembered; height follows the content. A mixer with a
         # fixed strip height has one correct height, and restoring a taller
         # one just leaves a slab of empty window under the strips.
-        self.set_default_size(int(self.cfg.get("win_w", 720) or 720), -1)
+        # Both axes follow the content: a mixer has exactly one right size,
+        # and a remembered width only ever reopens as empty grey.
+        self.set_default_size(-1, -1)
         self.set_resizable(True)
 
         self.root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
@@ -502,7 +423,6 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.body.set_valign(Gtk.Align.START)
         self.root.append(self.body)
 
-        self.share = ShareTile(self)
         self.rail = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.rail.set_valign(Gtk.Align.START)
         rail_tag = Gtk.Label(label="min")
@@ -563,12 +483,12 @@ class MixerWindow(Gtk.ApplicationWindow):
                 for s in self.order
                 if (self._channel(s) is not None and self._channel(s).group == group)
                 and s not in self.minimised
+                and s not in self.hidden
             ]
             if not sinks:
                 continue
             self.body.append(self._build_group(group, sinks))
 
-        self.body.append(self.share)
         self._build_rail()
         self.body.append(self.rail)
         self._refresh_footer()
@@ -587,9 +507,6 @@ class MixerWindow(Gtk.ApplicationWindow):
         for sink in sinks:
             channel = self._channel(sink)
             if channel is None:
-                continue
-            if sink in self.hidden:
-                row.append(Ghost(self, channel))
                 continue
             strip = Strip(self, channel)
             self.strips[sink] = strip
@@ -615,7 +532,7 @@ class MixerWindow(Gtk.ApplicationWindow):
                 self.rail.remove(child)
             child = nxt
         for sink in self.order:
-            if sink not in self.minimised:
+            if sink not in self.minimised and sink not in self.hidden:
                 continue
             channel = self._channel(sink)
             if channel is None:
@@ -623,15 +540,16 @@ class MixerWindow(Gtk.ApplicationWindow):
             sliver = Sliver(self.pal, channel.name, self.meter_h + 52)
             click = Gtk.GestureClick()
             click.connect("released", lambda *_a, s=sink: self.restore(s))
+            sliver.add_css_class("sliver")
             sliver.add_controller(click)
             sliver.set_tooltip_text(f"Restore {channel.name}")
             self.rail.append(sliver)
             self.slivers[sink] = sliver
-        self.rail.set_visible(bool(self.minimised))
+        self.rail.set_visible(bool(self.minimised or self.hidden))
 
     def _refresh_footer(self) -> None:
         count = len(self.hidden)
-        self.hidden_label.set_text(f"{count} hidden \u25be" if count else "")
+        self.hidden_label.set_text(f"{count} in the rail" if count else "")
         self.drawer.set_label("hide apps \u25b4" if self.expanded else "show apps \u25be")
 
     # -- user actions ------------------------------------------------------
@@ -648,6 +566,7 @@ class MixerWindow(Gtk.ApplicationWindow):
 
     def restore(self, sink: str) -> None:
         self.minimised.discard(sink)
+        self.hidden.discard(sink)
         self.rebuild()
         self._save()
 
@@ -691,7 +610,7 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.collector.set_window_visible(True)
         self.collector.start()
         self.collector.refresh_now()
-        sources = [f"{c.sink}.monitor" for c in CHANNELS] + [f"{SHARE_SINK}.monitor"]
+        sources = [f"{c.sink}.monitor" for c in CHANNELS]
         self.peaks = meters_mod.PeakPoller(sources=sources)
         self.peaks.start()
         self._frame_id = GLib.timeout_add(66, self._on_frame)
@@ -714,9 +633,6 @@ class MixerWindow(Gtk.ApplicationWindow):
             state.muted = bool(sink.muted) if sink else False
             state.listeners = streams.get(channel.sink, [])
             state.device = self._device_label(channel, snapshot)
-        share = sinks.get(SHARE_SINK)
-        self.share_state.present = share is not None
-        self.share_feeders = streams.get(SHARE_SINK, [])
         self.apply_states()
         self._update_banner()
         return False
@@ -749,7 +665,6 @@ class MixerWindow(Gtk.ApplicationWindow):
             strip.apply(self.states[sink])
         for group, tag in self.group_tags.items():
             tag.set_text(self._group_tag(group))
-        self.share.apply(self.share_feeders, self.share_state.present)
 
     def _update_banner(self) -> None:
         missing = [
@@ -757,8 +672,6 @@ class MixerWindow(Gtk.ApplicationWindow):
             for c in CHANNELS
             if not self.states[c.sink].present and c.sink not in self.hidden
         ]
-        if not self.share_state.present:
-            missing.append("Share")
         if missing:
             names = ", ".join(missing)
             self.banner_text.set_text(f"{names} missing - the audio graph is not fully up")
@@ -773,7 +686,6 @@ class MixerWindow(Gtk.ApplicationWindow):
         for sink, sliver in self.slivers.items():
             level = self.peaks.level(f"{sink}.monitor") if available else 0.0
             sliver.feed(level, self.states[sink].muted)
-        self.share.feed(self.peaks.level(f"{SHARE_SINK}.monitor") if available else 0.0)
         return True
 
     def _on_close(self, *_args) -> bool:
