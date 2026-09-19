@@ -222,7 +222,26 @@ def run_app(vu_dump: bool = False):
     _sink_has_inputs: dict = {}
     _all_sinks = [s for _, s in VM_SINKS] + ["mic_b1", "mic_b2"]
     _sink_labels = {s: l for l, s in VM_SINKS}
-    _sink_labels.update({"mic_b1": "B1", "mic_b2": "B2"})
+    _sink_labels.update({"mic_b1": "Stream", "mic_b2": "Discord"})
+
+    _APP_NAME_FIXUPS = {
+        "gst-launch-1.0": "OBS",
+        "vesktop": "Discord",
+        "firefox": "Firefox",
+        "chromium": "Chromium",
+        "spotify": "Spotify",
+        "mpv": "mpv",
+        "java": "Minecraft",
+    }
+
+    def _tidy_app_name(raw: str) -> str:
+        # PulseAudio hands back process names; show what the user calls the app
+        base = (raw or "").strip()
+        key = base.split()[0].lower() if base else ""
+        if key in _APP_NAME_FIXUPS:
+            return _APP_NAME_FIXUPS[key]
+        short = base.split()[0] if base else "?"
+        return short[:12]
 
     def _make_app_row(app_info: dict, current_sink: str):
         pa_idx = app_info.get("index", "")
@@ -411,7 +430,8 @@ def run_app(vu_dump: bool = False):
 
         # compact app name tag -- plain text only, no scroll, no buttons in strip
         # scroll events no longer bleed into the fader; hovering doesn't spawn a scrollbar
-        _atag = Gtk.Label(label="—")
+        _atag = Gtk.Label(label="")
+        _atag.set_no_show_all(True)  # empty strips stay empty instead of showing a dash
         _atag.get_style_context().add_class("app-list-lbl")
         _atag.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
         _atag.set_xalign(0.5)
@@ -452,7 +472,7 @@ def run_app(vu_dump: bool = False):
     sv.set_margin_end(4)
     mix_row.pack_start(sv, False, False, 0)
 
-    for label, sink in [("B1", "mic_b1"), ("B2", "mic_b2")]:
+    for label, sink in [("STREAM", "mic_b1"), ("DISCORD", "mic_b2")]:
         add_strip(mix_row, label, sink, fader_h=80)
 
     sv_mic = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
@@ -540,13 +560,14 @@ def run_app(vu_dump: bool = False):
     _loopback_fns = {}
     _lb_last_click: dict = {}  # bus -> timestamp of last user click (race guard)
 
-    for bus, src_key, tip in [
-        ("B1", "b1_route", "Bus 1 -> Stream / OBS"),
-        ("B2", "b2_route", "Bus 2 -> Discord / Chat"),
+    for bus, src_key, tip, shown in [
+        ("B1", "b1_route", "Bus 1 -> Stream / OBS", "Stream"),
+        ("B2", "b2_route", "Bus 2 -> Discord / Chat", "Discord"),
     ]:
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-        lb = Gtk.Label(label=f"{bus}:")
-        lb.set_width_chars(3)
+        lb = Gtk.Label(label=f"{shown}")
+        lb.set_xalign(0)
+        lb.set_width_chars(7)
         lb.get_style_context().add_class("dim-s")
         row.pack_start(lb, False, False, 0)
 
@@ -724,8 +745,8 @@ def run_app(vu_dump: bool = False):
 
     # 2-column button grid for quick actions (saves ~80px vs stacked column)
     _qa_refs = {}
+    # UNMUTE lives in the top bar, where it is visible on every tab -- not repeated here
     _qa_defs = [
-        ("UNMUTE ALL  [U]", "btn-emu", "unmute"),
         ("Soft Restart  F5", "act", "soft"),
         ("Hard Restart  Ctrl+R", "act", "hard"),
         ("SSH  Ctrl+L", "btn-ssh", "ssh"),
@@ -739,13 +760,9 @@ def run_app(vu_dump: bool = False):
     for qi, (qlbl, qcls, qkey) in enumerate(_qa_defs):
         qb = Gtk.Button(label=qlbl)
         qb.get_style_context().add_class(qcls)
-        # UNMUTE spans both columns -- most important, needs to be big
-        if qkey == "unmute":
-            qa_grid.attach(qb, 0, 0, 2, 1)
-        else:
-            grow = 1 + (qi - 1) // 2  # was "row" and "col" -- both shadow outer scope vars
-            gcol = (qi - 1) % 2
-            qa_grid.attach(qb, gcol, grow, 1, 1)
+        grow = qi // 2  # was "row" and "col" -- both shadow outer scope vars
+        gcol = qi % 2
+        qa_grid.attach(qb, gcol, grow, 1, 1)
         _qa_refs[qkey] = qb
     # Debug Dump gets its own row below (less frequent, keeps grid clean)
     btn_dump = Gtk.Button(label="Debug Dump  Ctrl+D")
@@ -1268,7 +1285,6 @@ def run_app(vu_dump: bool = False):
     carla_btns[1].connect("clicked", lambda *_: _carla_stop())
     carla_btns[2].connect("clicked", lambda *_: _carla_dedup())
 
-    _qa_refs["unmute"].connect("clicked", lambda *_: _act_unmute())
     _qa_refs["soft"].connect("clicked", lambda *_: _act_soft())
     _qa_refs["hard"].connect("clicked", lambda *_: _act_hard())
     _qa_refs["dump"].connect("clicked", lambda *_: _act_dump())
@@ -1698,10 +1714,12 @@ def run_app(vu_dump: bool = False):
                     # compact strip label: plain text, no scroll, no interactive widgets
                     if sink in _app_compact:
                         if _apps:
-                            _names = [_a.get("name", "?")[:10] for _a in _apps[:3]]
+                            _names = [_tidy_app_name(_a.get("name", "")) for _a in _apps[:3]]
                             _app_compact[sink].set_text("  ".join(_names))
+                            _app_compact[sink].show()
                         else:
-                            _app_compact[sink].set_text("—")
+                            _app_compact[sink].set_text("")
+                            _app_compact[sink].hide()
                     # popover content: full interactive controls, built same way as before
                     _pop_abox = _app_lbl[sink]
                     for _ch in list(_pop_abox.get_children()):
