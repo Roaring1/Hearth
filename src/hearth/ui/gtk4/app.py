@@ -24,6 +24,7 @@ import logging
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import gi
 
@@ -43,6 +44,10 @@ from hearth.ui.gtk4 import style as style_mod  # noqa: E402
 from hearth.ui.gtk4.widgets import Fader, Meter, Scale, Sliver, parse_rgb, rounded  # noqa: E402
 
 log = logging.getLogger(__name__)
+
+#: Hearth's own icon set, drawn by scripts/draw_art.py. Theme icons vary
+#: wildly between icon packs; these do not.
+ART_DIR = Path(__file__).resolve().parents[4] / "assets" / "art"
 
 APP_ID = "co.roaring.Hearth"
 
@@ -148,10 +153,15 @@ def _set_mute_icon(button: Gtk.Button, muted: bool) -> None:
     The old [ ] / [x] pair read as a checkbox, which invites the reading
     "tick this to include the app" - the opposite of what it does.
     """
-    name = "audio-volume-muted-symbolic" if muted else "audio-volume-high-symbolic"
-    image = Gtk.Image.new_from_icon_name(name)
+    art = ART_DIR / ("app-muted@2x.png" if muted else "app-unmuted@2x.png")
+    if art.exists():
+        image = Gtk.Image.new_from_file(str(art))
+    else:  # pragma: no cover - a source checkout always has the art
+        name = "audio-volume-muted-symbolic" if muted else "audio-volume-high-symbolic"
+        image = Gtk.Image.new_from_icon_name(name)
     image.set_pixel_size(12)
     button.set_child(image)
+    button.set_tooltip_text("Unmute this app" if muted else "Mute this app")
 
 
 @dataclass
