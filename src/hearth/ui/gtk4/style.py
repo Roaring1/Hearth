@@ -123,6 +123,14 @@ window.hearth {{
   font-size: 10px;
 }}
 .minbox {{ padding: 0 5px; }}
+/* GTK rings the focused widget in the desktop accent. In this window the
+   accent means "hardware just moved this", so the first strip's minimise
+   button lighting up on open reads as a false hardware signal. Focus gets
+   a neutral ring instead. */
+.hearth *:focus, .hearth *:focus-visible {{
+  outline: 1px solid {pal["button"]};
+  outline-offset: -2px;
+}}
 .minbox:hover, .showbtn:hover, .railbtn:hover {{
   color: {pal["fg"]};
   border-color: {pal["button"]};
