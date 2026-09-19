@@ -102,6 +102,46 @@ window.hearth {{
   background: {pal["view-alt"]};
   border-color: {pal["bad"]};
 }}
+/* A muted bus is a state of the whole channel, so the whole channel
+   shifts: desaturated panel, dimmed text. Slight on purpose - it must
+   read at a glance without competing with a real fault. */
+.strip.muted-bus {{
+  background: {pal["win-alt"]};
+  border-color: {pal["button"]};
+}}
+.strip.muted-bus .strip-name, .strip.muted-bus .value {{ color: {pal["fg-dim"]}; }}
+
+/* Tweens. GTK animates these properties for free once a duration is
+   set, which is the cheapest way to stop the window snapping. */
+.strip, .grp, .sliver, button.mute, .appmute, .minbox, .outbtn {{
+  transition: background 140ms ease-out, border-color 140ms ease-out,
+              color 140ms ease-out, opacity 160ms ease-out;
+}}
+
+/* ---- routing popover --------------------------------------------- */
+.outbtn {{
+  background: {pal["view-alt"]};
+  color: {pal["fg-dim"]};
+  border: 1px solid {pal["win-alt"]};
+  border-radius: 3px;
+  padding: 2px 6px;
+  min-height: 0;
+  font-size: 9.5px;
+}}
+.outbtn:hover {{ color: {pal["fg"]}; border-color: {pal["button"]}; }}
+.outpop contents {{
+  background: {pal["win-alt"]};
+  border: 1px solid {pal["view"]};
+  border-radius: 5px;
+  padding: 6px 8px;
+}}
+.outpop checkbutton {{ font-size: 10px; color: {pal["fg"]}; }}
+.outhint {{
+  color: {pal["fg-dim"]};
+  font-size: 9px;
+  padding-bottom: 3px;
+}}
+
 .strip.ghost {{
   background: transparent;
   border: 1px dashed {pal["button"]};

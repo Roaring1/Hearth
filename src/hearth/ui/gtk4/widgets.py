@@ -276,10 +276,15 @@ class Scale(Gtk.DrawingArea):
 
     MARKS = ((0.94, "0"), (0.72, "-6"), (0.48, "-18"), (0.18, "-42"))
 
+    #: Tick, gap, then the widest label at 8.5 px Andale Mono. "-18" and
+    #: "-42" need every one of these pixels; 19 px cut them mid-glyph,
+    #: which is what read as the ruler being clipped.
+    WIDTH = 26
+
     def __init__(self, palette: dict[str, str], height: int) -> None:
         super().__init__()
         self._pal = palette
-        self.set_content_width(19)
+        self.set_content_width(self.WIDTH)
         self.set_content_height(height)
         self.set_draw_func(self._draw)
 
@@ -296,7 +301,14 @@ class Scale(Gtk.DrawingArea):
             cr.rectangle(0, y, 4, 1)
             cr.fill()
             cr.set_source_rgb(*parse_rgb(self._pal["fg-dim"]))
-            cr.move_to(6, y + 3.5)
+            # Measure rather than assume: a label is drawn only where it
+            # fits whole, and the first label sits far enough down that
+            # its cap height stays inside the widget.
+            extents = cr.text_extents(text)
+            x = 6.0
+            if x + extents.width > w:
+                x = max(0.0, w - extents.width)
+            cr.move_to(x, min(h - 1.0, max(7.0, y + 3.5)))
             cr.show_text(text)
 
 

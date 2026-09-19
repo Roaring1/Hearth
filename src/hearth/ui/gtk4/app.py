@@ -47,6 +47,10 @@ APP_ID = "co.roaring.Hearth"
 METER_TALL = 96
 METER_SHORT = 72
 
+#: How long the laptop input may sit silent and unused before it folds
+#: itself into the rail. It is a guest input, not a permanent strip.
+IDLE_COLLAPSE_S = 180.0
+
 #: How long a fader stays "held" after the user touches it, so an in-flight
 #: snapshot cannot yank the cap back under their finger.
 HOLD_S = 1.2
@@ -70,8 +74,12 @@ CHANNELS: tuple[Channel, ...] = (
     Channel("Chat", "vm_chat", "headset", "K6", "P2"),
     Channel("Music", "vm_music", "headset", "K5", "P1"),
     Channel("Laptop", "laptop_audio", "headset"),
-    Channel("Stream mic", "mic_b1", "mic", "K8", "P6"),
-    Channel("Discord mic", "mic_b2", "mic"),
+    # B1 is the microphone: 2i2 -> Carla -> this bus -> every app that
+    # takes mic input, Discord included. Calling it "Stream mic" implied
+    # a stream that does not exist and implied Discord was somewhere
+    # else. B2 is the spare bus, hidden until it is used.
+    Channel("Mic B1", "mic_b1", "mic", "K8", "P6"),
+    Channel("Mic B2", "mic_b2", "mic"),
 )
 
 #: The systemd user unit that creates each bus. A banner that names a
@@ -84,6 +92,19 @@ UNIT_FOR_SINK: dict[str, str] = {
     "mic_b2": "roaring-mic-busses.service",
     "laptop_audio": "roaring-laptop-audio.service",
 }
+
+#: Everywhere a bus can be sent. A bus is a null sink, so "output" means
+#: a ``module-loopback`` from its monitor into a real device. Naming them
+#: here keeps the popover honest: nothing appears that cannot be wired.
+OUTPUTS: tuple[tuple[str, str], ...] = (
+    ("A50 game", "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game"),
+    ("A50 chat", "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"),
+    (
+        "Scarlett",
+        "alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00.Direct__Direct__sink",
+    ),
+    ("Share", "vm_share"),
+)
 
 #: Apps that actually appear on this desk get their own brand colour, defined
 #: as a CSS class in the stylesheet. Anything else keeps the neutral mark.
@@ -115,6 +136,18 @@ def load_css(provider: Gtk.CssProvider, css: str) -> None:
         provider.load_from_data(css, -1)
     except TypeError:
         provider.load_from_data(css.encode("utf-8"))
+
+
+def _set_mute_icon(button: Gtk.Button, muted: bool) -> None:
+    """Draw a speaker, not a typographic box.
+
+    The old [ ] / [x] pair read as a checkbox, which invites the reading
+    "tick this to include the app" - the opposite of what it does.
+    """
+    name = "audio-volume-muted-symbolic" if muted else "audio-volume-high-symbolic"
+    image = Gtk.Image.new_from_icon_name(name)
+    image.set_pixel_size(12)
+    button.set_child(image)
 
 
 @dataclass
@@ -162,7 +195,8 @@ class Strip(Gtk.Box):
 
         # header: grip, name, minimise
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        header.append(self._grip())
+        grip = self._grip()
+        header.append(grip)
         # Single-word bus names shout; a two-word name like "Discord mic"
         # reads better as typed and would not fit the strip uppercased.
         label = channel.name.upper() if " " not in channel.name else channel.name
@@ -178,12 +212,18 @@ class Strip(Gtk.Box):
         minimise.set_tooltip_text(f"Minimise {channel.name} to the rail")
         minimise.connect("clicked", lambda _b: window.minimise(channel.sink))
         header.append(minimise)
+        # Double clicking a bus header collapses it, the same way a
+        # titlebar double click does everywhere else on this desktop.
+        hclick = Gtk.GestureClick()
+        hclick.connect(
+            "pressed",
+            lambda _g, n, *_a: window.minimise(channel.sink) if n >= 2 else None,
+        )
+        header.add_controller(hclick)
         self.append(header)
 
-        # app marks
-        self.icons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
-        self.icons.set_size_request(-1, 13)
-        self.append(self.icons)
+        # No icon row: every app already shows its icon on its own row
+        # below, so the strip was drawing the same icons twice.
 
         # meter + fader
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
@@ -223,6 +263,18 @@ class Strip(Gtk.Box):
         brow.append(self.mute)
         self.append(brow)
 
+        # outputs: where this bus is sent, and for a mic bus, whether
+        # you can hear yourself. Both are the same mechanism.
+        self.out_button = Gtk.MenuButton()
+        self.out_button.set_label("OUT")
+        self.out_button.add_css_class("outbtn")
+        self.out_button.set_tooltip_text(f"Choose where {channel.name} is sent")
+        self.out_popover = Gtk.Popover()
+        self.out_popover.add_css_class("outpop")
+        self.out_button.set_popover(self.out_popover)
+        self.out_popover.connect("show", lambda _p: self._fill_outputs())
+        brow.append(self.out_button)
+
         # device line
         self.device = Gtk.Label(label="\u2026", xalign=0.0)
         self.device.set_tooltip_text(f"Where {channel.name} lands")
@@ -235,7 +287,7 @@ class Strip(Gtk.Box):
         self.append(self.listeners)
         self.listeners.set_visible(window.expanded)
 
-        self._add_drag()
+        self._add_drag(grip)
 
     # -- construction helpers -------------------------------------------
     def _grip(self) -> Gtk.DrawingArea:
@@ -258,14 +310,17 @@ class Strip(Gtk.Box):
         pad = f", pad {self.channel.pad}" if self.channel.pad else ""
         return f"LPD8 knob {self.channel.bind}{pad}"
 
-    def _add_drag(self) -> None:
+    def _add_drag(self, handle: Gtk.Widget) -> None:
+        # The drag source used to sit on the whole strip, so a press on
+        # the fader started a strip drag and the fader never saw the
+        # motion. Only the grip drags the strip now.
         source = Gtk.DragSource()
         source.set_actions(Gdk.DragAction.MOVE)
         source.connect(
             "prepare",
             lambda *_a: Gdk.ContentProvider.new_for_value(self.channel.sink),
         )
-        self.add_controller(source)
+        handle.add_controller(source)
         target = Gtk.DropTarget.new(str, Gdk.DragAction.MOVE)
         target.connect("drop", self._on_drop)
         self.add_controller(target)
@@ -319,6 +374,7 @@ class Strip(Gtk.Box):
         dead = not state.present
         self.set_css_state(dead)
         self.meter.set_state(muted=state.muted, dead=dead)
+        self.set_muted_look(state.muted and not dead)
         self.fader.set_dead(dead)
         if not dead and time.monotonic() > self._held_until:
             self.fader.set_value(state.volume)
@@ -338,8 +394,18 @@ class Strip(Gtk.Box):
         else:
             self.device.set_text(state.device or "\u2014")
 
-        self._fill_icons(state.listeners)
         self._fill_listeners(state.listeners)
+
+    def set_muted_look(self, muted: bool) -> None:
+        """Tint the whole strip while its bus is muted.
+
+        A muted bus is a state of the whole channel, not of one button,
+        so the channel is what changes colour.
+        """
+        if muted:
+            self.add_css_class("muted-bus")
+        else:
+            self.remove_css_class("muted-bus")
 
     def set_css_state(self, dead: bool) -> None:
         if dead:
@@ -369,17 +435,51 @@ class Strip(Gtk.Box):
             chip.add_css_class(brand)
         return chip
 
-    def _fill_icons(self, listeners: list[Listener]) -> None:
-        self._clear(self.icons)
-        for listener in listeners[:4]:
-            self.icons.append(self._mark(listener.name, 13))
-        extra = len(listeners) - 4
-        if extra > 0:
-            more = Gtk.Label(label=f"+{extra}")
-            more.add_css_class("mark")
-            more.add_css_class("more")
-            more.set_tooltip_text(", ".join(x.name for x in listeners[4:]))
-            self.icons.append(more)
+    def _fill_outputs(self) -> None:
+        """Build the routing list from the live module table.
+
+        Read at open time rather than cached: somebody else's script can
+        load or unload a loopback at any moment, and a checkbox that
+        disagrees with the graph is worse than no checkbox.
+        """
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        source = f"{self.channel.sink}.monitor"
+        try:
+            live = {loop.sink for loop in pactl.select_loopbacks(pactl.modules(), source=source)}
+        except Exception:  # pragma: no cover - a dead server must not crash the UI
+            live = set()
+        if self.channel.group == "mic":
+            hint = Gtk.Label(
+                label="2i2 \u2192 Carla \u2192 this bus. Tick a device to hear it.",
+                xalign=0.0,
+            )
+            hint.add_css_class("outhint")
+            hint.set_wrap(True)
+            hint.set_max_width_chars(28)
+            box.append(hint)
+        for label, sink in OUTPUTS:
+            if sink == self.channel.sink:
+                continue
+            check = Gtk.CheckButton(label=label)
+            check.set_active(sink in live)
+            check.connect("toggled", self._on_route, sink)
+            box.append(check)
+        self.out_popover.set_child(box)
+
+    def _on_route(self, check: Gtk.CheckButton, sink: str) -> None:
+        """Wire or unwire one destination for this bus."""
+        source = f"{self.channel.sink}.monitor"
+        if check.get_active():
+            pactl.load_loopback(
+                source, sink, latency_msec=int(self.win.cfg.get("latency_msec", 12) or 12)
+            )
+        else:
+            pactl.unload_loopbacks(source, [sink])
+        GLib.timeout_add_seconds(1, self._route_settled)
+
+    def _route_settled(self) -> bool:
+        self.win.collector.refresh_now()
+        return False
 
     def _on_app_mute(self, button: Gtk.Button, listener: Listener) -> None:
         """Mute one app without touching the bus everything else rides on."""
@@ -387,7 +487,7 @@ class Strip(Gtk.Box):
         pactl.set_stream_mute(listener.index, muted)
         # Paint immediately; the next snapshot confirms it.
         listener.muted = muted
-        button.set_label("\u25a0" if muted else "\u25a1")
+        _set_mute_icon(button, muted)
         button.set_tooltip_text(f"Unmute {listener.name}" if muted else f"Mute {listener.name}")
         if muted:
             button.add_css_class("on")
@@ -415,8 +515,9 @@ class Strip(Gtk.Box):
             if listener.muted:
                 name.add_css_class("muted")
             row.append(name)
-            box = Gtk.Button(label="\u25a0" if listener.muted else "\u25a1")
+            box = Gtk.Button()
             box.add_css_class("appmute")
+            _set_mute_icon(box, listener.muted)
             if listener.muted:
                 box.add_css_class("on")
             box.set_tooltip_text(
@@ -427,7 +528,10 @@ class Strip(Gtk.Box):
             row.append(box)
             self.listeners.append(row)
         if not listeners:
-            empty = Gtk.Label(label="nothing playing", xalign=0.0)
+            # A mic bus is consumed, not played: nothing is "playing"
+            # into it, and what matters is whether an app is listening.
+            word = "nothing listening" if self.channel.group == "mic" else "nothing playing"
+            empty = Gtk.Label(label=word, xalign=0.0)
             empty.add_css_class("listener")
             self.listeners.append(empty)
 
@@ -444,7 +548,7 @@ class MixerWindow(Gtk.ApplicationWindow):
         # the drawer toggle that used to hide them is gone.
         self.expanded = True
         self.meter_h = METER_TALL
-        self.hidden = set(self.cfg.get("mixer_hidden") or ["mic_b1"])
+        self.hidden = set(self.cfg.get("mixer_hidden") or ["mic_b2"])
         self.minimised = set(self.cfg.get("mixer_minimised") or [])
         self.order = self._load_order()
         self.states: dict[str, ChannelState] = {c.sink: ChannelState() for c in CHANNELS}
@@ -452,6 +556,10 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.slivers: dict[str, Sliver] = {}
         self.group_tags: dict[str, Gtk.Label] = {}
         self._stacked = False
+        # Laptop audio is plugged in occasionally; when it has been
+        # silent and unused for a while it should get out of the way
+        # rather than hold a full strip open.
+        self._laptop_busy = time.monotonic()
 
         # Width is remembered; height follows the content. A mixer with a
         # fixed strip height has one correct height, and restoring a taller
@@ -572,10 +680,8 @@ class MixerWindow(Gtk.ApplicationWindow):
         box.set_halign(Gtk.Align.START)
         box.set_hexpand(False)
         box.set_vexpand(False)
-        tag = Gtk.Label(label=self._group_tag(group), xalign=0.0)
-        tag.add_css_class("grp-tag")
-        self.group_tags[group] = tag
-        box.append(tag)
+        # No group caption: the strips say what they are, and "headset"
+        # over a headset group is a label for a label.
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         row.set_valign(Gtk.Align.START)
         for sink in sinks:
@@ -642,8 +748,13 @@ class MixerWindow(Gtk.ApplicationWindow):
     def reorder(self, moved: str, target: str) -> None:
         if moved == target or moved not in self.order or target not in self.order:
             return
+        # Always inserting before the target meant a strip could only
+        # ever travel leftwards; dropping it to the right of where it
+        # started put it back exactly where it was.
+        forward = self.order.index(moved) < self.order.index(target)
         self.order.remove(moved)
-        self.order.insert(self.order.index(target), moved)
+        at = self.order.index(target)
+        self.order.insert(at + 1 if forward else at, moved)
         self.rebuild()
         self._save()
 
@@ -716,7 +827,10 @@ class MixerWindow(Gtk.ApplicationWindow):
     def _device_label(self, channel: Channel, snapshot) -> str:
         """Where this bus lands. Short, real, and never a routing path."""
         if channel.group == "mic":
-            return "to " + ("stream" if channel.sink == "mic_b1" else "discord")
+            # The mic is never raw here: the 2i2 goes through Carla's
+            # chain first, so what this bus carries is the processed
+            # signal, and the readout has to say so.
+            return "2i2 \u2192 Carla \u2192 apps"
         if channel.sink == "laptop_audio":
             return "laptop in"
         return self._headset_target(snapshot)
@@ -739,8 +853,6 @@ class MixerWindow(Gtk.ApplicationWindow):
     def apply_states(self) -> None:
         for sink, strip in self.strips.items():
             strip.apply(self.states[sink])
-        for group, tag in self.group_tags.items():
-            tag.set_text(self._group_tag(group))
 
     def _update_banner(self) -> None:
         missing = [
@@ -800,7 +912,28 @@ class MixerWindow(Gtk.ApplicationWindow):
         # frame where the window actually changes shape.
         if self._should_stack() != self._stacked:
             self.rebuild()
+        self._tick_laptop_idle()
         return True
+
+    def _tick_laptop_idle(self) -> None:
+        """Fold the laptop strip away once it has been quiet long enough.
+
+        Only automatic in one direction: it collapses itself, and the
+        rail restores it, so the mixer never reopens a strip under the
+        user's hand.
+        """
+        sink = "laptop_audio"
+        state = self.states.get(sink)
+        if state is None:
+            return
+        level = self.peaks.level(f"{sink}.monitor") if self.peaks else 0.0
+        if state.listeners or level > 0.02 or not state.present:
+            self._laptop_busy = time.monotonic()
+            return
+        if sink in self.minimised or sink in self.hidden:
+            return
+        if time.monotonic() - self._laptop_busy >= IDLE_COLLAPSE_S:
+            self.minimise(sink)
 
     def _on_close(self, *_args) -> bool:
         self._save()
