@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — sessions 1–5 (2026-09-19)
+
+All of the below is in the working tree only; HEAD is still `286f0c6`.
+
+### Added
+- `scripts/check.sh` single-command gate (ruff, ruff-format, mypy, pytest) plus `pyproject.toml`, `.pre-commit-config.yaml`, `.editorconfig`, `.gitattributes`, `LICENSE`, `CONTRIBUTING.md`, `.github/`, and a `tests/` suite (249 tests).
+- Packaging moved to XDG layout: `data/applications/`, `data/icons/hicolor/{48,64,128,256}`, `data/metainfo/`, `data/examples/`; `docs/INSTALL.md`.
+- `src/` package split extracted from the monolith (`collector.py`, `meters.py`, and friends) with `ui/app.py` as the front end.
+
+### Fixed
+- `ui/app.py` no longer relies on `from hearth.legacy_core import *` for stdlib names; the 12 inherited stdlib imports (`json`, `math`, `os`, `queue`, `re`, `shlex`, `signal`, `socket`, `subprocess`, `threading`, `time`, `Path`) are explicit. 43 real `legacy_core` API names remain for Phase 4 to rehome.
+- `WIN_KEY` used `os.path.expanduser`; now `Path(...).expanduser()`, verified byte-identical for `~/…`, absolute, empty, and `~user/…` inputs.
+- The SSH argv expanded `WIN_KEY` a second time after it was already expanded. Redundant call removed.
+- Removed a stale `# noqa: F403`.
+
+### Known gaps
+- `legacy_core` still carries duplicate `Collector` / `PeakPoller` shadowing `collector.py` / `meters.py`. Deferred: the only consumer is `ui/app.py`, which Phase 4 rewrites.
+- Pre-commit only sees tracked files; 72 files in the repo are still untracked.
+
 ## 5.1 — 2026-08-19
 
 ### Added
