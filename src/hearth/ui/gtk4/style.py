@@ -238,4 +238,16 @@ button.mute:checked {{
   padding: 3px 8px;
 }}
 .banner-text {{ color: {pal["bad"]}; font-size: 10px; }}
+.banner-restart {{
+  background: transparent;
+  border: 1px solid {pal["bad"]};
+  border-radius: 3px;
+  color: {pal["bad"]};
+  font-size: 9px;
+  letter-spacing: 0.6px;
+  min-height: 0;
+  padding: 1px 7px;
+}}
+.banner-restart:hover {{ background: {pal["bad"]}; color: {pal["view"]}; }}
+.banner-restart:disabled {{ color: {pal["fg-dim"]}; border-color: {pal["fg-dim"]}; }}
 """

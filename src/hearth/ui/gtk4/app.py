@@ -33,6 +33,7 @@ from gi.repository import Gdk, GLib, Gtk  # noqa: E402 - must follow require_ver
 
 from hearth import collector as collector_mod  # noqa: E402
 from hearth import meters as meters_mod  # noqa: E402
+from hearth import services as services_mod  # noqa: E402
 from hearth import settings as settings_mod  # noqa: E402
 from hearth.audio import pactl  # noqa: E402
 from hearth.ui.gtk4 import icons as icons_mod  # noqa: E402
@@ -72,6 +73,17 @@ CHANNELS: tuple[Channel, ...] = (
     Channel("Stream mic", "mic_b1", "mic", "K8", "P6"),
     Channel("Discord mic", "mic_b2", "mic"),
 )
+
+#: The systemd user unit that creates each bus. A banner that names a
+#: missing bus but cannot restart the thing that makes it is just nagging.
+UNIT_FOR_SINK: dict[str, str] = {
+    "vm_game": "roaring-vm-sinks.service",
+    "vm_chat": "roaring-vm-sinks.service",
+    "vm_music": "roaring-vm-sinks.service",
+    "mic_b1": "roaring-mic-busses.service",
+    "mic_b2": "roaring-mic-busses.service",
+    "laptop_audio": "roaring-laptop-audio.service",
+}
 
 #: Apps that actually appear on this desk get their own brand colour, defined
 #: as a CSS class in the stylesheet. Anything else keeps the neutral mark.
@@ -124,6 +136,9 @@ class ChannelState:
     muted: bool = False
     present: bool = False
     device: str = ""
+    #: False until the first snapshot lands, so the initial jump from 0
+    #: to the real volume is not mistaken for someone turning a knob.
+    seen: bool = False
     listeners: list[Listener] = field(default_factory=list)
 
 
@@ -143,6 +158,7 @@ class Strip(Gtk.Box):
         self.set_halign(Gtk.Align.START)
         self.set_valign(Gtk.Align.START)
         self._held_until = 0.0
+        self._hw_until = 0.0
 
         # header: grip, name, minimise
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -270,6 +286,27 @@ class Strip(Gtk.Box):
         pactl.set_mute(self.channel.sink, active)
 
     # -- state -----------------------------------------------------------
+    @property
+    def held(self) -> bool:
+        """True while the user's own drag owns this fader."""
+        return time.monotonic() <= self._held_until
+
+    def mark_hardware(self, seconds: float = 1.6) -> None:
+        """Light the cap: something outside this window moved the fader.
+
+        The LPD8 knobs write straight to PulseAudio, so the only honest
+        signal available here is a volume that moved while nobody was
+        touching the widget.
+        """
+        self._hw_until = time.monotonic() + seconds
+        self.fader.set_hardware(True)
+
+    def tick_hardware(self) -> None:
+        """Let the accent fade once the hardware stops driving."""
+        if self._hw_until and time.monotonic() > self._hw_until:
+            self._hw_until = 0.0
+            self.fader.set_hardware(False)
+
     def set_meter_height(self, height: int) -> None:
         self.meter.set_content_height(height)
         self.fader.set_content_height(height)
@@ -436,7 +473,15 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.banner.add_css_class("banner")
         self.banner_text = Gtk.Label(label="", xalign=0.0)
         self.banner_text.add_css_class("banner-text")
+        self.banner_text.set_hexpand(True)
         self.banner.append(self.banner_text)
+        # A fault nobody can act on is just nagging, so the banner
+        # carries the one command that would fix it.
+        self.banner_units: tuple[str, ...] = ()
+        self.banner_button = Gtk.Button(label="RESTART")
+        self.banner_button.add_css_class("banner-restart")
+        self.banner_button.connect("clicked", self._on_restart)
+        self.banner.append(self.banner_button)
         self.banner.set_visible(False)
         self.root.append(self.banner)
 
@@ -601,7 +646,6 @@ class MixerWindow(Gtk.ApplicationWindow):
         width, height = self.get_default_size()
         values.update(
             {
-                "mixer_collapsed": not self.expanded,
                 "mixer_hidden": sorted(self.hidden),
                 "mixer_minimised": sorted(self.minimised),
                 "mixer_order": list(self.order),
@@ -643,8 +687,19 @@ class MixerWindow(Gtk.ApplicationWindow):
         for channel in CHANNELS:
             sink = sinks.get(channel.sink)
             state = self.states[channel.sink]
+            previous, was_seen = state.volume, state.seen
             state.present = sink is not None
             state.volume = int(sink.volume) if sink else 0
+            state.seen = True
+            strip = self.strips.get(channel.sink)
+            if (
+                was_seen
+                and state.present
+                and strip is not None
+                and state.volume != previous
+                and not strip.held
+            ):
+                strip.mark_hardware()
             state.muted = bool(sink.muted) if sink else False
             state.listeners = streams.get(channel.sink, [])
             state.device = self._device_label(channel, snapshot)
@@ -683,14 +738,40 @@ class MixerWindow(Gtk.ApplicationWindow):
 
     def _update_banner(self) -> None:
         missing = [
-            c.name
-            for c in CHANNELS
-            if not self.states[c.sink].present and c.sink not in self.hidden
+            c for c in CHANNELS if not self.states[c.sink].present and c.sink not in self.hidden
         ]
         if missing:
-            names = ", ".join(missing)
+            names = ", ".join(c.name for c in missing)
             self.banner_text.set_text(f"{names} missing - the audio graph is not fully up")
+            units: list[str] = []
+            for channel in missing:
+                unit = UNIT_FOR_SINK.get(channel.sink, "")
+                if unit and unit not in units:
+                    units.append(unit)
+            self.banner_units = tuple(units)
+            self.banner_button.set_visible(bool(units))
+            self.banner_button.set_tooltip_text("Restart " + ", ".join(units) if units else "")
         self.banner.set_visible(bool(missing))
+
+    def _on_restart(self, _button: Gtk.Button) -> None:
+        """Restart whichever units own the buses that are missing."""
+        if not self.banner_units:
+            return
+        services_mod.restart(*self.banner_units)
+        self.banner_text.set_text(
+            "restarting "
+            + ", ".join(
+                u.removeprefix("roaring-").removesuffix(".service") for u in self.banner_units
+            )
+        )
+        # systemd is asynchronous; re-read rather than guess the outcome.
+        self.banner_button.set_sensitive(False)
+        GLib.timeout_add_seconds(4, self._restart_settled)
+
+    def _restart_settled(self) -> bool:
+        self.banner_button.set_sensitive(True)
+        self.collector.refresh_now()
+        return False
 
     def _on_frame(self) -> bool:
         available = getattr(self.peaks, "available", True)
@@ -698,6 +779,7 @@ class MixerWindow(Gtk.ApplicationWindow):
             level = self.peaks.level(f"{sink}.monitor") if available else 0.0
             strip.meter.feed(level)
             strip.meter.tick()
+            strip.tick_hardware()
         for sink, sliver in self.slivers.items():
             level = self.peaks.level(f"{sink}.monitor") if available else 0.0
             sliver.feed(level, self.states[sink].muted)
