@@ -214,6 +214,12 @@ def set_mute(sink: str, muted: bool) -> None:
         proc.spawn(["pactl", "set-sink-mute", sink, "1" if muted else "0"])
 
 
+def set_stream_mute(index: str, muted: bool) -> None:
+    """Mute one sink input (a single application), not the whole bus."""
+    if index:
+        proc.spawn(["pactl", "set-sink-input-mute", str(index), "1" if muted else "0"])
+
+
 def set_volume(sink: str, percent: int) -> None:
     if sink:
         proc.spawn(["pactl", "set-sink-volume", sink, f"{int(percent)}%"])

@@ -201,7 +201,15 @@ button.mute:checked {{
   background: {pal["view-alt"]};
   border-radius: 2px;
   padding: 0 3px;
+  /* It is a real button now, so strip the default button chrome. */
+  border: none;
+  box-shadow: none;
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
 }}
+.appmute:hover {{ color: {pal["fg"]}; }}
+.appmute:disabled {{ opacity: 0.45; }}
 .appmute.on {{ color: {pal["bad"]}; }}
 .listener.muted {{ color: {pal["bad"]}; }}
 

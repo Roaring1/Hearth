@@ -117,6 +117,8 @@ class Listener:
     name: str
     muted: bool = False
     live: bool = True
+    #: PulseAudio sink-input index, needed to mute this app alone.
+    index: str = ""
 
 
 @dataclass
@@ -346,6 +348,19 @@ class Strip(Gtk.Box):
             more.set_tooltip_text(", ".join(x.name for x in listeners[4:]))
             self.icons.append(more)
 
+    def _on_app_mute(self, button: Gtk.Button, listener: Listener) -> None:
+        """Mute one app without touching the bus everything else rides on."""
+        muted = not listener.muted
+        pactl.set_stream_mute(listener.index, muted)
+        # Paint immediately; the next snapshot confirms it.
+        listener.muted = muted
+        button.set_label("\u25a0" if muted else "\u25a1")
+        button.set_tooltip_text(f"Unmute {listener.name}" if muted else f"Mute {listener.name}")
+        if muted:
+            button.add_css_class("on")
+        else:
+            button.remove_css_class("on")
+
     def _fill_listeners(self, listeners: list[Listener]) -> None:
         self._clear(self.listeners)
         for listener in listeners[:5]:
@@ -367,13 +382,15 @@ class Strip(Gtk.Box):
             if listener.muted:
                 name.add_css_class("muted")
             row.append(name)
-            box = Gtk.Label(label="\u25a0" if listener.muted else "\u25a1")
+            box = Gtk.Button(label="\u25a0" if listener.muted else "\u25a1")
             box.add_css_class("appmute")
             if listener.muted:
                 box.add_css_class("on")
             box.set_tooltip_text(
-                f"{listener.name} is muted" if listener.muted else f"{listener.name} is playing"
+                f"Unmute {listener.name}" if listener.muted else f"Mute {listener.name}"
             )
+            box.set_sensitive(bool(listener.index))
+            box.connect("clicked", self._on_app_mute, listener)
             row.append(box)
             self.listeners.append(row)
         if not listeners:
@@ -628,7 +645,9 @@ class MixerWindow(Gtk.ApplicationWindow):
         # Snapshot keeps both of these as dicts keyed by sink name.
         sinks = dict(snapshot.sinks)
         streams: dict[str, list[Listener]] = {
-            sink: [Listener(name=s.name or "app", muted=bool(s.muted)) for s in entries]
+            sink: [
+                Listener(name=s.name or "app", muted=bool(s.muted), index=s.index) for s in entries
+            ]
             for sink, entries in snapshot.streams.items()
         }
         for channel in CHANNELS:
