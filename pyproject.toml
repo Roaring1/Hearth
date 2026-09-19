@@ -82,6 +82,10 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101"]              # asserts are the point of a test
 "tests/conftest.py" = ["S101", "TID251"]  # probes for gi to decide whether to skip GUI tests
+# The functional check drives the real GTK widgets against the live audio
+# graph, so it has to import gi like the UI it exercises. It is a manual
+# check, not part of the test suite, and stays out of src/ for that reason.
+"scripts/func_check.py" = ["TID251", "E402"]
 
 # Legacy debt, scoped and visible rather than excluded. These two files are
 # verbatim moves out of the 2,864-line original; reformatting them in the same
