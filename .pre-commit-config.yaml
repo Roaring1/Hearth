@@ -15,8 +15,11 @@ repos:
       - id: mixed-line-ending
         args: [--fix=lf]
 
+  # Keep this rev in step with the ruff pinned in pyproject's [dev] extra.
+  # A drifted hook lints with different rules than scripts/check.sh: v0.8.6
+  # still enforced UP038, which ruff has since removed as bad advice.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.6
+    rev: v0.16.8
     hooks:
       - id: ruff
         args: [--fix]
