@@ -288,6 +288,13 @@ class SetupWindow(Gtk.Window):
         )
         reconnect.connect("clicked", self._on_restart, LPD8_UNIT)
         row.append(reconnect)
+        remap = Gtk.Button(label="Remap\u2026")
+        remap.add_css_class("setup-act")
+        remap.set_tooltip_text(
+            "Open the LPD8 window: which knob moves which bus, and what each pad does."
+        )
+        remap.connect("clicked", self._on_remap)
+        row.append(remap)
         box.append(row)
 
         # The map is read from the running script rather than printed from a
@@ -301,6 +308,21 @@ class SetupWindow(Gtk.Window):
         box.append(self.lpd8_clash)
 
         return box
+
+    def _on_remap(self, _button: Gtk.Button) -> None:
+        """Hand off to the mixer, which owns the single LPD8 window.
+
+        Opening a second copy from here would let two windows write the
+        same script, so this asks the parent rather than building one --
+        and only builds its own if Setup somehow has no mixer behind it.
+        """
+        opener = getattr(self.get_transient_for(), "open_remap", None)
+        if opener is not None:
+            opener()
+            return
+        from hearth.ui.gtk4.remap import RemapWindow
+
+        RemapWindow(self).present()
 
     def _refresh_controller(self) -> None:
         try:

@@ -72,6 +72,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show and focus the running instance, starting one if needed.",
     )
     parser.add_argument(
+        "--remap",
+        action="store_true",
+        help="Open the LPD8 controls window in the running instance.",
+    )
+    parser.add_argument(
         "--unmute",
         action="store_true",
         help="Unmute every bus and exit. Needs no display.",
@@ -116,6 +121,11 @@ def _dispatch(args: argparse.Namespace) -> int:
     if args.quit:
         reply = core.ipc_send("quit")
         print("quit" if reply else "no running instance")
+        return EXIT_OK
+
+    if args.remap:
+        reply = core.ipc_send("remap")
+        print(reply or "no running instance")
         return EXIT_OK
 
     if args.dump:

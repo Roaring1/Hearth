@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — round 28 (2026-09-20)
+
+### Added
+- A standalone **LPD8 Controls** window: every knob and every pad on one page, each one a dropdown that writes the map and restarts the service. Reachable four ways — the `K5`-style chip on a fader, right-click → *LPD8 controls…*, Ctrl+L, and a *Remap…* button in Setup beside *Reconnect* — plus `hearth --remap` and a `remap` verb on the control socket. Like Setup, it is imported only when first opened, kept rather than rebuilt, and reads nothing while it is closed.
+- Pad remapping in `lpd8map`: `PAD_SLOTS`, `pad_to_note` / `note_to_pad` / `pad_to_cc` / `pad_to_prog`, `read_pad_map`, `set_pad`, `pad_conflicts`. A pad's slot appears in three tables in `lpd8_mixer.sh` (`NOTE_PAD*`, `CC_PAD*`, `PROG_*`), one per hardware mode, so `set_pad` rewrites all three in a single atomic write — moving only the note table would move the pad in PAD mode and nowhere else. Twelve tests cover it.
+
+### Changed
+- The bind chip was a menu button whose popover offered that one fader's knob and nothing else, so the eight pads — half the controller — had no UI at all and no two rows could be compared. The chip now opens the window; the popover, `_fill_binds` and `_on_bind` are gone.
+- Consecutive edits coalesce into one `lpd8-mixer` restart (900 ms), and a restart queued when the window is closed still fires.
+
+### Fixed
+- The new window reads the unit's raw state rather than `is_active()`, which folds "systemd did not answer" into "not running" — the same confident lie round 27 removed from Setup.
+
 ## Unreleased — round 27 (2026-09-20)
 
 ### Fixed

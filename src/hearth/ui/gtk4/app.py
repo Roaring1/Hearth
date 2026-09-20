@@ -38,7 +38,6 @@ from hearth import collector as collector_mod  # noqa: E402
 from hearth import control  # noqa: E402
 from hearth import ipc as ipc_mod  # noqa: E402
 from hearth import leds  # noqa: E402
-from hearth import lpd8map  # noqa: E402
 from hearth import meters as meters_mod  # noqa: E402
 from hearth import mic_routes  # noqa: E402
 from hearth import services as services_mod  # noqa: E402
@@ -311,15 +310,11 @@ class Strip(Gtk.Box):
         # it and pick the knob that should drive this bus.
         self.bind_button = None
         if channel.bind:
-            chip = Gtk.MenuButton()
-            chip.set_label(channel.bind)
+            chip = Gtk.Button(label=channel.bind)
             chip.add_css_class("bind")
             chip.set_valign(Gtk.Align.CENTER)
             chip.set_tooltip_text(self._bind_tip())
-            self.bind_popover = Gtk.Popover()
-            self.bind_popover.add_css_class("outpop")
-            chip.set_popover(self.bind_popover)
-            self.bind_popover.connect("show", lambda _p: self._fill_binds())
+            chip.connect("clicked", lambda _b: self.win.open_remap())
             self.bind_button = chip
             vrow.append(chip)
         else:
@@ -402,68 +397,7 @@ class Strip(Gtk.Box):
 
     def _bind_tip(self) -> str:
         pad = f", pad {self.channel.pad}" if self.channel.pad else ""
-        return f"LPD8 knob {self.channel.bind}{pad} \u2014 click to remap"
-
-    def _assignment(self) -> lpd8map.Assignment | None:
-        """The script constant that drives this bus, if any."""
-        for assignment in lpd8map.ASSIGNMENTS:
-            if assignment.sink == self.channel.sink:
-                return assignment
-        return None
-
-    def _fill_binds(self) -> None:
-        """Offer the eight knobs, ticking the one wired to this bus.
-
-        The list is rebuilt from the script every time it opens, because
-        the script is the thing the hardware service reads: showing a
-        cached map would be showing a wish rather than the wiring.
-        """
-        assignment = self._assignment()
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        if assignment is None:
-            box.append(Gtk.Label(label="No LPD8 binding for this bus", xalign=0.0))
-            self.bind_popover.set_child(box)
-            return
-        mapping = lpd8map.read_map()
-        current = lpd8map.cc_to_knob(mapping.get(assignment.const, -1))
-        head = Gtk.Label(label=f"Knob for {assignment.label}", xalign=0.0)
-        head.add_css_class("outhint")
-        box.append(head)
-        group: Gtk.CheckButton | None = None
-        for knob in lpd8map.KNOBS:
-            item = Gtk.CheckButton(label=f"K{knob}")
-            if group is None:
-                group = item
-            else:
-                item.set_group(group)
-            item.set_active(knob == current)
-            item.connect("toggled", self._on_bind, assignment.const, knob)
-            box.append(item)
-        note = Gtk.Label(
-            label="Saves to lpd8_mixer.sh and restarts the knob service.",
-            xalign=0.0,
-        )
-        note.add_css_class("outhint")
-        note.set_wrap(True)
-        note.set_max_width_chars(26)
-        box.append(note)
-        self.bind_popover.set_child(box)
-
-    def _on_bind(self, item: Gtk.CheckButton, const: str, knob: int) -> None:
-        if not item.get_active():
-            return
-        try:
-            changed = lpd8map.set_knob(const, knob)
-        except (OSError, ValueError) as exc:  # pragma: no cover - surfaced, not raised
-            log.warning("could not remap %s: %s", const, exc)
-            if self.bind_button is not None:
-                self.bind_button.set_tooltip_text(f"Remap failed: {exc}")
-            return
-        if not changed:
-            return
-        if self.bind_button is not None:
-            self.bind_button.set_label(f"K{knob}")
-        services_mod.restart(lpd8map.UNIT)
+        return f"LPD8 knob {self.channel.bind}{pad} \u2014 click to remap the controller"
 
     def _add_drag(self, handle: Gtk.Widget) -> None:
         # The drag source used to sit on the whole strip, so a press on
@@ -896,6 +830,7 @@ class MixerWindow(Gtk.ApplicationWindow):
         # or Ctrl+comma, and the fault banner is what shouts when it does
         # matter.
         self._setup_window: Gtk.Window | None = None
+        self._remap_window: Gtk.Window | None = None
         self._menu: Gtk.Popover | None = None
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key)
@@ -1429,19 +1364,41 @@ class MixerWindow(Gtk.ApplicationWindow):
             self._setup_window = SetupWindow(self)
         self._setup_window.present()
 
+    def open_remap(self) -> None:
+        """Build the LPD8 window the first time it is wanted, then show it.
+
+        Same deal as Setup: the import is here so a mixer that never opens
+        the controller window never pays for it, and the window is kept
+        rather than rebuilt so reopening it is free.
+        """
+        if self._remap_window is None:
+            from hearth.ui.gtk4.remap import RemapWindow
+
+            self._remap_window = RemapWindow(self)
+        self._remap_window.present()
+
     def _on_key(self, _controller, keyval: int, _code: int, state) -> bool:
         if keyval == Gdk.KEY_comma and state & Gdk.ModifierType.CONTROL_MASK:
             self.open_setup()
+            return True
+        if keyval == Gdk.KEY_l and state & Gdk.ModifierType.CONTROL_MASK:
+            self.open_remap()
             return True
         return False
 
     def _on_right_click(self, _gesture, _n_press: int, x: float, y: float) -> None:
         if self._menu is None:
-            item = Gtk.Button(label="Setup\u2026")
-            item.add_css_class("rail-handle")
-            item.connect("clicked", self._on_menu_setup)
+            items = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            for label, handler in (
+                ("Setup\u2026", self._on_menu_setup),
+                ("LPD8 controls\u2026", self._on_menu_remap),
+            ):
+                item = Gtk.Button(label=label)
+                item.add_css_class("rail-handle")
+                item.connect("clicked", handler)
+                items.append(item)
             self._menu = Gtk.Popover()
-            self._menu.set_child(item)
+            self._menu.set_child(items)
             self._menu.set_has_arrow(False)
             self._menu.set_parent(self)
         rect = Gdk.Rectangle()
@@ -1453,6 +1410,11 @@ class MixerWindow(Gtk.ApplicationWindow):
         if self._menu is not None:
             self._menu.popdown()
         self.open_setup()
+
+    def _on_menu_remap(self, _button: Gtk.Button) -> None:
+        if self._menu is not None:
+            self._menu.popdown()
+        self.open_remap()
 
     def _on_close(self, *_args) -> bool:
         self._save()
@@ -1467,6 +1429,10 @@ class MixerWindow(Gtk.ApplicationWindow):
             # teardown that also gives the widgets back.
             setup_window.destroy()
             self._setup_window = None
+        remap_window = getattr(self, "_remap_window", None)
+        if remap_window is not None:
+            remap_window.destroy()
+            self._remap_window = None
         if getattr(self, "_frame_id", None):
             GLib.source_remove(self._frame_id)
             self._frame_id = 0
@@ -1539,6 +1505,7 @@ class MixerApp(Gtk.Application):
                 "unmute": self._ctl_unmute,
                 "get_sinks": self._ctl_sinks,
                 "dump": self._ctl_dump,
+                "remap": self._ctl_remap,
                 "padfire_status": lambda: "ok",
             },
         )
@@ -1576,6 +1543,18 @@ class MixerApp(Gtk.Application):
             (c.sink, c.name, window.states[c.sink].volume, window.states[c.sink].muted)
             for c in CHANNELS
         )
+
+    def _ctl_remap(self) -> str:
+        """Open the LPD8 window, starting the mixer's own window if needed."""
+
+        def show() -> bool:
+            self.activate()
+            if self.window is not None:
+                self.window.open_remap()
+            return False
+
+        GLib.idle_add(show)
+        return "ok"
 
     def _ctl_dump(self) -> str:
         from hearth import paths
