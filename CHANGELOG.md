@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — round 26 (2026-09-20)
+
+### Removed
+- `legacy_core`'s duplicate `Collector` and `PeakPoller` (426 lines). They shadowed `hearth.collector` / `hearth.meters` and their only consumer was the GTK3 window deleted in round 24. Eight imports went with them, and the `F401` lint exemption on the file — it existed for re-exports the deleted star-import consumed — is retired, so unused imports there are errors again.
+
+### Fixed
+- `theme.Theme.css()` emitted `:root { --token: … }`, which is browser CSS. GTK3 rejects it outright (`Invalid name of pseudo-class`, verified against the real parser) and GTK4 parses it but has no `var()`, so the tokens were inert — the one function bridging the desktop palette to a stylesheet could not be used by either toolkit. It now emits `@define-color`, verified clean against real GTK3 and GTK4 providers, so colours resolve as `@window-bg`.
+
 ## Unreleased — round 25 (2026-09-20)
 
 ### Fixed

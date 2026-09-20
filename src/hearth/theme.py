@@ -161,11 +161,18 @@ class Theme:
         return luminance(self.background) < 0.5
 
     def css(self) -> str:
-        """The tokens as a ``:root`` block, ready to prepend to a stylesheet."""
-        lines = [":root {"]
-        lines += [f"  --{name}: {value};" for name, value in sorted(self.tokens.items())]
-        lines.append("}")
-        return "\n".join(lines) + "\n"
+        """The tokens as ``@define-color`` lines, to prepend to a stylesheet.
+
+        Not ``:root { --token: ... }``. GTK's CSS engine is not a browser:
+        it has no custom properties, and a rule it cannot parse makes it
+        drop the *entire* stylesheet, so the window would come up unstyled
+        rather than merely mis-coloured. ``@define-color`` is the GTK
+        spelling and works in both GTK3 and GTK4; the colours are then
+        referenced as ``@window-bg``.
+        """
+        return "".join(
+            f"@define-color {name} {value};\n" for name, value in sorted(self.tokens.items())
+        )
 
 
 def read(path: Path | None = None) -> Theme:

@@ -103,9 +103,20 @@ def test_every_role_has_a_fallback() -> None:
 def test_css_declares_every_token(tmp_path: Path) -> None:
     result = theme.read(write_sample(tmp_path))
     css = result.css()
-    assert css.startswith(":root {")
     for name, value in result.tokens.items():
-        assert f"--{name}: {value};" in css
+        assert f"@define-color {name} {value};" in css
+
+
+def test_css_is_parseable_by_gtk_not_a_browser(tmp_path: Path) -> None:
+    """``:root`` and ``--custom-properties`` are browser CSS, not GTK CSS.
+
+    GTK drops the whole stylesheet when it hits a rule it cannot parse, so
+    emitting either one costs the app all of its styling, not just its
+    colours.
+    """
+    css = theme.read(write_sample(tmp_path)).css()
+    assert ":root" not in css
+    assert "--" not in css
 
 
 def test_describe_avoids_internal_names(tmp_path: Path) -> None:

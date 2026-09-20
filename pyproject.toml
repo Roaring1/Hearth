@@ -95,7 +95,6 @@ ignore = [
 # shrinks as Phase 4 rewrites the UI.
 "src/hearth/legacy_core.py" = [
   "E401", "E501", "E701", "E702", "E741",  # legacy one-line style
-  "F401",                                    # re-exports consumed by hearth.ui
   "S110", "SIM105", "SIM102", "SIM115", "SIM223",
   "RUF005", "RUF022", "PTH101", "PTH105", "PTH123", "C420", "I001",
 ]
