@@ -68,6 +68,14 @@ IDLE_COLLAPSE_S = 180.0
 #: snapshot cannot yank the cap back under their finger.
 HOLD_S = 1.2
 
+#: The redraw loop idles slow and speeds up while something is being used.
+#: 15 Hz is invisible on a window nobody is touching and costs almost
+#: nothing; 60 Hz for a second under the hand is what makes a dragged
+#: fader feel attached to the pointer instead of trailing it.
+FRAME_IDLE_MS = 66
+FRAME_BUSY_MS = 16
+BUSY_S = 1.0
+
 
 @dataclass(frozen=True)
 class Channel:
@@ -428,6 +436,7 @@ class Strip(Gtk.Box):
     # -- user input ------------------------------------------------------
     def _on_moved(self, _f: Fader, value: int) -> None:
         self._held_until = time.monotonic() + HOLD_S
+        self.win.quicken()
         self.value.set_text(f"{value}")
         pactl.set_volume(self.channel.sink, value)
 
@@ -753,6 +762,8 @@ class MixerWindow(Gtk.ApplicationWindow):
         #: in-flight window resize, if any
         self._size_target: tuple[int, int] | None = None
         self._size_tick: int | None = None
+        self._frame_ms = FRAME_IDLE_MS
+        self._busy_until = 0.0
         # Only a bus that was working and then vanished is worth a
         # banner. One that was never there since launch is just unplugged.
         self.ever_present: set[str] = set()
@@ -1095,7 +1106,8 @@ class MixerWindow(Gtk.ApplicationWindow):
         sources = [f"{c.sink}.monitor" for c in CHANNELS]
         self.peaks = meters_mod.PeakPoller(sources=sources)
         self.peaks.start()
-        self._frame_id = GLib.timeout_add(66, self._on_frame)
+        self._frame_ms = FRAME_IDLE_MS
+        self._frame_id = GLib.timeout_add(self._frame_ms, self._on_frame)
 
     def _on_snapshot(self, snapshot) -> None:
         GLib.idle_add(self._apply_snapshot, snapshot)
@@ -1169,6 +1181,7 @@ class MixerWindow(Gtk.ApplicationWindow):
             self.rebuild()
         self.apply_states()
         self._update_banner()
+        self._feed_remap()
         return False
 
     def _push_led(self, sink: str, muted: bool) -> None:
@@ -1327,7 +1340,42 @@ class MixerWindow(Gtk.ApplicationWindow):
             level = self.peaks.level(f"{sink}.monitor") if available else 0.0
             sliver.feed(level, self.states[sink].muted)
         self._tick_laptop_idle()
+        wanted = FRAME_BUSY_MS if time.monotonic() <= self._busy_until else FRAME_IDLE_MS
+        if wanted != self._frame_ms:
+            # The rate is changed by replacing the source, so the fast
+            # clock exists only for the second it is wanted and the idle
+            # window is never paying for frames it does not use.
+            self._frame_ms = wanted
+            self._frame_id = GLib.timeout_add(wanted, self._on_frame)
+            return False
         return True
+
+    def quicken(self) -> None:
+        """Redraw fast for a second: something is being dragged.
+
+        Called by the controls themselves rather than guessed at from a
+        timer, so the expensive rate is on exactly while a hand is on the
+        window and off the moment it lets go.
+        """
+        self._busy_until = time.monotonic() + BUSY_S
+        if self._frame_ms == FRAME_BUSY_MS or not self._frame_id:
+            return
+        GLib.source_remove(self._frame_id)
+        self._frame_ms = FRAME_BUSY_MS
+        self._frame_id = GLib.timeout_add(FRAME_BUSY_MS, self._on_frame)
+
+    def _feed_remap(self) -> None:
+        """Give the LPD8 window the state this snapshot already carries.
+
+        It draws knob positions and lit pads from this, so it polls
+        nothing of its own; closed, it costs one attribute lookup.
+        """
+        window = self._remap_window
+        if window is None or not window.get_mapped():
+            return
+        feed = getattr(window, "apply_live", None)
+        if feed is not None:
+            feed(self.states)
 
     def _tick_laptop_idle(self) -> None:
         """Fold the laptop strip away once it has been quiet long enough.

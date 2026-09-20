@@ -26,6 +26,8 @@ _SIGNAL = {
     "hot": "#e0c14a",
     "bad": "#ff453a",
     "unknown": "#c8a2e0",
+    # A pad whose bus is audible, matching the LPD8's own orange lamps.
+    "live": "#ff6a2a",
     "meter-off": "#1b1b1b",
     "meter-dim": "#3b3b3b",
 }
@@ -351,6 +353,14 @@ button.mute:checked {{
 .setup-note {{ font-size: 10px; color: {pal["fg-dim"]}; }}
 .setup-note.bad {{ color: {pal["bad"]}; }}
 .setup-clash {{ font-size: 10px; color: {pal["hot"]}; }}
+/* One job per box. The border does the separating, so the column can stay
+   tight instead of spacing sections apart with empty window. */
+.setup-box {{
+  background: {pal["view"]};
+  border: 1px solid {pal["win-alt"]};
+  border-radius: 6px;
+  padding: 8px 10px;
+}}
 .setup-row {{
   border-left: 3px solid {pal["bad"]};
   padding: 2px 0 2px 8px;
@@ -390,6 +400,12 @@ button.lpd8-pad {{
 button.lpd8-pad:hover {{ border-color: {pal["accent"]}; }}
 /* A pad the script does not use is still a pad: same box, nothing in it. */
 button.lpd8-pad.free {{ background: transparent; border-style: dashed; }}
+/* Lit pad: the bus it watches is audible. Placed before .sel so an open
+   menu still shows the accent outline over the glow. */
+button.lpd8-pad.live {{
+  border-color: {pal["live"]};
+  box-shadow: 0 0 6px rgba(255, 106, 42, 0.55);
+}}
 button.lpd8-pad.sel {{
   border-color: {pal["accent"]};
   border-width: 2px;

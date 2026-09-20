@@ -15,6 +15,12 @@ imported or built until somebody opens it, and the window reads the map
 only while it is on screen: no poll, just a re-read on every open, which
 also covers the user editing the script by hand.
 
+The controls also show where they actually are. A knob's notch sits at the
+volume that knob last wrote, and a pad glows while the bus it watches is
+audible, matching the pad's own LED. None of that is polled from here: the
+mixer hands this window the snapshot it was already taking, so an open
+LPD8 window costs a few redraws and no extra reads at all.
+
 Every edit is written straight to ``~/bin/lpd8_mixer.sh`` and the unit is
 restarted, because a mapping the hardware is not using yet is not a
 mapping. The restart is deferred a moment so changing three controls in a
@@ -32,6 +38,7 @@ gi.require_version("Gtk", "4.0")
 
 from gi.repository import GLib, Gtk  # noqa: E402 - must follow require_version
 
+from hearth import leds as leds_mod  # noqa: E402
 from hearth import lpd8map  # noqa: E402
 from hearth import services as services_mod  # noqa: E402
 from hearth.ui.gtk4 import style as style_mod  # noqa: E402
@@ -72,6 +79,15 @@ KNOB_SHORT: dict[str, str] = {
     "CC_VM_MUSIC": "Music",
     "CC_MIC_VOL": "Mic B1",
 }
+
+
+#: Which pad watches which bus, inverted from :mod:`hearth.leds` so the
+#: two cannot drift apart. Pads 3, 5 and 8 fire an action rather than hold
+#: a state, so they have no light to mirror and never glow.
+PAD_SINK: dict[int, str] = {pad: sink for sink, pad in leds_mod.PAD_FOR_SINK.items()}
+
+#: How far a knob turns from centre, in degrees, at each end of its travel.
+KNOB_SWEEP = 135.0
 
 
 def _rgb(value: str) -> tuple[float, float, float]:
@@ -134,6 +150,18 @@ class _Pad(Gtk.Button, _Control):
         else:
             self.add_css_class("free")
 
+    def set_live(self, lit: bool | None) -> None:
+        """Glow while the bus this pad watches is audible.
+
+        Same rule as the hardware LED: lit means you can hear it. ``None``
+        is a pad that holds no state, and it stays plain rather than
+        claiming its light is off.
+        """
+        if lit:
+            self.add_css_class("live")
+        else:
+            self.remove_css_class("live")
+
     def set_open(self, open_: bool) -> None:
         if open_:
             self.add_css_class("sel")
@@ -151,6 +179,8 @@ class _Knob(Gtk.Button, _Control):
         self.pal = pal
         self.assigned = False
         self.open = False
+        #: 0-1, or None when nothing has said where this knob is.
+        self.level: float | None = None
         self.add_css_class("lpd8-knob")
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         box.set_halign(Gtk.Align.CENTER)
@@ -180,6 +210,21 @@ class _Knob(Gtk.Button, _Control):
         self.assigned = bool(text)
         self.face.queue_draw()
 
+    def set_level(self, level: float | None) -> None:
+        """Point the notch at *level*, or straight up if it is unknown.
+
+        Redraws only on a real change: the mixer pushes state twice a
+        second and a volume that has not moved must not cost a frame.
+        """
+        if level is not None:
+            level = max(0.0, min(1.0, level))
+            if self.level is not None and abs(level - self.level) < 0.005:
+                return
+        elif self.level is None:
+            return
+        self.level = level
+        self.face.queue_draw()
+
     def set_open(self, open_: bool) -> None:
         self.open = open_
         self.face.queue_draw()
@@ -195,11 +240,20 @@ class _Knob(Gtk.Button, _Control):
         cr.set_source_rgb(*_rgb(pal["accent"] if self.open else pal["view"]))
         cr.set_line_width(2.0 if self.open else 1.0)
         cr.stroke()
-        # The notch is drawn at twelve o'clock on every knob and never
-        # moves: this window maps controls, it does not read their
-        # positions, and a notch that wandered would claim otherwise.
-        cr.move_to(cx, cy - radius * 0.2)
-        cr.line_to(cx, cy - radius * 0.8)
+        # The knob cannot be asked where it is, but the bus it drives can:
+        # the volume it last wrote *is* its position. With nothing to go on
+        # the notch points straight up and no arc is drawn, rather than
+        # inventing a position.
+        sweep = math.radians(KNOB_SWEEP)
+        angle = 0.0 if self.level is None else (self.level - 0.5) * 2 * sweep
+        if self.level is not None:
+            cr.arc(cx, cy, radius * 0.72, -math.pi / 2 - sweep, -math.pi / 2 + angle)
+            cr.set_source_rgb(*_rgb(pal["accent"]))
+            cr.set_line_width(2.0)
+            cr.stroke()
+        dx, dy = math.sin(angle), -math.cos(angle)
+        cr.move_to(cx + dx * radius * 0.2, cy + dy * radius * 0.2)
+        cr.line_to(cx + dx * radius * 0.8, cy + dy * radius * 0.8)
         cr.set_source_rgb(*_rgb(pal["fg"] if self.assigned else pal["fg-dim"]))
         cr.set_line_width(2.0)
         cr.set_line_cap(1)  # CAIRO_LINE_CAP_ROUND
@@ -225,6 +279,8 @@ class RemapWindow(Gtk.Window):
         self._pad_use: dict[int, list[int]] = {}
         self._knob_use: dict[int, list[str]] = {}
         self._open: _Pad | _Knob | None = None
+        #: sink name -> live state, pushed in by the mixer. Never read here.
+        self._live: dict[str, object] = {}
 
         column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         column.set_margin_top(12)
@@ -394,6 +450,42 @@ class RemapWindow(Gtk.Window):
         if self._open is not None:
             self._fill_choice(self._open)
         self._say("; ".join(x for x in (self._clashes(knobs, pads), self._service_note()) if x))
+        # A control that just changed job now watches a different bus.
+        self._paint_live()
+
+    def apply_live(self, states: dict[str, object]) -> None:
+        """Take the mixer's snapshot: *states* is sink name -> channel state.
+
+        Anything with ``volume``, ``muted`` and ``present`` attributes
+        will do, which keeps this window free of the mixer's own types.
+        Ignored while the window is not on screen, so a closed LPD8
+        window costs nothing per snapshot.
+        """
+        if not self.get_mapped():
+            return
+        self._live = states
+        self._paint_live()
+
+    def _paint_live(self) -> None:
+        """Put every control where the rig says it is."""
+        if not self._live:
+            return
+        sink_for = {a.const: a.sink for a in lpd8map.ASSIGNMENTS}
+        for knob, widget in self._knobs.items():
+            level: float | None = None
+            for const in self._knob_use.get(knob, []):
+                state = self._live.get(sink_for.get(const, ""))
+                if state is not None and getattr(state, "present", True):
+                    volume = int(getattr(state, "volume", 0))
+                    level = max(0, min(100, volume)) / 100
+                    break
+            widget.set_level(level)
+        for pad, widget in self._pads.items():
+            state = self._live.get(PAD_SINK.get(pad, ""))
+            lit: bool | None = None
+            if state is not None and getattr(state, "present", True):
+                lit = not bool(getattr(state, "muted", False))
+            widget.set_live(lit)
 
     def _clashes(self, knobs: dict[str, int], pads: dict[int, int]) -> str:
         labels = {a.const: a.label for a in lpd8map.ASSIGNMENTS}

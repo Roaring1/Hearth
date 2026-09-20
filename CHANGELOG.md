@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — round 31 (2026-09-20)
+
+### Changed
+- The LPD8 window now shows the rig, not just the map. Each knob's notch sits at the volume that knob last wrote to its bus, with a thin accent arc for the travel; a knob whose position nothing can vouch for still points straight up and draws no arc.
+- Pads glow orange on the outline while the bus they watch is audible, matching the controller's own lamps. Pads that fire an action rather than hold a state (headset source, save report, desk speakers) never glow.
+- Live state is pushed into the LPD8 window from the snapshot the mixer already takes, twice a second, and only while the window is on screen. It polls nothing of its own, and a knob whose volume has not moved does not cost a redraw.
+- The mixer's redraw loop now idles at 15 Hz instead of running flat out, and jumps to 60 Hz for one second whenever a fader is touched, dragged or scrolled. Dragging feels attached to the pointer; an untouched window costs a quarter of what it used to.
+- Hearth Setup is boxed by job: headset, mic path, Moonlight sends and LPD8 each sit in their own bordered section, with the borders doing the separating so the column can sit tight.
+- Hearth Setup says less. The "The rig is up" line is gone — the verdict line now appears only when something is actually wrong. The A50 endpoint explanation moved from a paragraph to a tooltip, "Save and restart routing" is now "Save", and "Loopback latency" is now "Latency".
+
 ## Unreleased — round 30 (2026-09-20)
 
 ### Changed

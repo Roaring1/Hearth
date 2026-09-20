@@ -72,6 +72,18 @@ def _note(text: str) -> Gtk.Label:
     return label
 
 
+def _section(title: str) -> Gtk.Box:
+    """A titled box to put one job's controls in.
+
+    The border is what separates one section from the next, so the window
+    can sit tight instead of holding sections apart with empty space.
+    """
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    box.add_css_class("setup-box")
+    box.append(_tag(title))
+    return box
+
+
 class SetupWindow(Gtk.Window):
     """One scrolling column: what is wrong, the hardware, the controller."""
 
@@ -90,7 +102,7 @@ class SetupWindow(Gtk.Window):
         self._units: list[units_mod.Unit] = []
         self._fault_rows: dict[str, Gtk.Widget] = {}
 
-        column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         column.set_margin_top(12)
         column.set_margin_bottom(14)
         column.set_margin_start(14)
@@ -116,9 +128,13 @@ class SetupWindow(Gtk.Window):
     def _build_verdict(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
 
-        self.verdict = Gtk.Label(label="checking the rig\u2026", xalign=0.0)
+        self.verdict = Gtk.Label(label="", xalign=0.0)
         self.verdict.add_css_class("setup-verdict")
         self.verdict.set_wrap(True)
+        # Nothing to say when nothing is wrong. A standing line that only
+        # ever reads "all good" is a line nobody checks, and it pushes the
+        # controls down the window to make room for itself.
+        self.verdict.set_visible(False)
         box.append(self.verdict)
 
         self.faults = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -155,8 +171,7 @@ class SetupWindow(Gtk.Window):
         self._core = core
         conf = core.read_conf(core.MXCONF)
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        box.append(_tag("HEADSET"))
+        box = _section("HEADSET")
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         self.astro_chat = Gtk.CheckButton(label="Chat")
@@ -167,16 +182,16 @@ class SetupWindow(Gtk.Window):
         self.astro_chat.set_active(not is_game)
         row.append(self.astro_chat)
         row.append(self.astro_game)
-        box.append(row)
-        box.append(
-            _note(
-                "Which of the A50's two endpoints the buses feed. The headset "
-                "mixes both, so the wrong one is quiet, not silent."
-            )
+        # The explanation is a tooltip rather than a paragraph: it is worth
+        # having once, not worth reading every time the window opens.
+        row.set_tooltip_text(
+            "Which of the A50's two endpoints the buses feed. The headset "
+            "mixes both, so the wrong one is quiet, not silent."
         )
+        box.append(row)
 
         lat_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        lat_row.append(Gtk.Label(label="Loopback latency", xalign=0.0))
+        lat_row.append(Gtk.Label(label="Latency", xalign=0.0))
         self.latency = Gtk.SpinButton.new_with_range(1, 200, 1)
         try:
             self.latency.set_value(int(conf.get("LATENCY_MSEC", "12")))
@@ -186,7 +201,8 @@ class SetupWindow(Gtk.Window):
         lat_row.append(Gtk.Label(label="ms"))
         box.append(lat_row)
 
-        self.save_devices = Gtk.Button(label="Save and restart routing")
+        self.save_devices = Gtk.Button(label="Save")
+        self.save_devices.set_tooltip_text("Write the config and restart routing")
         self.save_devices.add_css_class("setup-act")
         self.save_devices.set_halign(Gtk.Align.START)
         self.save_devices.connect("clicked", self._on_save_devices)
@@ -200,11 +216,11 @@ class SetupWindow(Gtk.Window):
         core.write_conf_key(core.MXCONF, "ASTRO_TARGET", target)
         core.write_conf_key(core.MXCONF, "LATENCY_MSEC", str(int(self.latency.get_value())))
         services_mod.restart(ROUTES_UNIT)
-        self.save_devices.set_label("Saved \u2014 routing restarting")
+        self.save_devices.set_label("Saved")
         GLib.timeout_add_seconds(4, self._devices_settled)
 
     def _devices_settled(self) -> bool:
-        self.save_devices.set_label("Save and restart routing")
+        self.save_devices.set_label("Save")
         return False
 
     # -- where the mic ends up -------------------------------------------
@@ -216,14 +232,13 @@ class SetupWindow(Gtk.Window):
         panel is the whole path at once, which is the thing you want when
         the person on the other end says they cannot hear you.
         """
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        box.append(_tag("MIC PATH"))
+        path = _section("MIC PATH")
 
         self.flow = _note("")
-        box.append(self.flow)
+        path.append(self.flow)
 
+        sends = _section("MOONLIGHT SENDS")
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        row.append(Gtk.Label(label="Moonlight sends", xalign=0.0))
         self.ml_stream = Gtk.CheckButton(label="Stream")
         self.ml_chat = Gtk.CheckButton(label="Chat")
         self.ml_chat.set_group(self.ml_stream)
@@ -237,11 +252,15 @@ class SetupWindow(Gtk.Window):
         self.ml_chat.connect("toggled", self._on_moonlight, "b2_mic")
         row.append(self.ml_stream)
         row.append(self.ml_chat)
-        box.append(row)
+        sends.append(row)
 
         self.ml_note = _note("")
-        box.append(self.ml_note)
-        return box
+        sends.append(self.ml_note)
+
+        both = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        both.append(path)
+        both.append(sends)
+        return both
 
     def _on_moonlight(self, button: Gtk.CheckButton, source: str) -> None:
         if not button.get_active():
@@ -273,8 +292,7 @@ class SetupWindow(Gtk.Window):
 
     # -- controller ------------------------------------------------------
     def _build_controller(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        box.append(_tag("LPD8"))
+        box = _section("LPD8")
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.lpd8_state = Gtk.Label(label="\u2026", xalign=0.0)
@@ -432,8 +450,9 @@ class SetupWindow(Gtk.Window):
             self.verdict.set_text("1 thing is wrong" if count == 1 else f"{count} things are wrong")
             self.verdict.add_css_class("bad")
         else:
-            self.verdict.set_text("The rig is up")
+            self.verdict.set_text("")
             self.verdict.remove_css_class("bad")
+        self.verdict.set_visible(bool(self.verdict.get_text()))
 
         wanted = {unit.name: unit for unit in problems}
         for name, row in list(self._fault_rows.items()):
