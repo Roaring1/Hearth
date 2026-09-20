@@ -870,11 +870,18 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.body.set_valign(Gtk.Align.START)
         self.root.append(self.body)
 
-        self.rail = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
-        self.rail.set_valign(Gtk.Align.START)
-        rail_tag = Gtk.Label(label="min")
-        rail_tag.add_css_class("rail-tag")
-        self.rail.append(rail_tag)
+        # Which edge minimised channels stack along. The stack is locked to
+        # the edge -- vertical down the right, horizontal along the bottom --
+        # so there is never a diagonal or wrapped pile to reason about.
+        self.rail_dock = "bottom" if self.cfg.get("mixer_rail_dock") == "bottom" else "right"
+        self.rail = Gtk.Box(spacing=3)
+        # The old "min" caption was a label for a label. The same slot now
+        # carries the one control the rail needs: which edge it sits on.
+        self.rail_handle = Gtk.Button()
+        self.rail_handle.add_css_class("rail-handle")
+        self.rail_handle.connect("clicked", self._on_rail_dock)
+        self.rail.append(self.rail_handle)
+        self._apply_rail_dock()
 
         self.rebuild()
         self._start_backends()
@@ -901,6 +908,11 @@ class MixerWindow(Gtk.ApplicationWindow):
         # wide -- and folding strips is exactly what made it taller than
         # wide, so minimising a few channels rewrote the whole layout under
         # the user's hand and left strips squeezed off the edge.
+        # The rail may be parented to either the body or the root, so it is
+        # detached by asking it where it is rather than assuming.
+        rail_parent = self.rail.get_parent()
+        if rail_parent is not None:
+            rail_parent.remove(self.rail)
         child = self.body.get_first_child()
         while child is not None:
             nxt = child.get_next_sibling()
@@ -924,7 +936,10 @@ class MixerWindow(Gtk.ApplicationWindow):
             self.body.append(self._build_group(group, sinks))
 
         self._build_rail()
-        self.body.append(self.rail)
+        if self.rail_dock == "right":
+            self.body.append(self.rail)
+        else:
+            self.root.append(self.rail)
         self.apply_states()
         self._settle_size()
 
@@ -1002,13 +1017,42 @@ class MixerWindow(Gtk.ApplicationWindow):
         target = self.states.get("vm_game", ChannelState()).device
         return f"headset \u00b7 {target}" if target else "headset"
 
+    def _apply_rail_dock(self) -> None:
+        """Point the rail along its docked edge.
+
+        A vertical rail is told to fill the height the strips already ask
+        for, never to set it. Before this, each folded channel added a
+        148px sliver to a START-aligned column, so two minimised channels
+        made the rail taller than the strips and the window grew a band of
+        empty grey underneath them.
+        """
+        vertical = self.rail_dock == "right"
+        self.rail.set_orientation(
+            Gtk.Orientation.VERTICAL if vertical else Gtk.Orientation.HORIZONTAL
+        )
+        self.rail.set_valign(Gtk.Align.FILL if vertical else Gtk.Align.START)
+        self.rail.set_halign(Gtk.Align.START if vertical else Gtk.Align.FILL)
+        self.rail_handle.set_label("\u2193" if vertical else "\u2192")
+        self.rail_handle.set_tooltip_text(
+            "Stack minimised channels along the bottom"
+            if vertical
+            else "Stack minimised channels down the right"
+        )
+
+    def _on_rail_dock(self, _button: Gtk.Button) -> None:
+        self.rail_dock = "bottom" if self.rail_dock == "right" else "right"
+        self._apply_rail_dock()
+        self.rebuild()
+        self._save()
+
     def _build_rail(self) -> None:
         child = self.rail.get_first_child()
         while child is not None:
             nxt = child.get_next_sibling()
-            if not isinstance(child, Gtk.Label):
+            if child is not self.rail_handle:
                 self.rail.remove(child)
             child = nxt
+        vertical = self.rail_dock == "right"
         for sink in self.order:
             if sink in self.absent:
                 # No rail tag either: an unplugged device should leave
@@ -1019,12 +1063,17 @@ class MixerWindow(Gtk.ApplicationWindow):
             channel = self._channel(sink)
             if channel is None:
                 continue
+            # A readable floor for the name, then expand into whatever the
+            # strips leave. The sliver shares the strip height instead of
+            # dictating a taller window.
             sliver = Sliver(
                 self.pal,
                 channel.name,
-                self.meter_h + 52,
-                horizontal=False,
+                56 if vertical else 84,
+                horizontal=not vertical,
             )
+            sliver.set_vexpand(vertical)
+            sliver.set_hexpand(not vertical)
             click = Gtk.GestureClick()
             click.connect("released", lambda *_a, s=sink: self.restore(s))
             sliver.add_css_class("sliver")
@@ -1072,6 +1121,7 @@ class MixerWindow(Gtk.ApplicationWindow):
                 "mixer_hidden": sorted(self.hidden),
                 "mixer_minimised": sorted(self.minimised),
                 "mixer_order": list(self.order),
+                "mixer_rail_dock": self.rail_dock,
                 "win_w": int(width or values.get("win_w", 880)),
                 "win_h": int(height or values.get("win_h", 620)),
             }

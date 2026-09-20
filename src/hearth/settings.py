@@ -42,6 +42,8 @@ DEFAULTS: dict[str, Any] = {
     "notify_fail": True,
     "latency_msec": 12,
     "mixer_collapsed": False,
+    # Which edge minimised channels stack along: "right" or "bottom".
+    "mixer_rail_dock": "right",
     "win_w": 880,
     "win_h": 620,
 }

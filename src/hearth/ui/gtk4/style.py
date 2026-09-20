@@ -305,11 +305,17 @@ button.mute:checked {{
 .dest-warn {{ font-size: 9.5px; color: {pal["bad"]}; }}
 
 /* ---- rail ---------------------------------------------------------- */
-.rail-tag {{
-  font-family: "Andale Mono", monospace;
-  font-size: 9px;
+.rail-handle {{
+  background: transparent;
+  border: 1px solid {pal["win-alt"]};
+  border-radius: 3px;
   color: {pal["fg-dim"]};
+  font-size: 10px;
+  min-height: 16px;
+  min-width: 16px;
+  padding: 0;
 }}
+.rail-handle:hover {{ border-color: {pal["accent"]}; color: {pal["fg"]}; }}
 .banner {{
   background: {pal["view"]};
   border-left: 3px solid {pal["bad"]};

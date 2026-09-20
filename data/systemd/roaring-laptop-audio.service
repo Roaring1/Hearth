@@ -1,0 +1,29 @@
+[Unit]
+Description=Roaring laptop audio → Windows host via UDP
+After=pipewire.service pipewire-pulse.service wireplumber.service roaring-vm-sinks.service
+Wants=pipewire-pulse.service wireplumber.service roaring-vm-sinks.service
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+Environment=LAPTOP_HOST_IP=192.168.50.132
+Environment=AUDIO_SOURCE=laptop_audio.monitor
+Environment=AUDIO_PORT=46000
+ExecStart=/bin/bash %h/bin/roaring_laptop_audiod.sh
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=30
+# The daemon SIGKILLs ffmpeg itself on stop, so a stop that takes longer than
+# this is a real hang. Without it, Fedora's timeout-abort drop-in reached
+# SIGABRT and every stop produced a 300MB coredump and ~100s of CPU.
+TimeoutStopSec=10
+FinalKillSignal=SIGKILL
+# libswresample never releases the buffer it grows across a clock jump. The
+# daemon now recycles ffmpeg before that matters, but a cgroup ceiling means
+# a leak can restart the stream instead of reaching 1.8GB resident+swap.
+MemoryHigh=300M
+MemoryMax=512M
+
+[Install]
+WantedBy=default.target
