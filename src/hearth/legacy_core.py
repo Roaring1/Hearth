@@ -879,7 +879,10 @@ class PeakPoller(threading.Thread):
         self._vu_dump = vu_dump
         # Shared with run(): the live parec children, so stop() can reap them.
         self._procs: dict = {}
-        self._stop = threading.Event()
+        # Not ``_stop``: ``threading.Thread._stop`` is a real method, and
+        # shadowing it with an Event makes ``join()`` raise TypeError on
+        # CPython 3.11/3.12. CI caught this; 3.13+ happens not to call it.
+        self._stopping = threading.Event()
 
     def stop(self, timeout: float = 1.0):
         """Ask the poll loop to exit and kill any surviving parec children.
@@ -888,7 +891,7 @@ class PeakPoller(threading.Thread):
         run at interpreter exit -- that is why every startup had to pkill
         stale parec processes. Call this from the GTK shutdown path instead.
         """
-        self._stop.set()
+        self._stopping.set()
         if self.is_alive():
             self.join(timeout=timeout)
         for src, p in list(self._procs.items()):
@@ -985,7 +988,7 @@ class PeakPoller(threading.Thread):
                 return None
 
         try:
-            while not self._stop.is_set():
+            while not self._stopping.is_set():
                 now = time.monotonic()
                 with self._lock:
                     srcs = list(self._srcs)

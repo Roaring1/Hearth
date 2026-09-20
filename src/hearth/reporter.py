@@ -81,7 +81,10 @@ class Reporter(threading.Thread):
         self._visible_interval = visible_interval
         self._hidden_interval = hidden_interval
         self._visible = threading.Event()
-        self._stop = threading.Event()
+        # Not ``_stop``: ``threading.Thread._stop`` is a real method, and
+        # shadowing it with an Event makes ``join()`` raise TypeError on
+        # CPython 3.11/3.12. CI caught this; 3.13+ happens not to call it.
+        self._stopping = threading.Event()
         self._wake = threading.Event()
         self._fresh_share = threading.Event()
         self._lock = threading.Lock()
@@ -116,7 +119,7 @@ class Reporter(threading.Thread):
         self._wake.set()
 
     def stop(self, *, timeout: float = 2.0) -> None:
-        self._stop.set()
+        self._stopping.set()
         self._wake.set()
         if self.is_alive():
             self.join(timeout=timeout)
@@ -147,9 +150,9 @@ class Reporter(threading.Thread):
         return report if changed else None
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stopping.is_set():
             report = self.poll_once()
-            if report is not None and not self._stop.is_set():
+            if report is not None and not self._stopping.is_set():
                 try:
                     self._on_report(report)
                 except Exception as exc:

@@ -35,7 +35,7 @@ class Server:
         self.path = socket_path or paths.socket_file()
         self._sock: socket.socket | None = None
         self._thread: threading.Thread | None = None
-        self._stop = threading.Event()
+        self._stopping = threading.Event()
 
     def bind(self) -> None:
         """Create and bind the listening socket.
@@ -65,7 +65,7 @@ class Server:
             self.bind()
         if self._sock is None:  # pragma: no cover - bind() always sets it
             raise OSError("IPC socket was not created")
-        while not self._stop.is_set():
+        while not self._stopping.is_set():
             try:
                 conn, _ = self._sock.accept()
             except TimeoutError:
@@ -97,7 +97,7 @@ class Server:
 
     def stop(self, *, timeout: float = 2.0) -> None:
         """Stop accepting, join the thread, and remove the socket file."""
-        self._stop.set()
+        self._stopping.set()
         if self._sock is not None:
             with contextlib.suppress(OSError):  # pragma: no cover
                 self._sock.close()

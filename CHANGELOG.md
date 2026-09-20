@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — round 25 (2026-09-20)
+
+### Fixed
+- Every `threading.Thread` subclass kept its shutdown flag in `self._stop`, which shadows the real `Thread._stop` method. `join()` calls that method on CPython 3.11 and 3.12, so five tests died with `TypeError: 'Event' object is not callable` — the CI failure that has been red on every run for weeks. The flag is now `_stopping` in `collector.py`, `meters.py`, `reporter.py`, and `legacy_core.py` (and, for consistency, in `ipc/server.py`, which is not a Thread). 3.13+ happens not to take that path and the dev box runs 3.14, which is why it never reproduced locally.
+
+### Added
+- `tests/test_thread_hygiene.py`: a static scan that fails if any Thread subclass assigns a name belonging to `Thread`. It carries an explicit list of private internals rather than trusting `dir(threading.Thread)`, because 3.14 has already dropped `_stop` from the class — a purely dynamic check would pass on the dev box and miss the bug on CI all over again.
+
 ## Unreleased — round 24 (2026-09-20)
 
 ### Removed

@@ -101,7 +101,10 @@ class PeakPoller(threading.Thread):
         self._dead_at: dict[str, float] = {}
         self._leftover: dict[str, bytes] = {}
         self._lock = threading.Lock()
-        self._stop = threading.Event()
+        # Not ``_stop``: ``threading.Thread._stop`` is a real method, and
+        # shadowing it with an Event makes ``join()`` raise TypeError on
+        # CPython 3.11/3.12. CI caught this; 3.13+ happens not to call it.
+        self._stopping = threading.Event()
         self.available = proc.have("parec")
 
     def set_sources(self, sources: Sequence[str]) -> None:
@@ -118,7 +121,7 @@ class PeakPoller(threading.Thread):
 
     def stop(self, *, timeout: float = 1.0) -> None:
         """Exit the loop and reap every child, leaving no stray ``parec``."""
-        self._stop.set()
+        self._stopping.set()
         if self.is_alive():
             self.join(timeout=timeout)
         for source, child in list(self._procs.items()):
@@ -144,7 +147,7 @@ class PeakPoller(threading.Thread):
         if not self.available:
             log.info("parec is not installed; VU meters are disabled")
             return
-        while not self._stop.is_set():
+        while not self._stopping.is_set():
             now = time.monotonic()
             with self._lock:
                 sources = list(self._sources)
@@ -162,7 +165,7 @@ class PeakPoller(threading.Thread):
                 if pipe is not None:
                     pipes[pipe] = source
             if not pipes:
-                self._stop.wait(0.1)
+                self._stopping.wait(0.1)
                 continue
             readable, _, _ = select.select(list(pipes), [], [], 0.1)
             for pipe in readable:

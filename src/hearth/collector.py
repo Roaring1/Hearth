@@ -242,7 +242,10 @@ class Collector(threading.Thread):
         self._on_snapshot = on_snapshot
         self._interval = interval
         self._visible = threading.Event()
-        self._stop = threading.Event()
+        # Not ``_stop``: ``threading.Thread._stop`` is a real method, and
+        # shadowing it with an Event makes ``join()`` raise TypeError on
+        # CPython 3.11/3.12. CI caught this; 3.13+ happens not to call it.
+        self._stopping = threading.Event()
         self._wake = threading.Event()
 
     def set_window_visible(self, visible: bool) -> None:
@@ -255,7 +258,7 @@ class Collector(threading.Thread):
         self._wake.set()
 
     def stop(self, *, timeout: float = 2.0) -> None:
-        self._stop.set()
+        self._stopping.set()
         self._wake.set()
         if self.is_alive():
             self.join(timeout=timeout)
@@ -266,7 +269,7 @@ class Collector(threading.Thread):
         return max(HIDDEN_MIN, self._interval)
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stopping.is_set():
             try:
                 self._on_snapshot(collect(self._units))
             except Exception as exc:
