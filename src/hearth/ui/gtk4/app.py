@@ -887,6 +887,20 @@ class MixerWindow(Gtk.ApplicationWindow):
         self._start_backends()
         self.connect("close-request", self._on_close)
 
+        # Setup is a second window that does not exist until it is asked
+        # for. It gets no permanent button here: a mixer this size cannot
+        # spare a control that is used once a month, so it is right-click
+        # or Ctrl+comma, and the fault banner is what shouts when it does
+        # matter.
+        self._setup_window: Gtk.Window | None = None
+        self._menu: Gtk.Popover | None = None
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_key)
+        self.add_controller(keys)
+        right_click = Gtk.GestureClick(button=3)
+        right_click.connect("pressed", self._on_right_click)
+        self.add_controller(right_click)
+
     # -- layout ----------------------------------------------------------
     def _load_order(self) -> list[str]:
         saved = [s for s in (self.cfg.get("mixer_order") or []) if isinstance(s, str)]
@@ -1397,6 +1411,46 @@ class MixerWindow(Gtk.ApplicationWindow):
         if time.monotonic() - self._laptop_busy >= IDLE_COLLAPSE_S:
             self.minimise(sink)
 
+    # -- setup -----------------------------------------------------------
+    def open_setup(self) -> None:
+        """Build the Setup window the first time it is wanted, then show it.
+
+        The import is deliberately here and not at the top of the module:
+        ``hearth.ui.gtk4.setup`` pulls in the unit scanner and the legacy
+        conf reader, and a mixer that never opens Setup should never pay
+        for either.
+        """
+        if self._setup_window is None:
+            from hearth.ui.gtk4.setup import SetupWindow
+
+            self._setup_window = SetupWindow(self)
+        self._setup_window.present()
+
+    def _on_key(self, _controller, keyval: int, _code: int, state) -> bool:
+        if keyval == Gdk.KEY_comma and state & Gdk.ModifierType.CONTROL_MASK:
+            self.open_setup()
+            return True
+        return False
+
+    def _on_right_click(self, _gesture, _n_press: int, x: float, y: float) -> None:
+        if self._menu is None:
+            item = Gtk.Button(label="Setup\u2026")
+            item.add_css_class("rail-handle")
+            item.connect("clicked", self._on_menu_setup)
+            self._menu = Gtk.Popover()
+            self._menu.set_child(item)
+            self._menu.set_has_arrow(False)
+            self._menu.set_parent(self)
+        rect = Gdk.Rectangle()
+        rect.x, rect.y, rect.width, rect.height = int(x), int(y), 1, 1
+        self._menu.set_pointing_to(rect)
+        self._menu.popup()
+
+    def _on_menu_setup(self, _button: Gtk.Button) -> None:
+        if self._menu is not None:
+            self._menu.popdown()
+        self.open_setup()
+
     def _on_close(self, *_args) -> bool:
         self._save()
         self.shutdown()
@@ -1404,6 +1458,12 @@ class MixerWindow(Gtk.ApplicationWindow):
 
     def shutdown(self) -> None:
         """Stop the pollers. ``parec`` leaks if the peak poller is not stopped."""
+        setup_window = getattr(self, "_setup_window", None)
+        if setup_window is not None:
+            # Closing it only hides it, which stops the poll; this is the
+            # teardown that also gives the widgets back.
+            setup_window.destroy()
+            self._setup_window = None
         if getattr(self, "_frame_id", None):
             GLib.source_remove(self._frame_id)
             self._frame_id = 0

@@ -335,4 +335,34 @@ button.mute:checked {{
 }}
 .banner-restart:hover {{ background: {pal["bad"]}; color: {pal["view"]}; }}
 .banner-restart:disabled {{ color: {pal["fg-dim"]}; border-color: {pal["fg-dim"]}; }}
+
+/* ---- setup window -------------------------------------------------- */
+/* One focal line at the top, everything else quiet underneath. The
+   verdict is the only thing in the window allowed to be loud, and only
+   when something is actually wrong. */
+.setup-verdict {{ font-size: 17px; color: {pal["fg"]}; }}
+.setup-verdict.bad {{ color: {pal["bad"]}; }}
+.setup-tag {{
+  font-family: "Andale Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  color: {pal["fg-dim"]};
+}}
+.setup-note {{ font-size: 10px; color: {pal["fg-dim"]}; }}
+.setup-note.bad {{ color: {pal["bad"]}; }}
+.setup-clash {{ font-size: 10px; color: {pal["hot"]}; }}
+.setup-row {{
+  border-left: 3px solid {pal["bad"]};
+  padding: 2px 0 2px 8px;
+}}
+.setup-act {{
+  background: transparent;
+  border: 1px solid {pal["button"]};
+  border-radius: 3px;
+  color: {pal["fg"]};
+  font-size: 10px;
+  min-height: 0;
+  padding: 2px 9px;
+}}
+.setup-act:hover {{ border-color: {pal["accent"]}; }}
 """
