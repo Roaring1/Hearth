@@ -1,0 +1,14 @@
+[Unit]
+Description=Sober mic router (Sober capture -> b1_mic)
+After=wireplumber.service pipewire.service roaring-mic-busses.service
+Wants=wireplumber.service pipewire.service roaring-mic-busses.service
+
+[Service]
+Type=simple
+ExecStart=/home/roaring/bin/roaring_sober_mic_watch.sh
+Restart=on-failure
+RestartSec=5
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+
+[Install]
+WantedBy=default.target

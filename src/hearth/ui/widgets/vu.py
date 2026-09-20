@@ -35,6 +35,8 @@ class VU:
         self._pkt = [0, 0]
         self._real_level = 0.0
         self._real_ts = 0.0
+        #: what the last queued frame will paint, in whole pixels
+        self._painted: tuple[int, int, int, int] | None = None
         self.da.connect("draw", self._draw)
 
     def feed_level(self, level: float):
@@ -67,7 +69,20 @@ class VU:
                 self._pk[i] = 0.0
                 self._tg[i] = 0.0
             self._tg_shared = 0.0
-        self.da.queue_draw()
+        # Only ask for a frame that would differ from the one already on
+        # screen. The bar is drawn in whole pixels, so a level that eases by
+        # a thousandth paints identically -- and a silent bar paints
+        # identically forever. Seven meters at 20fps were repainting 140
+        # times a second to show the same picture.
+        frame = (
+            int(self._lv[0] * self._h),
+            int(self._lv[1] * self._h),
+            int(self._pk[0] * self._h),
+            int(self._pk[1] * self._h),
+        )
+        if frame != self._painted:
+            self._painted = frame
+            self.da.queue_draw()
 
     def _draw(self, widget, cr):
         ww, hh = self._w, self._h
