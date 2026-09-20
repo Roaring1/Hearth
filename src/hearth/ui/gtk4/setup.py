@@ -297,6 +297,11 @@ class SetupWindow(Gtk.Window):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.lpd8_state = Gtk.Label(label="\u2026", xalign=0.0)
         self.lpd8_state.set_hexpand(True)
+        self.lpd8_state.set_tooltip_text(
+            "Pad lamps only follow the mixer while the LPD8 is in NOTE "
+            "TOGGLE mode. In CC mode the device owns its lights and ignores "
+            "what Hearth sends."
+        )
         row.append(self.lpd8_state)
         reconnect = Gtk.Button(label="Reconnect")
         reconnect.add_css_class("setup-act")

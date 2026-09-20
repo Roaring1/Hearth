@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — round 32 (2026-09-20)
+
+### Added
+- `scripts/roaring_carla_patch.sh` and `scripts/roaring_audio_debug_dump.sh` are in the repo. Both ran the rig from `~/bin` only, so a reinstall lost them.
+- The Setup window's LPD8 line carries the hardware truth in a tooltip: pad lamps only follow the mixer in NOTE TOGGLE mode, because in CC mode the device owns its lights.
+
+### Fixed
+- The desktop entry asked for an icon by absolute path, which no icon theme can answer at other sizes; it now names `io.github.roaring1.Hearth`, and the repo's 48/64/128/256 px icons are installed into the user icon theme. Launchers draw the icon instead of a letter tile.
+
 ## Unreleased — round 31 (2026-09-20)
 
 ### Changed
