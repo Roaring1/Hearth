@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — round 27 (2026-09-20)
+
+### Fixed
+- Setup claimed "lpd8 mixer is not installed" whenever the unit scan came back empty — including when systemd simply did not answer, which the verdict line two inches above already said. The pad was plugged in and its unit enabled the whole time. An empty scan now reads "unknown — systemd did not answer".
+
+### Verified
+- The Setup entry points, which had only ever been rendered, are now exercised: Ctrl+comma opens it (and Ctrl+A and a bare comma do not), the right-click popover carries the Setup item, both routes reuse one lazily-built window, and the Moonlight radios are a real group with exactly one selection. Driven offscreen on a throwaway display, runtime dir and session bus, so the live mixer's socket and the user's windows were never touched.
+
 ## Unreleased — round 26 (2026-09-20)
 
 ### Removed

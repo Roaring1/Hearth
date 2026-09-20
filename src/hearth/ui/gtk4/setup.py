@@ -436,8 +436,15 @@ class SetupWindow(Gtk.Window):
                 self._fault_rows[name] = row
             row._text.set_text(unit.status_text)  # type: ignore[attr-defined]
 
-        pad = next((u for u in found if u.name == LPD8_UNIT), None)
-        self.lpd8_state.set_text(pad.status_text if pad else "lpd8 mixer is not installed")
+        # An empty list means the scan failed, not that nothing is installed
+        # -- the verdict above already says so. Claiming the pad is missing
+        # because systemd was unreachable is the window lying about hardware
+        # that is sitting right there.
+        if not found:
+            self.lpd8_state.set_text("unknown \u2014 systemd did not answer")
+        else:
+            pad = next((u for u in found if u.name == LPD8_UNIT), None)
+            self.lpd8_state.set_text(pad.status_text if pad else "lpd8 mixer is not installed")
 
         self.reset_failed.set_visible(any(u.failed for u in problems))
         self._fill_everything()
