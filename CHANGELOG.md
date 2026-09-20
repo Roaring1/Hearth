@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — round 30 (2026-09-20)
+
+### Changed
+- The LPD8 window is now only the drawn controller. The hint line, the shared detail row underneath it and the status-and-Restart row at the bottom are gone; the window is the picture and nothing else.
+- Changing a control happens on the control. Right-clicking a pad, a knob, or the slab around them opens a dropdown over that control listing what it can do; picking an entry writes the script and closes the menu. A plain click opens the same menu, so the mouse and the keyboard (Tab, then Enter) reach it too.
+- Right-clicking the gap between controls hands the click to the nearest pad or knob, so the space around a control counts as the control.
+- The service state no longer takes a permanent line. A single line appears under the picture only when something is actually wrong: a clash, a missing script, a failed write, or a service known to be stopped. When everything is fine the window says nothing.
+- Restarting is no longer a button. Every edit still restarts `lpd8-mixer` on the existing 900 ms delay, and closing the window with an edit pending restarts immediately.
+
 ## Unreleased — round 29 (2026-09-20)
 
 ### Changed
