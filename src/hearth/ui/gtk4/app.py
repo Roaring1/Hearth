@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +35,8 @@ gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402 - must follow require_version
 
 from hearth import collector as collector_mod  # noqa: E402
+from hearth import control  # noqa: E402
+from hearth import ipc as ipc_mod  # noqa: E402
 from hearth import leds  # noqa: E402
 from hearth import lpd8map  # noqa: E402
 from hearth import meters as meters_mod  # noqa: E402
@@ -1480,6 +1483,7 @@ class MixerApp(Gtk.Application):
         super().__init__(application_id=APP_ID)
         self.pal = style_mod.palette()
         self.window: MixerWindow | None = None
+        self._ipc: ipc_mod.Server | None = None
 
     def do_startup(self) -> None:
         Gtk.Application.do_startup(self)
@@ -1490,6 +1494,7 @@ class MixerApp(Gtk.Application):
             Gtk.StyleContext.add_provider_for_display(
                 display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
             )
+        self._start_control_socket()
 
     def do_activate(self) -> None:
         if self.window is None:
@@ -1497,9 +1502,97 @@ class MixerApp(Gtk.Application):
         self.window.present()
 
     def do_shutdown(self) -> None:
+        if self._ipc is not None:
+            self._ipc.stop()
+            self._ipc = None
         if self.window is not None:
             self.window.shutdown()
         Gtk.Application.do_shutdown(self)
+
+    # Control socket
+    #
+    # The GTK3 window used to own this. Padfire polls ``get_sinks`` every
+    # three seconds, the desktop entry sends ``unmute``, and ``hearth
+    # --quit`` / ``--show`` are the only way to drive a window that lives
+    # in the tray of no tray, so the socket had to move here rather than
+    # die with the old app.
+
+    def _start_control_socket(self) -> None:
+        ipc_mod.write_pid()
+        server = ipc_mod.Server(self._on_control)
+        try:
+            server.start()
+        except OSError as exc:
+            # A mixer that works is worth more than a mixer with IPC, and
+            # a second instance losing the bind must not be fatal.
+            log.warning("control socket unavailable: %s", exc)
+            return
+        self._ipc = server
+
+    def _on_control(self, request: str) -> str:
+        """Answer one socket request. Runs on the IPC thread, never the main one."""
+        return control.dispatch(
+            request,
+            {
+                "show": self._ctl_show,
+                "quit": self._ctl_quit,
+                "unmute": self._ctl_unmute,
+                "get_sinks": self._ctl_sinks,
+                "dump": self._ctl_dump,
+                "padfire_status": lambda: "ok",
+            },
+        )
+
+    def _ctl_show(self) -> str:
+        GLib.idle_add(self.activate)
+        return "ok"
+
+    def _ctl_quit(self) -> str:
+        GLib.idle_add(self.quit)
+        return "quitting"
+
+    def _ctl_unmute(self) -> str:
+        def work() -> None:
+            for channel in CHANNELS:
+                try:
+                    pactl.set_mute(channel.sink, False)
+                except Exception as exc:  # a missing bus must not stop the rest
+                    log.warning("unmute %s: %s", channel.sink, exc)
+
+        threading.Thread(target=work, daemon=True, name="hearth-unmute").start()
+        return "ok"
+
+    def _ctl_sinks(self) -> str:
+        """Report what the window already knows, not what pactl would say.
+
+        The old answer shelled out twice per bus on every poll. The window
+        refreshes this state twice a second regardless, so the socket reads
+        it and costs nothing.
+        """
+        window = self.window
+        if window is None:
+            return control.sinks_payload(())
+        return control.sinks_payload(
+            (c.sink, c.name, window.states[c.sink].volume, window.states[c.sink].muted)
+            for c in CHANNELS
+        )
+
+    def _ctl_dump(self) -> str:
+        from hearth import paths
+
+        target = paths.dumps_dir() / "summary.txt"
+
+        def work() -> None:
+            from hearth import status
+
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(status.text() + "\n")
+            except Exception as exc:  # pragma: no cover - diagnostic only
+                log.warning("dump failed: %s", exc)
+
+        threading.Thread(target=work, daemon=True, name="hearth-dump").start()
+        return f"dumping -> {target}"
 
 
 def main(argv: list[str] | None = None) -> int:

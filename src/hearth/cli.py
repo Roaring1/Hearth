@@ -81,11 +81,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Ask the running instance for a debug dump.",
     )
-    parser.add_argument(
-        "--vu-dump",
-        action="store_true",
-        help="Write per-source RMS/peak CSV while running (diagnostic only).",
-    )
     return parser
 
 
@@ -138,8 +133,7 @@ def _dispatch(args: argparse.Namespace) -> int:
 
     from hearth.ui import run_app
 
-    run_app(vu_dump=args.vu_dump)
-    return EXIT_OK
+    return run_app()
 
 
 def main(argv: Sequence[str] | None = None) -> int:

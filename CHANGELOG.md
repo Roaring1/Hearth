@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — round 24 (2026-09-20)
+
+### Removed
+- The GTK3 window (`ui/app.py`, 2096 lines) and its settings dialog. Everything in it worth keeping was folded into the GTK4 mixer and its Setup window in rounds 19–23; the rest duplicated a strip. `~/bin/roaring_audio_control.py` and the `Roaring Audio Control` desktop entry are retired with it.
+- `--vu-dump`, which only ever reached the GTK3 peak poller.
+
+### Added
+- `hearth.control`: the control socket's command language, with no toolkit attached, so `show` / `quit` / `unmute` / `dump` / `get_sinks` survived the window that used to answer them.
+- The GTK4 app serves that socket and writes the pid file. `get_sinks` is answered from the snapshot the window already holds, so Padfire's three-second poll no longer costs ten `pactl` subprocesses.
+
 ## Unreleased — sessions 1–5 (2026-09-19)
 
 All of the below is in the working tree only; HEAD is still `286f0c6`.
