@@ -147,3 +147,27 @@ def test_writing_creates_the_file_when_it_is_missing(tmp_path: Path) -> None:
 
 def test_a_missing_file_reads_as_empty(tmp_path: Path) -> None:
     assert mic_routes.read(tmp_path / "absent.conf") == {}
+
+
+def test_flow_names_what_actually_feeds_each_bus() -> None:
+    values = mic_routes.parse(
+        mic_routes.apply_edits(SAMPLE, {"B1_ACTIVE": "true", "B1_ROUTE": "sm7b"})
+    )
+    stream, chat = mic_routes.flow_lines(values)
+    assert stream == "Stream: SM7B via Carla + SM7B raw \u2192 b1_mic"
+    # B2_ACTIVE is false in the sample, so its route is not in effect and
+    # Carla does not feed B2 by default: the line must not invent a source.
+    assert chat == "Chat: nothing \u2192 b2_mic"
+
+
+def test_flow_marks_the_bus_the_laptop_is_listening_to() -> None:
+    values = mic_routes.parse(SAMPLE)
+    lines = mic_routes.flow_lines(values, moonlight_source="b2_mic", laptop_host="thinkpad")
+    assert lines[1].endswith("b2_mic \u2192 laptop (thinkpad)")
+    assert "laptop" not in lines[0]
+
+
+def test_a_host_called_laptop_is_not_printed_twice() -> None:
+    values = mic_routes.parse(SAMPLE)
+    lines = mic_routes.flow_lines(values, moonlight_source="b2_mic", laptop_host="laptop")
+    assert lines[1].endswith("b2_mic \u2192 laptop")

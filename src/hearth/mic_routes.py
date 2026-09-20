@@ -239,3 +239,52 @@ def link_carla(bus: str, on: bool, *, timeout: float = 5.0) -> bool:
             log.debug("pw-link %s %s -> %s:%s failed", "on" if on else "off", source, bus, port)
             ok = False
     return ok
+
+
+#: What each bus is for, in the words the rig uses out loud.
+BUS_LABEL: dict[str, str] = {"mic_b1": "Stream", "mic_b2": "Chat"}
+
+#: The capture source each bus is published as, and what apps pick.
+BUS_SOURCE: dict[str, str] = {"mic_b1": "b1_mic", "mic_b2": "b2_mic"}
+
+#: Raw device names as a person would say them.
+SOURCE_LABEL: dict[str, str] = {"sm7b_mono": "SM7B raw", "astro_mic_48k": "Astro mic"}
+
+
+def feeds(values: dict[str, str], bus: str) -> list[str]:
+    """Everything currently poured into one mic bus, named for a human."""
+    names: list[str] = []
+    if carla_enabled(values, bus):
+        names.append("SM7B via Carla")
+    for source, label in SOURCE_LABEL.items():
+        if raw_enabled(values, bus, source):
+            names.append(label)
+    return names
+
+
+def flow_lines(
+    values: dict[str, str],
+    *,
+    moonlight_source: str = "",
+    laptop_host: str = "",
+) -> list[str]:
+    """The mic path as it is configured right now, one line per bus.
+
+    The old window drew this as a fixed diagram in the source, so it kept
+    saying "SM7B -> B1, Astro -> B2" no matter what the config held. These
+    lines are read from the same file the daemon obeys, which means a bus
+    with nothing in it says so.
+    """
+    lines: list[str] = []
+    for bus, label in BUS_LABEL.items():
+        source = BUS_SOURCE[bus]
+        names = feeds(values, bus)
+        line = f"{label}: {' + '.join(names) if names else 'nothing'} \u2192 {source}"
+        if moonlight_source and moonlight_source == source:
+            # The configured host is often literally "laptop", and
+            # "laptop (laptop)" is noise, so the name is only worth
+            # printing when it says something the word does not.
+            named = laptop_host and laptop_host.strip().lower() != "laptop"
+            line += f" \u2192 laptop ({laptop_host})" if named else " \u2192 laptop"
+        lines.append(line)
+    return lines

@@ -17,6 +17,9 @@ What folded in from the old GTK3 window, and what did not:
   conflicts the old window computed and then never showed.
 * Headset target and loopback latency folded in as they were: they are
   real settings for real hardware.
+* SIGNAL FLOW was a diagram typed into the source, so it described the
+  rig of the day it was written. It folded in as lines read from the
+  router config, next to the MOONLIGHT MIC chooser it explains.
 * PADFIRE telemetry, the Vesktop panel, the keyboard cheat-sheet, the
   second copy of the mixer and the app-settings page did not fold in.
 """
@@ -33,6 +36,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import GLib, Gtk  # noqa: E402 - must follow require_version
 
 from hearth import lpd8map  # noqa: E402
+from hearth import mic_routes  # noqa: E402
 from hearth import services as services_mod  # noqa: E402
 from hearth import units as units_mod  # noqa: E402
 
@@ -101,6 +105,7 @@ class SetupWindow(Gtk.Window):
 
         column.append(self._build_verdict())
         column.append(self._build_devices())
+        column.append(self._build_mic_path())
         column.append(self._build_controller())
         column.append(self._build_everything())
 
@@ -202,6 +207,70 @@ class SetupWindow(Gtk.Window):
         self.save_devices.set_label("Save and restart routing")
         return False
 
+    # -- where the mic ends up -------------------------------------------
+    def _build_mic_path(self) -> Gtk.Widget:
+        """The old SIGNAL FLOW panel, read from the config instead of typed.
+
+        The mixer already owns *choosing* what feeds a bus -- that is the
+        IN button on each mic strip. What it cannot show without growing a
+        panel is the whole path at once, which is the thing you want when
+        the person on the other end says they cannot hear you.
+        """
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.append(_tag("MIC PATH"))
+
+        self.flow = _note("")
+        box.append(self.flow)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.append(Gtk.Label(label="Moonlight sends", xalign=0.0))
+        self.ml_stream = Gtk.CheckButton(label="Stream")
+        self.ml_chat = Gtk.CheckButton(label="Chat")
+        self.ml_chat.set_group(self.ml_stream)
+        source = self._core.moonlight_mic_source()
+        self.ml_stream.set_active(source == "b1_mic")
+        self.ml_chat.set_active(source != "b1_mic")
+        # Connected after the initial state is set, and each handler acts
+        # only on the button that switched *on*, so one click is one write
+        # and one service restart rather than two of each.
+        self.ml_stream.connect("toggled", self._on_moonlight, "b1_mic")
+        self.ml_chat.connect("toggled", self._on_moonlight, "b2_mic")
+        row.append(self.ml_stream)
+        row.append(self.ml_chat)
+        box.append(row)
+
+        self.ml_note = _note("")
+        box.append(self.ml_note)
+        return box
+
+    def _on_moonlight(self, button: Gtk.CheckButton, source: str) -> None:
+        if not button.get_active():
+            return
+        self.ml_note.set_text("Restarting the Moonlight mic\u2026")
+        # daemon-reload plus a restart is a second or two of blocking work;
+        # doing it on the main loop freezes the window mid-click.
+        threading.Thread(target=self._set_moonlight, args=(source,), daemon=True).start()
+
+    def _set_moonlight(self, source: str) -> None:
+        try:
+            self._core.set_moonlight_mic(source)
+        except Exception as exc:  # pragma: no cover - a missing unit is not a crash
+            log.warning("setup: could not point moonlight at %s: %s", source, exc)
+        GLib.idle_add(self._moonlight_done)
+
+    def _moonlight_done(self) -> bool:
+        self.ml_note.set_text("")
+        self._refresh_flow()
+        return False
+
+    def _refresh_flow(self) -> None:
+        lines = mic_routes.flow_lines(
+            mic_routes.read(),
+            moonlight_source=self._core.moonlight_mic_source(),
+            laptop_host=getattr(self._core, "LAPTOP_HOST", ""),
+        )
+        self.flow.set_text("\n".join(lines))
+
     # -- controller ------------------------------------------------------
     def _build_controller(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -292,6 +361,9 @@ class SetupWindow(Gtk.Window):
     def _on_map(self, *_args) -> None:
         self._refresh_once()
         self._refresh_controller()
+        # Read once per opening, not on the tick: the config only changes
+        # when somebody changes it, and this window is not a monitor.
+        self._refresh_flow()
         if not self._poll_id:
             self._poll_id = GLib.timeout_add_seconds(POLL_S, self._on_tick)
 
