@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — round 29 (2026-09-20)
+
+### Changed
+- The LPD8 window is now a picture of the LPD8. Eight pad boxes in two rows of four, eight drawn knobs in two rows of four beside them, in the order printed on the hardware (pads 5-8 above 1-4, K1-K4 above K5-K8). Each box carries the job that pad or knob currently does, so the map is read off the shape of the device instead of off thirteen stacked dropdowns.
+- Clicking any pad or knob selects it and one row underneath changes what it does. Thirteen dropdowns became one, the picture stays a picture, and every control is still reachable by Tab and Enter. Escape closes the window.
+- The map is inverted on read (control → job instead of job → control) because that is the direction a person looking at the hardware asks the question in. Unused pads are drawn as empty dashed boxes and unused knobs are drawn dark: the hardware has eight of each whether or not the script uses them.
+
 ## Unreleased — round 28 (2026-09-20)
 
 ### Added

@@ -365,4 +365,55 @@ button.mute:checked {{
   padding: 2px 9px;
 }}
 .setup-act:hover {{ border-color: {pal["accent"]}; }}
+
+/* ---- the drawn LPD8 ------------------------------------------------ */
+/* The controller is drawn the way it looks on the desk: a dark slab, two
+   rows of four pads, two rows of four knobs beside them. It is a picture
+   a person can point at, so the boxes carry the label and nothing else. */
+.lpd8 {{
+  background: {pal["view"]};
+  border: 1px solid {pal["win-alt"]};
+  border-radius: 6px;
+  padding: 10px;
+}}
+button.lpd8-pad {{
+  background: {pal["view-alt"]};
+  background-image: none;
+  box-shadow: none;
+  border: 1px solid {pal["button"]};
+  border-radius: 4px;
+  color: {pal["fg"]};
+  padding: 5px 6px;
+  min-width: 74px;
+  min-height: 54px;
+}}
+button.lpd8-pad:hover {{ border-color: {pal["accent"]}; }}
+/* A pad the script does not use is still a pad: same box, nothing in it. */
+button.lpd8-pad.free {{ background: transparent; border-style: dashed; }}
+button.lpd8-pad.sel {{
+  border-color: {pal["accent"]};
+  border-width: 2px;
+  padding: 4px 5px;
+}}
+button.lpd8-knob {{
+  background: transparent;
+  background-image: none;
+  box-shadow: none;
+  border: none;
+  padding: 2px;
+  min-height: 0;
+  min-width: 62px;
+  color: {pal["fg"]};
+}}
+button.lpd8-knob:hover {{ background: {pal["view-alt"]}; border-radius: 5px; }}
+.lpd8-cap {{
+  font-family: "Andale Mono", monospace;
+  font-size: 8.5px;
+  letter-spacing: 0.6px;
+  color: {pal["fg-dim"]};
+}}
+.lpd8-job {{ font-size: 10px; color: {pal["fg"]}; }}
+button.lpd8-pad.free .lpd8-cap {{ opacity: 0.6; }}
+.lpd8-sel {{ font-size: 12px; color: {pal["fg"]}; }}
+.lpd8-detail {{ padding: 0 2px; }}
 """

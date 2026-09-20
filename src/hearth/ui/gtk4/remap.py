@@ -1,25 +1,31 @@
-"""The LPD8 window: which knob moves which bus, which pad does which job.
+"""The LPD8 window: the controller itself, drawn, with every control live.
 
-This was a popover hanging off one fader's little ``K5`` chip, which meant
-the pads -- half the controller -- had nowhere to live at all, and the knob
-map could only be seen one bus at a time. It is a window now: every knob and
-every pad on one page, so a person can see the whole surface and change any
-part of it.
+This started as a popover on one fader's ``K5`` chip, became a list of
+dropdowns, and is now the shape of the thing on the desk: eight pad boxes
+in two rows of four, eight knobs in two rows of four beside them, laid out
+the way they are printed on an LPD8. A person looking for "the pad at the
+bottom left" can point at the pad at the bottom left.
+
+Clicking a pad or a knob selects it; one row underneath says what that
+control does and is the only place anything is changed. That keeps eight
+dropdowns off the picture -- the picture stays a picture -- while every
+control stays reachable by mouse, by Tab, and by Enter.
 
 The same rule as :mod:`hearth.ui.gtk4.setup` applies. Nothing here is
-imported or built until somebody opens it, and the window reads the map only
-while it is on screen. There is no poll at all: the script only changes when
-this window changes it, or when the user edits it by hand, and re-reading on
-every open covers the second case.
+imported or built until somebody opens it, and the window reads the map
+only while it is on screen: no poll, just a re-read on every open, which
+also covers the user editing the script by hand.
 
 Every edit is written straight to ``~/bin/lpd8_mixer.sh`` and the unit is
-restarted, because a mapping the hardware is not using yet is not a mapping.
-The restart is deferred a moment so changing three rows costs one restart.
+restarted, because a mapping the hardware is not using yet is not a
+mapping. The restart is deferred a moment so changing three controls in a
+row costs one restart.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 
 import gi
 
@@ -29,13 +35,52 @@ from gi.repository import GLib, Gtk  # noqa: E402 - must follow require_version
 
 from hearth import lpd8map  # noqa: E402
 from hearth import services as services_mod  # noqa: E402
+from hearth.ui.gtk4 import style as style_mod  # noqa: E402
 
 log = logging.getLogger(__name__)
 
 #: How long to wait after an edit before restarting the unit. Long enough
-#: that moving three rows in a row is one restart, short enough that the
-#: hardware follows the window while the user is still looking at it.
+#: that moving three controls in a row is one restart, short enough that
+#: the hardware follows the window while the user is still looking at it.
 RESTART_DELAY_MS = 900
+
+#: The pads as they are printed: 5-8 across the top, 1-4 across the bottom.
+PAD_ROWS: tuple[tuple[int, ...], ...] = ((5, 6, 7, 8), (1, 2, 3, 4))
+
+#: The knobs as they are printed: K1-K4 on top, K5-K8 below.
+KNOB_ROWS: tuple[tuple[int, ...], ...] = ((1, 2, 3, 4), (5, 6, 7, 8))
+
+#: A pad box is about two words wide, so the full sentence from
+#: :data:`hearth.lpd8map.PAD_SLOTS` will not fit on it. These are the same
+#: jobs said shorter; the full wording is still what the detail row and the
+#: tooltip show, so nothing is only ever seen abbreviated.
+PAD_SHORT: dict[int, str] = {
+    1: "Music mute",
+    2: "Chat mute",
+    3: "Headset source",
+    4: "Headset mute",
+    5: "Save report",
+    6: "Mic mute",
+    7: "Game mute",
+    8: "Desk speakers",
+}
+
+#: The same for knobs, under a 56-pixel cap.
+KNOB_SHORT: dict[str, str] = {
+    "CC_VM_GAME": "Game",
+    "CC_VM_GAME_ALT": "Game 2",
+    "CC_VM_CHAT": "Chat",
+    "CC_VM_MUSIC": "Music",
+    "CC_MIC_VOL": "Mic B1",
+}
+
+
+def _rgb(value: str) -> tuple[float, float, float]:
+    """``#rrggbb`` as the 0-1 triple cairo wants."""
+    text = value.lstrip("#")
+    if len(text) != 6:
+        return (0.5, 0.5, 0.5)
+    return tuple(int(text[i : i + 2], 16) / 255 for i in (0, 2, 4))  # type: ignore[return-value]
 
 
 def _tag(text: str) -> Gtk.Label:
@@ -51,90 +96,199 @@ def _note(text: str) -> Gtk.Label:
     return label
 
 
-class _Row:
-    """One line: what it controls, and the hardware it is wired to.
+class _Pad(Gtk.Button):
+    """One pad box, drawn where that pad sits on the hardware."""
 
-    Holds its own handler id so the window can set the dropdown from the
-    file without the dropdown writing it straight back.
-    """
+    def __init__(self, pad: int, on_pick) -> None:
+        super().__init__()
+        self.pad = pad
+        self.add_css_class("lpd8-pad")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.cap = Gtk.Label(label=f"PAD {pad}", xalign=0.0)
+        self.cap.add_css_class("lpd8-cap")
+        self.job = Gtk.Label(label="", xalign=0.0)
+        self.job.add_css_class("lpd8-job")
+        self.job.set_wrap(True)
+        self.job.set_lines(2)
+        self.job.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
+        self.job.set_valign(Gtk.Align.START)
+        self.job.set_vexpand(True)
+        box.append(self.cap)
+        box.append(self.job)
+        self.set_child(box)
+        self.connect("clicked", lambda _b: on_pick("pad", pad))
 
-    def __init__(self, label: str, choices: list[str], on_change) -> None:
-        self.box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.name = Gtk.Label(label=label, xalign=0.0)
-        self.name.set_hexpand(True)
-        self.name.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
-        self.box.append(self.name)
+    def show_job(self, text: str, tooltip: str) -> None:
+        self.job.set_text(text)
+        self.set_tooltip_text(tooltip)
+        # An unused pad is drawn as an empty box rather than hidden: the
+        # hardware still has eight pads whether or not the script uses them.
+        if text:
+            self.remove_css_class("free")
+        else:
+            self.add_css_class("free")
 
-        self.choices = list(choices)
-        self.drop = Gtk.DropDown.new_from_strings(self.choices)
-        self.drop.set_tooltip_text(f"Hardware control for {label.lower()}")
-        self.handler = self.drop.connect("notify::selected", on_change)
-        self.box.append(self.drop)
 
-    def show_choice(self, index: int, extra: str | None = None) -> None:
-        """Select *index*, adding *extra* as a trailing entry when given.
+class _Knob(Gtk.Button):
+    """One knob, drawn round, where that knob sits on the hardware."""
 
-        ``extra`` is how an unrecognised value is shown -- a CC no knob
-        sends, a slot with no pad. It is selectable-looking but always
-        replaced the moment a real choice is made, and it is never invented
-        when the file is normal.
-        """
-        wanted = self.choices + ([extra] if extra else [])
-        model = self.drop.get_model()
-        current = [model.get_string(i) for i in range(model.get_n_items())]
-        self.drop.handler_block(self.handler)
-        if current != wanted:
-            self.drop.set_model(Gtk.StringList.new(wanted))
-        self.drop.set_selected(index)
-        self.drop.handler_unblock(self.handler)
+    def __init__(self, knob: int, pal: dict[str, str], on_pick) -> None:
+        super().__init__()
+        self.knob = knob
+        self.pal = pal
+        self.assigned = False
+        self.selected = False
+        self.add_css_class("lpd8-knob")
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        box.set_halign(Gtk.Align.CENTER)
+        self.face = Gtk.DrawingArea()
+        self.face.set_content_width(44)
+        self.face.set_content_height(44)
+        self.face.set_draw_func(self._draw)
+        box.append(self.face)
+        self.cap = Gtk.Label(label=f"K{knob}")
+        self.cap.add_css_class("lpd8-cap")
+        self.cap.set_halign(Gtk.Align.CENTER)
+        self.job = Gtk.Label(label="")
+        self.job.add_css_class("lpd8-job")
+        self.job.set_halign(Gtk.Align.CENTER)
+        # Without a cap the longest bus name would widen its own column and
+        # the eight knobs would stop being a grid.
+        self.job.set_ellipsize(3)
+        self.job.set_max_width_chars(7)
+        box.append(self.cap)
+        box.append(self.job)
+        self.set_child(box)
+        self.connect("clicked", lambda _b: on_pick("knob", knob))
 
-    @property
-    def selected(self) -> int:
-        return int(self.drop.get_selected())
+    def show_job(self, text: str, tooltip: str) -> None:
+        self.job.set_text(text)
+        self.set_tooltip_text(tooltip)
+        self.assigned = bool(text)
+        self.face.queue_draw()
+
+    def set_selected(self, selected: bool) -> None:
+        self.selected = selected
+        self.face.queue_draw()
+
+    def _draw(self, _area: Gtk.DrawingArea, cr, width: int, height: int) -> None:
+        pal = self.pal
+        radius = min(width, height) / 2 - 3
+        cx, cy = width / 2, height / 2
+        cr.arc(cx, cy, radius, 0, 2 * math.pi)
+        cr.set_source_rgb(*_rgb(pal["cap"] if self.assigned else pal["view-alt"]))
+        cr.fill()
+        cr.arc(cx, cy, radius, 0, 2 * math.pi)
+        cr.set_source_rgb(*_rgb(pal["accent"] if self.selected else pal["view"]))
+        cr.set_line_width(2.0 if self.selected else 1.0)
+        cr.stroke()
+        # The notch is drawn at twelve o'clock on every knob and never
+        # moves: this window maps controls, it does not read their
+        # positions, and a notch that wandered would claim otherwise.
+        cr.move_to(cx, cy - radius * 0.2)
+        cr.line_to(cx, cy - radius * 0.8)
+        cr.set_source_rgb(*_rgb(pal["fg"] if self.assigned else pal["fg-dim"]))
+        cr.set_line_width(2.0)
+        cr.set_line_cap(1)  # CAIRO_LINE_CAP_ROUND
+        cr.stroke()
 
 
 class RemapWindow(Gtk.Window):
-    """Every LPD8 control on one page, each one editable."""
+    """The LPD8, drawn to scale of itself, with every control editable."""
 
     def __init__(self, parent: Gtk.Window | None = None) -> None:
         super().__init__(title="LPD8 Controls", transient_for=parent)
         self.add_css_class("hearth")
-        self.set_default_size(420, -1)
+        self.set_default_size(560, -1)
+        self.set_resizable(False)
         # Same bargain as Setup: built once, hidden rather than destroyed,
         # and it reads nothing while hidden.
         self.set_hide_on_close(True)
 
+        self.pal = style_mod.palette()
         self._restart_id = 0
-        self._knob_rows: dict[str, _Row] = {}
-        self._pad_rows: dict[int, _Row] = {}
+        self._pads: dict[int, _Pad] = {}
+        self._knobs: dict[int, _Knob] = {}
+        #: pad -> slots it triggers, and knob -> constants it drives.
+        self._pad_use: dict[int, list[int]] = {}
+        self._knob_use: dict[int, list[str]] = {}
+        self._selected: tuple[str, int] | None = None
 
         column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         column.set_margin_top(12)
         column.set_margin_bottom(14)
         column.set_margin_start(14)
         column.set_margin_end(14)
+        self.set_child(column)
 
-        scroller = Gtk.ScrolledWindow()
-        scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        scroller.set_propagate_natural_height(True)
-        scroller.set_max_content_height(760)
-        scroller.set_child(column)
-        self.set_child(scroller)
-
+        column.append(self._build_device())
+        column.append(self._build_detail())
         column.append(self._build_state())
-        column.append(self._build_knobs())
-        column.append(self._build_pads())
+
+        escape = Gtk.EventControllerKey()
+        escape.connect("key-pressed", self._on_key)
+        self.add_controller(escape)
 
         self.connect("map", lambda *_a: self.refresh())
         self.connect("close-request", self._on_close)
 
     # -- construction ----------------------------------------------------
-    def _build_state(self) -> Gtk.Widget:
+    def _build_device(self) -> Gtk.Widget:
+        """The controller: pads on the left, knobs on the right, as printed."""
+        panel = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+        panel.add_css_class("lpd8")
+
+        pads = Gtk.Grid(row_spacing=6, column_spacing=6)
+        for row, line in enumerate(PAD_ROWS):
+            for col, pad in enumerate(line):
+                widget = _Pad(pad, self._on_pick)
+                self._pads[pad] = widget
+                pads.attach(widget, col, row, 1, 1)
+        panel.append(pads)
+
+        knobs = Gtk.Grid(row_spacing=4, column_spacing=4)
+        knobs.set_valign(Gtk.Align.CENTER)
+        knobs.set_column_homogeneous(True)
+        for row, line in enumerate(KNOB_ROWS):
+            for col, knob in enumerate(line):
+                widget = _Knob(knob, self.pal, self._on_pick)
+                self._knobs[knob] = widget
+                knobs.attach(widget, col, row, 1, 1)
+        panel.append(knobs)
+        return panel
+
+    def _build_detail(self) -> Gtk.Widget:
+        """The one place anything is changed: the selected control's job."""
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.add_css_class("lpd8-detail")
+
+        self.hint = _note("Pick a pad or a knob above to change what it does.")
+        box.append(self.hint)
+
+        self.detail_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.detail_name = Gtk.Label(label="", xalign=0.0)
+        self.detail_name.add_css_class("lpd8-sel")
+        self.detail_name.set_hexpand(True)
+        self.detail_row.append(self.detail_name)
+        self.choice = Gtk.DropDown.new_from_strings([""])
+        self.choice_handler = self.choice.connect("notify::selected", self._on_choice)
+        self.detail_row.append(self.choice)
+        self.detail_row.set_visible(False)
+        box.append(self.detail_row)
+
+        self.clash = Gtk.Label(label="", xalign=0.0)
+        self.clash.add_css_class("setup-clash")
+        self.clash.set_wrap(True)
+        self.clash.set_visible(False)
+        box.append(self.clash)
+        return box
+
+    def _build_state(self) -> Gtk.Widget:
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.state = Gtk.Label(label="\u2026", xalign=0.0)
         self.state.set_hexpand(True)
         self.state.set_wrap(True)
+        self.state.add_css_class("setup-note")
         row.append(self.state)
         restart = Gtk.Button(label="Restart")
         restart.add_css_class("setup-act")
@@ -144,43 +298,7 @@ class RemapWindow(Gtk.Window):
         )
         restart.connect("clicked", self._on_restart_clicked)
         row.append(restart)
-        box.append(row)
-        self.clash = Gtk.Label(label="", xalign=0.0)
-        self.clash.add_css_class("setup-clash")
-        self.clash.set_wrap(True)
-        self.clash.set_visible(False)
-        box.append(self.clash)
-        return box
-
-    def _build_knobs(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        box.append(_tag("KNOBS"))
-        choices = [f"Knob {knob}" for knob in lpd8map.KNOBS]
-        for assignment in lpd8map.ASSIGNMENTS:
-            row = _Row(assignment.label, choices, self._on_knob_changed)
-            row.drop.set_name(f"knob:{assignment.const}")
-            self._knob_rows[assignment.const] = row
-            box.append(row.box)
-        self.knob_note = _note("")
-        box.append(self.knob_note)
-        return box
-
-    def _build_pads(self) -> Gtk.Widget:
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        box.append(_tag("PADS"))
-        choices = [f"Pad {pad}" for pad in lpd8map.PADS]
-        for pad_slot in lpd8map.PAD_SLOTS:
-            row = _Row(pad_slot.label, choices, self._on_pad_changed)
-            row.drop.set_name(f"pad:{pad_slot.slot}")
-            self._pad_rows[pad_slot.slot] = row
-            box.append(row.box)
-        box.append(
-            _note(
-                "A lit pad means that sound is on. Lights only follow the "
-                "mixer when the LPD8 is in NOTE TOGGLE mode."
-            )
-        )
-        return box
+        return row
 
     # -- reading ---------------------------------------------------------
     def refresh(self) -> None:
@@ -214,39 +332,46 @@ class RemapWindow(Gtk.Window):
         except Exception:  # pragma: no cover - a missing script is not a crash
             knobs, pads = {}, {}
 
-        if not knobs and not pads:
-            self.knob_note.set_visible(True)
-            self.knob_note.set_text(
+        # The script is written the other way round -- job to control --
+        # and the picture needs control to job, so it is inverted here.
+        self._pad_use = {}
+        for slot, pad in pads.items():
+            self._pad_use.setdefault(pad, []).append(slot)
+        self._knob_use = {}
+        for const, cc in knobs.items():
+            knob = lpd8map.cc_to_knob(cc)
+            if knob is not None:
+                self._knob_use.setdefault(knob, []).append(const)
+
+        slot_labels = {s.slot: s.label for s in lpd8map.PAD_SLOTS}
+        for pad, widget in self._pads.items():
+            slots = sorted(self._pad_use.get(pad, []))
+            short = " + ".join(PAD_SHORT.get(s, slot_labels.get(s, str(s))) for s in slots)
+            full = " and ".join(slot_labels.get(s, str(s)) for s in slots)
+            widget.show_job(short, full or f"Pad {pad} does nothing yet")
+
+        knob_labels = {a.const: a.label for a in lpd8map.ASSIGNMENTS}
+        for knob, widget in self._knobs.items():
+            consts = self._knob_use.get(knob, [])
+            short = " + ".join(KNOB_SHORT.get(c, knob_labels.get(c, c)) for c in consts)
+            full = " and ".join(knob_labels.get(c, c) for c in consts)
+            widget.show_job(short, full or f"Knob {knob} moves nothing yet")
+
+        usable = bool(knobs or pads)
+        for widget in (*self._pads.values(), *self._knobs.values()):
+            widget.set_sensitive(usable)
+        if not usable:
+            self._select(None)
+            self.hint.set_text(
                 f"No map found in {lpd8map.SCRIPT}. Nothing here can be changed "
                 "until that script is back."
             )
-            self._set_sensitive(False)
+            self.hint.set_visible(True)
             self.clash.set_visible(False)
             return
 
-        self._set_sensitive(True)
-        # When everything works, naming the file it was written to is data
-        # nobody acts on, so it only appears when the file is the problem.
-        self.knob_note.set_visible(False)
-
-        for assignment in lpd8map.ASSIGNMENTS:
-            row = self._knob_rows[assignment.const]
-            cc = knobs.get(assignment.const)
-            knob = lpd8map.cc_to_knob(cc) if cc is not None else None
-            if knob is not None:
-                row.show_choice(knob - 1)
-            else:
-                extra = f"CC {cc}" if cc is not None else "not set"
-                row.show_choice(len(lpd8map.KNOBS), extra)
-
-        for pad_slot in lpd8map.PAD_SLOTS:
-            row = self._pad_rows[pad_slot.slot]
-            pad = pads.get(pad_slot.slot)
-            if pad is not None:
-                row.show_choice(pad - 1)
-            else:
-                row.show_choice(len(lpd8map.PADS), "not set")
-
+        if self._selected is not None:
+            self._fill_choice()
         self._show_clashes(knobs, pads)
 
     def _show_clashes(self, knobs: dict[str, int], pads: dict[int, int]) -> None:
@@ -268,24 +393,77 @@ class RemapWindow(Gtk.Window):
         self.clash.set_text("; ".join(lines))
         self.clash.set_visible(bool(lines))
 
-    def _set_sensitive(self, sensitive: bool) -> None:
-        for row in (*self._knob_rows.values(), *self._pad_rows.values()):
-            row.drop.set_sensitive(sensitive)
+    # -- selection -------------------------------------------------------
+    def _on_pick(self, kind: str, number: int) -> None:
+        self._select((kind, number))
+
+    def _select(self, choice: tuple[str, int] | None) -> None:
+        self._selected = choice
+        for pad, widget in self._pads.items():
+            if choice == ("pad", pad):
+                widget.add_css_class("sel")
+            else:
+                widget.remove_css_class("sel")
+        for knob, widget in self._knobs.items():
+            widget.set_selected(choice == ("knob", knob))
+        if choice is None:
+            self.detail_row.set_visible(False)
+            self.hint.set_visible(True)
+            return
+        self.hint.set_visible(False)
+        self.detail_row.set_visible(True)
+        self._fill_choice()
+
+    def _fill_choice(self) -> None:
+        """Put the selected control's job list in the detail dropdown."""
+        if self._selected is None:
+            return
+        kind, number = self._selected
+        if kind == "pad":
+            self.detail_name.set_text(f"Pad {number} does")
+            names = [s.label for s in lpd8map.PAD_SLOTS]
+            slots = sorted(self._pad_use.get(number, []))
+            order = [s.slot for s in lpd8map.PAD_SLOTS]
+            index = order.index(slots[0]) if slots else None
+        else:
+            self.detail_name.set_text(f"Knob {number} moves")
+            names = [a.label for a in lpd8map.ASSIGNMENTS]
+            consts = self._knob_use.get(number, [])
+            order = [a.const for a in lpd8map.ASSIGNMENTS]
+            index = order.index(consts[0]) if consts else None
+        # A control the script does not use gets a trailing entry saying so,
+        # rather than a silently wrong first row. Picking anything else
+        # replaces it; it is never invented for a control that is mapped.
+        if index is None:
+            names = [*names, "nothing yet"]
+            index = len(names) - 1
+        self.choice.handler_block(self.choice_handler)
+        self.choice.set_model(Gtk.StringList.new(names))
+        self.choice.set_selected(index)
+        self.choice.handler_unblock(self.choice_handler)
+
+    def _on_key(self, _c, keyval: int, _code: int, _state) -> bool:
+        if keyval == 0xFF1B:  # Escape
+            self.close()
+            return True
+        return False
 
     # -- writing ---------------------------------------------------------
-    def _on_knob_changed(self, drop: Gtk.DropDown, _param) -> None:
-        const = drop.get_name().removeprefix("knob:")
-        knob = int(drop.get_selected()) + 1
-        if knob not in lpd8map.KNOBS:
+    def _on_choice(self, drop: Gtk.DropDown, _param) -> None:
+        if self._selected is None:
             return
-        self._write(lambda: lpd8map.set_knob(const, knob))
-
-    def _on_pad_changed(self, drop: Gtk.DropDown, _param) -> None:
-        slot = int(drop.get_name().removeprefix("pad:"))
-        pad = int(drop.get_selected()) + 1
-        if pad not in lpd8map.PADS:
-            return
-        self._write(lambda: lpd8map.set_pad(slot, pad))
+        kind, number = self._selected
+        index = int(drop.get_selected())
+        if kind == "pad":
+            if index >= len(lpd8map.PAD_SLOTS):
+                return
+            slot = lpd8map.PAD_SLOTS[index].slot
+            self._write(lambda: lpd8map.set_pad(slot, number))
+        else:
+            if index >= len(lpd8map.ASSIGNMENTS):
+                return
+            const = lpd8map.ASSIGNMENTS[index].const
+            self._write(lambda: lpd8map.set_knob(const, number))
 
     def _write(self, edit) -> None:
         """Run one edit, report it in words, and queue the restart."""
