@@ -143,11 +143,14 @@ def test_commands_are_argv_and_never_shell(monkeypatch):
     pactl.set_volume("vm_game", 55)
     pactl.set_default_sink("vm_game")
     pactl.set_stream_mute("412", True)
+    pactl.set_stream_volume("412", 73)
     pactl.set_stream_mute("", True)  # no index, no command
+    pactl.set_stream_volume("", 73)
 
     assert calls[0] == ["pactl", "set-sink-mute", "vm game; rm -rf /", "1"]
     assert calls[3] == ["pactl", "set-sink-input-mute", "412", "1"]
-    assert len(calls) == 4
+    assert calls[4] == ["pactl", "set-sink-input-volume", "412", "73%"]
+    assert len(calls) == 5
     assert calls[1] == ["pactl", "set-sink-volume", "vm_game", "55%"]
     assert calls[2] == ["pactl", "set-default-sink", "vm_game"]
 
@@ -159,6 +162,7 @@ def test_commands_are_argv_and_never_shell(monkeypatch):
         ("move_sink_input", ("42", "vm_chat")),
         ("set_source_mute", ("sm7b_mono", True)),
         ("set_stream_mute", ("42", True)),
+        ("set_stream_volume", ("42", 65)),
         ("set_volume", ("vm_game", 65)),
         ("set_default_sink", ("vm_game",)),
     ],
