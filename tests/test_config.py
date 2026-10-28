@@ -57,6 +57,18 @@ def test_a_boolean_is_not_accepted_as_a_port() -> None:
     assert config.parse({"laptop_rtp_port": True}).laptop_rtp_port == 46000
 
 
+@pytest.mark.parametrize("port", [1, 46000, 65535])
+def test_valid_rtp_port_boundaries_are_accepted(port: int) -> None:
+    assert config.parse({"laptop_rtp_port": port}).laptop_rtp_port == port
+
+
+@pytest.mark.parametrize("port", [-1, 0, 65536, 1000000])
+def test_invalid_rtp_port_falls_back_to_default(port: int) -> None:
+    assert (
+        config.parse({"laptop_rtp_port": port}).laptop_rtp_port == config.Config().laptop_rtp_port
+    )
+
+
 def test_unknown_keys_are_reported_rather_than_silently_ignored() -> None:
     """A typo'd key is otherwise invisible: the setting just does nothing and
     the user concludes the feature is broken."""
@@ -120,6 +132,34 @@ def test_an_int_is_accepted_where_a_float_is_expected() -> None:
     assert settings.merge({"vu_speed": 1})["vu_speed"] == 1
 
 
+@pytest.mark.parametrize("latency", [1, 12, 200])
+def test_latency_milliseconds_accepts_setup_widget_range(latency: int) -> None:
+    assert settings.merge({"latency_msec": latency})["latency_msec"] == latency
+
+
+@pytest.mark.parametrize("latency", [-100, 0, 201, 1000000])
+def test_invalid_latency_falls_back_to_default(latency: int) -> None:
+    assert (
+        settings.merge({"latency_msec": latency})["latency_msec"]
+        == settings.DEFAULTS["latency_msec"]
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [float("nan"), float("inf"), float("-inf"), 10**400],
+)
+def test_non_finite_or_unrepresentable_float_preferences_are_rejected(
+    value: int | float,
+) -> None:
+    assert settings.merge({"vu_speed": value})["vu_speed"] == settings.DEFAULTS["vu_speed"]
+
+
+@pytest.mark.parametrize("key,value", [("win_w", -1), ("win_w", 1), ("win_h", 0), ("win_h", 10**9)])
+def test_invalid_window_dimensions_fall_back_to_defaults(key: str, value: int) -> None:
+    assert settings.merge({key: value})[key] == settings.DEFAULTS[key]
+
+
 def test_unknown_settings_survive_a_downgrade() -> None:
     """A file written by a newer Hearth must not lose keys when an older one
     opens and re-saves it."""
@@ -143,6 +183,33 @@ def test_saving_creates_the_directory(tmp_path: Path) -> None:
 def test_saving_leaves_no_temporary_file_behind(tmp_path: Path) -> None:
     target = tmp_path / "rac_settings.json"
     settings.save(dict(settings.DEFAULTS), target)
+    assert list(tmp_path.glob("*.tmp.*")) == []
+
+
+def test_saving_preserves_existing_file_permissions(tmp_path: Path) -> None:
+    target = tmp_path / "rac_settings.json"
+    settings.save(dict(settings.DEFAULTS), target)
+    target.chmod(0o600)
+
+    settings.save({**settings.DEFAULTS, "win_w": 1234}, target)
+
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert settings.load(target)["win_w"] == 1234
+
+
+def test_concurrent_saves_do_not_collide_or_corrupt_json(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    target = tmp_path / "rac_settings.json"
+
+    def save_width(width: int) -> None:
+        settings.save({**settings.DEFAULTS, "win_w": width}, target)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(save_width, range(800, 840)))
+
+    loaded = json.loads(target.read_text())
+    assert loaded["win_w"] in range(800, 840)
     assert list(tmp_path.glob("*.tmp.*")) == []
 
 

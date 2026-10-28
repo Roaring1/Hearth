@@ -22,7 +22,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
+import stat
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -60,9 +63,23 @@ def _valid(key: str, value: Any) -> bool:
     if isinstance(default, bool):
         return isinstance(value, bool)
     if isinstance(default, int):
-        return isinstance(value, int) and not isinstance(value, bool)
+        if not isinstance(value, int) or isinstance(value, bool):
+            return False
+        if key == "latency_msec":
+            return 1 <= value <= 200
+        if key == "win_w":
+            return 320 <= value <= 16384
+        if key == "win_h":
+            return 240 <= value <= 16384
+        return True
     if isinstance(default, float):
-        return isinstance(value, int | float) and not isinstance(value, bool)
+        if not isinstance(value, int | float) or isinstance(value, bool):
+            return False
+        try:
+            return math.isfinite(value)
+        except OverflowError:
+            # A huge JSON integer cannot be represented as a finite float.
+            return False
     return isinstance(value, type(default))
 
 
@@ -111,10 +128,25 @@ def save(values: dict[str, Any], path: Path | None = None) -> None:
     """
     target = paths.settings_file() if path is None else path
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
+    payload = json.dumps(values, indent=2)
+
+    # A PID-only temporary name collides when two threads save at once in the
+    # same process. mkstemp makes each write independent and private (0600).
     try:
-        tmp.write_text(json.dumps(values, indent=2))
+        original_mode = stat.S_IMODE(target.stat().st_mode)
+    except FileNotFoundError:
+        original_mode = None
+
+    fd, tmp_name = tempfile.mkstemp(prefix=f"{target.name}.tmp.", dir=target.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if original_mode is not None:
+            tmp.chmod(original_mode)
         tmp.replace(target)  # atomic within one filesystem
-    except OSError:
+    except BaseException:
         tmp.unlink(missing_ok=True)
         raise
