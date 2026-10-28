@@ -63,6 +63,47 @@ def test_select_loopbacks_filters_source_and_sink(fixture_text):
     assert pactl.select_loopbacks(modules, sinks=pactl.DEFAULT_LOOPBACK_SINKS) == []
 
 
+def test_exact_source_filter_does_not_match_similarly_named_sources():
+    modules = [
+        pactl.Module(
+            index=1,
+            name="module-loopback",
+            args="source=vm_game.monitor-extra sink=vm_chat",
+        ),
+        pactl.Module(
+            index=2,
+            name="module-loopback",
+            args="source=vm_game.monitor sink=vm_music",
+        ),
+    ]
+
+    # Legacy substring lookup remains available, but route UI needs exactness.
+    assert len(pactl.select_loopbacks(modules, source="vm_game.monitor")) == 2
+    exact = pactl.select_loopbacks(modules, source="vm_game.monitor", exact_source=True)
+    assert [loop.index for loop in exact] == [2]
+
+
+def test_unload_loopbacks_only_unloads_the_exact_source(monkeypatch):
+    modules = [
+        pactl.Module(
+            index=1,
+            name="module-loopback",
+            args="source=vm_game.monitor-extra sink=vm_chat",
+        ),
+        pactl.Module(
+            index=2,
+            name="module-loopback",
+            args="source=vm_game.monitor sink=vm_chat",
+        ),
+    ]
+    calls: list[list[str]] = []
+    monkeypatch.setattr(pactl, "modules", lambda: modules)
+    monkeypatch.setattr(proc, "run", lambda argv, **_kwargs: calls.append(list(argv)))
+
+    assert pactl.unload_loopbacks("vm_game.monitor", ["vm_chat"]) == 1
+    assert calls == [["pactl", "unload-module", "2"]]
+
+
 def test_module_arg_parsing():
     mod = pactl.Module(index=1, name="module-loopback", args="source=a sink=b latency_msec=12")
     assert mod.arg("sink") == "b"

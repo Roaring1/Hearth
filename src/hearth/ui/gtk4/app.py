@@ -549,7 +549,12 @@ class Strip(Gtk.Box):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         source = f"{self.channel.sink}.monitor"
         try:
-            live = {loop.sink for loop in pactl.select_loopbacks(pactl.modules(), source=source)}
+            live = {
+                loop.sink
+                for loop in pactl.select_loopbacks(
+                    pactl.modules(), source=source, exact_source=True
+                )
+            }
         except Exception:  # pragma: no cover - a dead server must not crash the UI
             live = set()
         if self.channel.group == "mic":

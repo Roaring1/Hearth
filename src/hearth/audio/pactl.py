@@ -105,11 +105,14 @@ def select_loopbacks(
     *,
     source: str | None = None,
     sinks: Sequence[str] | None = None,
+    exact_source: bool = False,
 ) -> list[Loopback]:
     """Loopback modules, optionally filtered by source and target sinks.
 
     Replaces the ``pactl | awk | grep`` pipeline the GUI used to run when a
-    mic loopback checkbox was switched off.
+    mic loopback checkbox was switched off. The default source filter is a
+    substring search for compatibility; use exact_source for state checks and
+    destructive operations where a partial match could select the wrong stream.
     """
     found: list[Loopback] = []
     for mod in modules:
@@ -117,7 +120,7 @@ def select_loopbacks(
             continue
         src = mod.arg("source") or ""
         snk = mod.arg("sink") or ""
-        if source is not None and source not in src:
+        if source is not None and ((source != src) if exact_source else (source not in src)):
             continue
         if sinks is not None and snk not in sinks:
             continue
@@ -275,7 +278,7 @@ def unload_loopbacks(
 
     Returns how many modules were unloaded.
     """
-    targets = select_loopbacks(modules(), source=source, sinks=sinks_wanted)
+    targets = select_loopbacks(modules(), source=source, sinks=sinks_wanted, exact_source=True)
     for loopback in targets:
         try:
             proc.run(["pactl", "unload-module", str(loopback.index)])
