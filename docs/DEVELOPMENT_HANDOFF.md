@@ -9,8 +9,9 @@ This document is the durable checkpoint for the current repair/audit pass. It is
 - PR status: open, mergeable, **not merged**.
 - Base commit: 4600ebed949107114822827056f09d7cd0780b4e (the PR base; main has not been changed by this work).
 - Branch: fix/gtk4-install-and-smoke-test
-- Branch HEAD at this handoff: 0fa2a605ccb13d5e386e15c4ff90cfa5fc27c786.
-- Last complete CI run: GitHub Actions run #80, commit 0fa2a605, **all jobs successful**: https://github.com/Roaring1/Hearth/actions/runs/40700465469
+- Code snapshot fully verified before this handoff was added: 0fa2a605ccb13d5e386e15c4ff90cfa5fc27c786.
+- Last complete CI run for that code snapshot: GitHub Actions run #80, commit 0fa2a605, **all jobs successful**: https://github.com/Roaring1/Hearth/actions/runs/40700465469
+- This handoff was then added in commit 2b74af1f3fbeef30d6a0e2d0ee91894418babf36, triggering CI run #81. Always use the newest branch head and workflow run as the current truth.
 - The PR currently contains many small commits because GitHub's file-update endpoint made one commit per file while the development PC connector was unavailable. Prefer **Squash and merge** (or consolidate history before merging) instead of preserving the entire incremental history. Do not merge without the maintainer's decision.
 
 ## CI evidence
@@ -97,10 +98,12 @@ Since the connector failed, the remote branch has received more commits through 
    Safe starting point after confirming actual XDG locations and ownership:
 
        hearth --paths
-       find "$XDG_CONFIG_HOME/hearth" "$XDG_STATE_HOME/hearth" "$XDG_CACHE_HOME/hearth" -type d -exec chmod 700 {} +
-       find "$XDG_CONFIG_HOME/hearth" "$XDG_STATE_HOME/hearth" "$XDG_CACHE_HOME/hearth" -type f -exec chmod go-rwx {} +
+       # For default XDG locations only; substitute the exact config/state/cache
+       # paths printed by hearth --paths if this PC uses custom XDG locations.
+       find "$HOME/.config/hearth" "$HOME/.local/state/hearth" "$HOME/.cache/hearth" -type d -exec chmod 700 {} +
+       find "$HOME/.config/hearth" "$HOME/.local/state/hearth" "$HOME/.cache/hearth" -type f -exec chmod go-rwx {} +
 
-   Adjust unset/custom XDG variables using the exact paths printed by hearth --paths; inspect before running if any paths are symlinks or contain files not owned by the current user. The second command removes group/other permissions without stripping owner execute bits. Do not delete old dumps or logs.
+   Do not run the example unchanged when hearth --paths reports different locations. Inspect first if any path is a symlink, crosses into unrelated data, or contains files not owned by the current user. find does not follow symlinks by default; the second command removes group/other permissions without stripping owner execute bits. Do not delete old dumps or logs.
 
 4. Re-check the actual desktop launcher, command resolution, audio status, unit status and file modes after updating to the branch. Keep hearth-ui.service stopped unless a user-visible test explicitly requires launching the UI through that unit.
 
