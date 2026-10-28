@@ -63,6 +63,23 @@ def _fake_pactl(calls: list[list[str]]):
     return run
 
 
+def test_listener_rows_are_not_rebuilt_for_identical_snapshots() -> None:
+    mixer = _load_mixer()
+    listeners = [SimpleNamespace(index="42", name="Firefox", muted=False)]
+    signature = (("42", "Firefox", False),)
+    listener_box = object()
+    cleared = []
+    strip = SimpleNamespace(
+        _listener_signature=signature,
+        listeners=listener_box,
+        _clear=lambda box: cleared.append(box),
+    )
+
+    mixer.Strip._fill_listeners(strip, listeners)
+
+    assert cleared == []
+
+
 def test_volume_snapshot_keeps_all_channel_levels(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     module = _load_func_check()
     calls: list[list[str]] = []
