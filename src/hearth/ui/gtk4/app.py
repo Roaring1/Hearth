@@ -1377,37 +1377,22 @@ class MixerWindow(Gtk.ApplicationWindow):
     def _on_snapshot(self, snapshot) -> None:
         GLib.idle_add(self._apply_snapshot, snapshot)
 
-    def _read_routes(self) -> dict[str, set[str]]:
-        """source -> sinks, straight from the live module table."""
-        routes: dict[str, set[str]] = {}
-        try:
-            for loop in pactl.select_loopbacks(pactl.modules()):
-                routes.setdefault(loop.source, set()).add(loop.sink)
-        except OSError:  # pragma: no cover - no pactl means no routing
-            return {}
-        return routes
-
-    def _read_muted_outs(self) -> set[str]:
-        """Friendly names of destination devices that are muted themselves.
-
-        The LPD8 script mutes hardware endpoints directly, so the mixer can
-        show every bus open and the room can still be silent. This is the
-        one place that discrepancy becomes visible.
-        """
-        muted: set[str] = set()
-        wanted = {sink for _label, sink in OUTPUTS}
-        reachable = {entry.name for entry in pactl.sinks()} if wanted else set()
-        for label, sink in OUTPUTS:
-            if sink in reachable and pactl.is_muted(sink):
-                muted.add(label)
-        return muted
-
     def _apply_snapshot(self, snapshot) -> bool:
-        self._routes = self._read_routes()
-        try:
-            self._muted_outs = self._read_muted_outs()
-        except OSError:  # pragma: no cover - pactl gone
-            self._muted_outs = set()
+        # These fields are collected off the GTK thread. None means the
+        # optional route query failed; keep the last verified graph rather
+        # than painting every route as disconnected during a transient error.
+        routes = getattr(snapshot, "routes", None)
+        if routes is not None:
+            self._routes = routes
+
+        # The verbose sink snapshot already includes each sink's mute state.
+        # Derive destination mute labels from it instead of launching another
+        # sinks query plus one get-mute command per output on GTK's main loop.
+        self._muted_outs = {
+            label
+            for label, name in OUTPUTS
+            if (output := snapshot.sinks.get(name)) is not None and output.muted
+        }
         # Snapshot keeps both of these as dicts keyed by sink name.
         sinks = dict(snapshot.sinks)
         streams: dict[str, list[Listener]] = {

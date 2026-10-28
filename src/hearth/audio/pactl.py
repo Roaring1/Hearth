@@ -168,10 +168,21 @@ def _text(*args: str, check: bool = False) -> str:
 def raw(*args: str) -> str:
     """Raw stdout of ``pactl <args>``, or ``""`` when the call fails.
 
-    Used by the collector, which parses verbose output that has no useful
-    typed representation here.
+    Retained for best-effort diagnostic callers. State snapshots should use
+    :func:`raw_checked` so a command failure is not mistaken for an empty
+    device list.
     """
     return _text(*args)
+
+
+def raw_checked(*args: str) -> str:
+    """Raw stdout of ``pactl <args>``; raise when the read did not succeed.
+
+    A successful empty list is different from a failed server query. The
+    collector uses this for the core sink, stream and source inventory so the
+    GUI can preserve the last good snapshot during a transient PipeWire error.
+    """
+    return proc.run(["pactl", *args]).stdout
 
 
 def sinks() -> list[ShortEntry]:
@@ -182,10 +193,10 @@ def sources() -> list[ShortEntry]:
     return parse_short_list(_text("list", "short", "sources"))
 
 
-def modules(*, strict: bool = False) -> list[Module]:
-    """List loaded modules; strict mode lets mutation callers detect query failure."""
+def modules(*, strict: bool = False, timeout: float = 2.0) -> list[Module]:
+    """List loaded modules; strict mode detects query failures with a bounded wait."""
     if strict:
-        result = proc.run(["pactl", "list", "short", "modules"], timeout=2.0)
+        result = proc.run(["pactl", "list", "short", "modules"], timeout=timeout)
         return parse_modules(result.stdout)
     return parse_modules(_text("list", "short", "modules"))
 

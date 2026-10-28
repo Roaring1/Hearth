@@ -7,6 +7,7 @@ import threading
 import pytest
 
 from hearth import collector
+from hearth.errors import CommandError
 
 
 @pytest.fixture
@@ -99,6 +100,76 @@ def test_snapshot_accessors_and_unit_health():
 
 def test_all_units_active_is_false_with_no_units():
     assert collector.Snapshot().all_units_active is False
+
+
+def test_collect_keeps_core_audio_read_failures_distinct_from_empty_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def failed_read(*args: str) -> str:
+        raise CommandError(["pactl", *args], stderr="PipeWire is temporarily unavailable")
+
+    monkeypatch.setattr(collector.pactl, "raw_checked", failed_read)
+
+    with pytest.raises(CommandError, match="PipeWire is temporarily unavailable"):
+        collector.collect([])
+
+
+def test_collect_builds_route_graph_off_the_ui_thread(
+    monkeypatch: pytest.MonkeyPatch, fixture_text
+) -> None:
+    outputs = {
+        ("list", "sinks"): fixture_text("pactl_sinks.txt"),
+        ("list", "sink-inputs"): fixture_text("pactl_sink_inputs.txt"),
+        ("list", "short", "sources"): fixture_text("pactl_short_sources.txt"),
+    }
+    monkeypatch.setattr(collector.pactl, "raw_checked", lambda *args: outputs[args])
+    modules = collector.pactl.parse_modules(fixture_text("pactl_short_modules.txt"))
+    module_options: dict[str, object] = {}
+
+    def read_modules(**kwargs):
+        module_options.update(kwargs)
+        return modules
+
+    monkeypatch.setattr(collector.pactl, "modules", read_modules)
+    monkeypatch.setattr(collector.services, "states", lambda _units: {})
+    monkeypatch.setattr(collector.pactl, "server_version", lambda: "1.4.11")
+    monkeypatch.setattr(collector.pactl, "default_sink", lambda: "vm_game")
+
+    snapshot = collector.collect([])
+
+    assert "vm_game" in snapshot.sinks
+    expected: dict[str, set[str]] = {}
+    for loop in collector.pactl.select_loopbacks(modules):
+        expected.setdefault(loop.source, set()).add(loop.sink)
+    assert snapshot.routes == expected
+    assert module_options == {"strict": True, "timeout": 0.75}
+    # The parsed sink inventory already carries hardware mute state, avoiding
+    # additional per-output mute commands from the GTK callback.
+    assert isinstance(snapshot.sinks["vm_game"].muted, bool)
+
+
+def test_optional_route_query_failure_marks_routes_unknown_but_keeps_snapshot(
+    monkeypatch: pytest.MonkeyPatch, fixture_text
+) -> None:
+    outputs = {
+        ("list", "sinks"): fixture_text("pactl_sinks.txt"),
+        ("list", "sink-inputs"): fixture_text("pactl_sink_inputs.txt"),
+        ("list", "short", "sources"): fixture_text("pactl_short_sources.txt"),
+    }
+    monkeypatch.setattr(collector.pactl, "raw_checked", lambda *args: outputs[args])
+
+    def failed_modules(**_kwargs):
+        raise CommandError(["pactl", "list", "short", "modules"], stderr="module table timed out")
+
+    monkeypatch.setattr(collector.pactl, "modules", failed_modules)
+    monkeypatch.setattr(collector.services, "states", lambda _units: {})
+    monkeypatch.setattr(collector.pactl, "server_version", lambda: "")
+    monkeypatch.setattr(collector.pactl, "default_sink", lambda: "")
+
+    snapshot = collector.collect([])
+
+    assert snapshot.sinks
+    assert snapshot.routes is None
 
 
 def test_collector_thread_delivers_and_stops(monkeypatch):
