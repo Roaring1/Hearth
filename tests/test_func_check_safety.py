@@ -1358,9 +1358,7 @@ def test_raw_mic_route_config_write_is_deferred_to_route_worker(
     monkeypatch.setattr(
         mixer.mic_routes,
         "raw_edits",
-        lambda _conf, sink, source, wanted: {
-            "B1_ROUTE": f"{sink}:{source}:{wanted}"
-        },
+        lambda _conf, sink, source, wanted: {"B1_ROUTE": f"{sink}:{source}:{wanted}"},
     )
     monkeypatch.setattr(
         mixer.mic_routes,
