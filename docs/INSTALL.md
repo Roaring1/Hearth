@@ -31,6 +31,9 @@ Runtime files
     XDG_RUNTIME_DIR is absent/invalid). The socket and PID file are created
     with private permissions. Hearth refuses to replace a non-socket IPC path
     or a non-regular PID path, and its PID file is written by atomic replace.
+    If the IPC listener cannot start, Hearth closes its newly created socket
+    and removes only that socket's inode, then continues without IPC rather
+    than leaving a stale path that blocks the next launch.
 
 Not included, by design: a populated config.json. It holds host details for
 the machines on the author's LAN and would be of no use on another rig.

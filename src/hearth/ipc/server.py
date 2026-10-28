@@ -175,10 +175,28 @@ class Server:
                 conn.close()
 
     def start(self) -> threading.Thread:
-        """Run :meth:`serve_forever` on a background thread."""
+        """Run :meth:`serve_forever` on a background thread.
+
+        If the OS refuses to create the worker, release the listening socket
+        and remove only the socket inode this instance created. Convert the
+        thread-start failure to OSError so the GUI can gracefully run without
+        optional IPC rather than aborting startup.
+        """
         self.bind()
         thread = threading.Thread(target=self.serve_forever, daemon=True, name="hearth-ipc")
-        thread.start()
+        try:
+            thread.start()
+        except BaseException as exc:
+            # No listener owns the socket yet. Close it and remove only our
+            # inode, leaving any replacement path untouched.
+            if self._sock is not None:
+                with contextlib.suppress(OSError):
+                    self._sock.close()
+                self._sock = None
+            self._remove_owned_path()
+            if isinstance(exc, RuntimeError):
+                raise OSError("could not start the IPC listener thread") from exc
+            raise
         self._thread = thread
         return thread
 

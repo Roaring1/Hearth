@@ -151,6 +151,29 @@ def test_bind_does_not_unlink_a_live_server_socket(running, sock_path):
     assert active.path.exists()
 
 
+def test_listener_thread_start_failure_closes_socket_and_removes_owned_path(
+    monkeypatch: pytest.MonkeyPatch, sock_path: Path
+) -> None:
+    srv = server.Server(lambda _r: "ok", socket_path=sock_path)
+
+    class ThreadThatCannotStart:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("thread limit reached")
+
+    monkeypatch.setattr(server.threading, "Thread", ThreadThatCannotStart)
+
+    with pytest.raises(OSError, match="could not start the IPC listener thread"):
+        srv.start()
+
+    assert not sock_path.exists()
+    assert srv._sock is None
+    assert srv._owns_path is False
+    assert srv._path_identity is None
+
+
 def test_stop_does_not_unlink_a_replacement_path(sock_path):
     srv = server.Server(lambda _r: "unused", socket_path=sock_path)
     srv.bind()
