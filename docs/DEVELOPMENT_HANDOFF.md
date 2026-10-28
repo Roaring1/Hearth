@@ -2,12 +2,12 @@
 
 This document is the durable checkpoint for the current repair/audit pass. It is kept in the PR branch so work can continue even when the NobaraSupervisor connection to the development PC is unavailable.
 
-## Latest verified checkpoint — 2026-10-28 16:11 PDT
+## Latest verified checkpoint — 2026-10-28 16:22 PDT
 
 - NobaraSupervisor reconnection is healthy: service version 1.5.0, OAuth enabled, user session `roaring` (UID 1000), and no active subprocess.
-- The code fix for the headset-target/latency save was committed as [`d86b030`](https://github.com/Roaring1/Hearth/commit/d86b03008a2fe062d8449d480af2ce4692f1e220) (`Move Setup headset save off GTK thread`). GitHub Actions run [#86](https://github.com/Roaring1/Hearth/actions/runs/40785107082) completed successfully for that exact code commit; all six jobs passed: lint/types, Python 3.11/3.12/3.13 tests, GTK4/Xvfb import smoke, and install smoke. The subsequent published handoff-only commit is [`65047a6`](https://github.com/Roaring1/Hearth/commit/65047a66f43a15f3396a7a78ed7f765387d9d3db); it does not change application code. Run [#87](https://github.com/Roaring1/Hearth/actions/runs/40785376960) then completed successfully for that documentation-only commit, with all six jobs passing.
-- That fix moves the headset-target/latency config save and routing restart request off the GTK click callback, disables the related controls while the operation is pending, and surfaces write/thread-start/restart failures. It includes safety tests for the deferred write and the thread-start failure path.
-- The local `./scripts/check.sh` gate passed on the fixed code: Ruff lint and formatting, mypy (33 source files), **452 pytest tests**, legacy-module compile, desktop-entry validation, ShellCheck, and AppStream validation. AppStream still emits the existing pedantic uppercase application-ID warning while reporting successful validation.
+- Current code HEAD is [`dc839f2`](https://github.com/Roaring1/Hearth/commit/dc839f26870c269d5bd3cea95d62bd452e925fde). CI run [#89](https://github.com/Roaring1/Hearth/actions/runs/40786455641) passed all six jobs for `a4b637e`, including the volume coalescing and first LPD8 remap-worker fixes. Run [#90](https://github.com/Roaring1/Hearth/actions/runs/40786803750) is verifying `dc839f2`, which moves the LPD8 service-status query off GTK and adds regressions for its unknown-state/pending-write behavior.
+- The Setup headset-target/latency config save and routing-restart request run off the GTK click callback, disable dependent controls while pending, and report write/thread-start/restart failures separately. The latest code also coalesces bus and per-app slider values on one background worker at roughly 30 ms per batch, moves LPD8 mapping writes and service-status probes off GTK, and keeps the newest pending volume request per sink/stream.
+- The local `./scripts/check.sh` gate passed on the latest combined local tree: Ruff lint and formatting, mypy (33 source files), **460 pytest tests**, legacy-module compile, desktop-entry validation, ShellCheck, and AppStream validation. AppStream still emits the existing pedantic uppercase application-ID warning while reporting successful validation.
 - The correct user-session check (`XDG_RUNTIME_DIR=/run/user/1000`, `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus`) reports “Everything is working” and all 17 monitored services healthy; LPD8 is connected and Launchpad Mini is controlled by Padfire.
 - Current read-only service snapshot differs from the older checkpoint: `hearth-ui.service` is `inactive/dead` with `Result=success` (optional UI, not an audio-health failure); `lpd8-mixer.service` and `roaring-audio-routesd.service` are `active/running` with `Result=success`. No services were started, stopped, or restarted.
 - The normal interactive Plasma smoke test remains unverified in this session. CI/Xvfb and automated safety tests passed, but they do not replace manually adjusting the per-app volume slider, moving a strip by its title, opening route/input popovers, and checking LPD8 LED feedback in the actual desktop session. Do not claim this test is complete until it is actually performed.
@@ -22,10 +22,10 @@ This document is the durable checkpoint for the current repair/audit pass. It is
 - PR status: open, mergeable, **not merged**.
 - Base commit: 4600ebed949107114822827056f09d7cd0780b4e (the PR base; main has not been changed by this work).
 - Branch: fix/gtk4-install-and-smoke-test
-- Code commit `d86b03008a2fe062d8449d480af2ce4692f1e220` is synced locally and all code checks passed. This handoff state refresh is being recorded as a follow-up commit. The diagnostic bundle script is executable (`100755`) again after a GitHub contents-API edit had changed its mode.
+- Local checkout is synchronized and clean at code commit `dc839f26870c269d5bd3cea95d62bd452e925fde` before this handoff refresh. The diagnostic bundle script is executable (`100755`) again after a GitHub contents-API edit had changed its mode.
 - CI run #83 for `43e7c1c` passed lint/types, GTK4 smoke, Python 3.11/3.12/3.13 and install smoke: https://github.com/Roaring1/Hearth/actions/runs/40784116221.
 - CI run #84 for `d8ad784` passed: https://github.com/Roaring1/Hearth/actions/runs/40784293718. CI run #85 for `7ab6bec` passed all jobs: https://github.com/Roaring1/Hearth/actions/runs/40784474690.
-- CI run #86 for `d86b030` also passed all six jobs, including the async Setup-save regressions: https://github.com/Roaring1/Hearth/actions/runs/40785107082. Always use the newest branch head and workflow run as current truth.
+- CI run #86 for `d86b030`, run #87 for `65047a6`, run #88 for `a82b57b`, and run #89 for `a4b637e` all passed all six jobs. Run #90 for `dc839f2` is in progress at https://github.com/Roaring1/Hearth/actions/runs/40786803750. Always use the newest branch head and workflow run as current truth.
 - The PR currently contains many small commits because GitHub's file-update endpoint made one commit per file while the development PC connector was unavailable. Prefer **Squash and merge** (or consolidate history before merging) instead of preserving the entire incremental history. Do not merge without the maintainer's decision.
 
 ## CI evidence
@@ -39,7 +39,7 @@ Run #80 passed each of these jobs:
 - Python 3.13 tests: success.
 - Package install smoke: success.
 
-Several intermediate commits were intentionally pushed and CI exposed issues before the green run: a missing module import in the dump writer, incomplete fake-thread test doubles, and formatting differences under the current hosted Ruff version. Those were corrected. The local `./scripts/check.sh` gate passed after syncing and after the async Setup-save change: Ruff, formatting, mypy, **452 tests**, compile checks, desktop-entry/metadata validation and ShellCheck. The AppStream uppercase-ID item remains a pedantic warning; validation is successful.
+Several intermediate commits were intentionally pushed and CI exposed issues before green runs: a missing module import in the dump writer, incomplete fake-thread test doubles, formatting differences under hosted Ruff, and the missing `threading` import in the asynchronous LPD8 remap writer. Those were corrected. The local `./scripts/check.sh` gate passed on the latest combined tree: Ruff, formatting, mypy, **460 tests**, compile checks, desktop-entry/metadata validation and ShellCheck. The AppStream uppercase-ID item remains a pedantic warning; validation is successful.
 
 ## Main findings and fixes on the PR branch
 
@@ -80,7 +80,7 @@ The supervisor connection recovered and returned service version `1.5.0`, OAuth 
 
 The PC state now verified after reconnection:
 
-- Checkout was safely synced clean to `d86b030` on branch `fix/gtk4-install-and-smoke-test` before this handoff refresh; this documentation refresh follows the code commit.
+- Checkout was safely synced clean to `dc839f2` on branch `fix/gtk4-install-and-smoke-test` before this handoff refresh; this documentation refresh follows the code commit.
 - CLI: `hearth 5.1.0`; `hearth --paths` resolves config under `~/.config/hearth`, state under `~/.local/state/hearth`, cache under `~/.cache/hearth`, and runtime under `/run/user/1000/hearth` when the session environment is set.
 - Desktop integration: the existing desktop launcher and `~/bin/hearth-mixer` wrapper were preserved; `~/.local/bin/hearth` points to the executable in-tree shim.
 - User-session status: `hearth --status` says **Everything is working**, all 17 monitored services are healthy, LPD8 is connected and pads/knobs are live, and Launchpad Mini is controlled by Padfire.
