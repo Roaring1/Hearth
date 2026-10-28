@@ -11,7 +11,8 @@ This document is the durable checkpoint for the current repair/audit pass. It is
 - Branch: fix/gtk4-install-and-smoke-test
 - Local checkout is synced and clean at `43e7c1c876456c7bccf8a81972b7d1624ae4cda5`; the diagnostic bundle script is executable (`100755`) again after a GitHub contents-API edit had changed its mode.
 - Latest completed CI run before the mode-only commit: run #82, commit `9d3cf26`, **all jobs successful**: https://github.com/Roaring1/Hearth/actions/runs/40703049769
-- CI run #83 is running for `43e7c1c` to verify the mode-only commit: https://github.com/Roaring1/Hearth/actions/runs/40784116221. Always use the newest branch head and workflow run as current truth.
+- CI run #83 for `43e7c1c` completed successfully across lint/types, GTK4 smoke, Python 3.11/3.12/3.13 and install smoke: https://github.com/Roaring1/Hearth/actions/runs/40784116221.
+- CI run #84 for this handoff update (`d8ad784`) was queued when last checked: https://github.com/Roaring1/Hearth/actions/runs/40784293718. Always use the newest branch head and workflow run as current truth.
 - The PR currently contains many small commits because GitHub's file-update endpoint made one commit per file while the development PC connector was unavailable. Prefer **Squash and merge** (or consolidate history before merging) instead of preserving the entire incremental history. Do not merge without the maintainer's decision.
 
 ## CI evidence
@@ -90,7 +91,7 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 ### P0 — remaining interactive verification
 
 1. Run a normal Plasma-session smoke test (not just Xvfb): open/close/reopen Hearth, adjust per-app volume and mute, drag an app to another bus, toggle a route, open IN/OUT popovers while a route job is pending, and verify LPD8 LED feedback. Check that controls remain responsive if pactl/ALSA is slow or the controller is disconnected.
-2. Inspect the machine-specific `config.json` writer and confirm its future writes always remain atomic/private. The existing on-disk config has been secured to `0600`; do not copy its contents into the public repo.
+2. The `config.json` audit is complete: there is no in-app writer. `src/hearth/config.py` only reads/parses it, and legacy callers delegate to that read path. The on-disk file was secured to `0600`; do not copy its contents into the public repo. If a writer is added later, require atomic 0600 writes and a regression test.
 3. Verify the current `hearth-ui.service` active/running state through a real UI interaction without restarting it just for the sake of testing.
 
 ### P1 — remaining audit/review
