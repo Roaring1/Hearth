@@ -85,10 +85,11 @@ def parse(text: str) -> dict[str, str]:
 def apply_edits(text: str, updates: dict[str, str]) -> str:
     """Return ``text`` with ``updates`` applied, preserving everything else.
 
-    A key already present is rewritten where it stands; a new key is
-    appended. Comments, ordering and keys this module knows nothing about
-    survive, because a config file shared with two shell scripts is not
-    ours to rewrite.
+    Every occurrence of an updated key is rewritten where it stands; a new
+    key is appended. Updating all duplicates matters because the shell daemon
+    uses the last assignment it sources. Comments, ordering and keys this
+    module knows nothing about survive, because a config file shared with two
+    shell scripts is not ours to rewrite.
     """
     if not updates:
         return text
@@ -97,8 +98,11 @@ def apply_edits(text: str, updates: dict[str, str]) -> str:
     for line in text.splitlines():
         match = _ASSIGN.match(line.strip())
         key = match.group("key") if match else None
-        if key in remaining:
-            out.append(f'{key}="{remaining.pop(key)}"')
+        if key in updates:
+            # Rewrite every occurrence; leaving a later duplicate untouched
+            # would make the sourced shell config override this edit.
+            out.append(f'{key}="{updates[key]}"')
+            remaining.pop(key, None)
         else:
             out.append(line)
     for key, value in remaining.items():

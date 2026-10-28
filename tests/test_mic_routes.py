@@ -55,6 +55,21 @@ def test_a_new_key_is_appended_rather_than_lost() -> None:
     assert mic_routes.parse(edited)["CARLA_TO_B2"] == "true"
 
 
+def test_edit_normalizes_every_duplicate_assignment_of_a_known_key() -> None:
+    text = (
+        'B2_ROUTE="astro"\n'
+        "# a later assignment currently overrides the first one\n"
+        'B2_ROUTE="sm7b"\n'
+    )
+
+    edited = mic_routes.apply_edits(text, {"B2_ROUTE": "none"})
+
+    assert edited.count('B2_ROUTE="none"') == 2
+    assert 'B2_ROUTE="astro"' not in edited
+    assert 'B2_ROUTE="sm7b"' not in edited
+    assert mic_routes.parse(edited)["B2_ROUTE"] == "none"
+
+
 def test_no_edits_leaves_the_file_byte_identical() -> None:
     assert mic_routes.apply_edits(SAMPLE, {}) == SAMPLE
 

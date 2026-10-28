@@ -137,12 +137,16 @@ thing worth pasting into a bug report:
 ```text
 Everything is working
 
-Services        All 18 monitored services are healthy
+Services        All N monitored services are healthy
 Voice effects   Voice effects on for Stream
 Screen share    Ready to share Game, Music when you start a screen share
 Microphone      No microphone recordings yet - start the recorder to check your mic
 Controls        LPD8 pad controller connected - knobs and pads are live
 ```
+
+`N` is a runtime count, not a fixed requirement: Hearth counts monitored units
+it can meaningfully judge and excludes oneshot/ondemand and unknown unit kinds.
+The exact number can vary as services and support units are installed or unloaded.
 
 **Keybinds:** `Ctrl+,` opens Setup · `Ctrl+L` opens LPD8 Controls.
 

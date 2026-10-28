@@ -10,6 +10,15 @@ Selecting an output requests a loopback from that strip's exact monitor source
 to the selected sink. A small set of headset endpoints is exclusive: selecting
 one removes its paired endpoint after the requested route has loaded.
 
+The collector reads sink mute state and the route module table away from
+GTK's main thread and includes the route graph in each snapshot. The mixer
+therefore does not launch a module query, a sink query, and several per-output
+mute queries from its GTK repaint callback. Core sink/stream/source reads are
+checked; a failed query skips that poll instead of masquerading as an empty
+graph and making strips look unplugged. If only the optional route query fails,
+the snapshot marks routes unknown and the UI keeps the last verified route
+graph.
+
 Route mutations and the follow-up module-table query run away from GTK's main
 thread, with bounded command timeouts. While a mutation is pending, the
 initiating checkbox and output destination controls on that strip are disabled;
@@ -40,7 +49,9 @@ private advisory lock, then use a unique same-directory temporary file and
 atomic replacement. That prevents simultaneous edits to different keys from
 overwriting each other. The writer accepts only the route and boolean keys it
 owns, with fixed value choices; unknown keys and shell-unsafe values are
-refused because the config is sourced by the daemon. Symlinked/non-regular
+refused because the config is sourced by the daemon. If an owned key appears
+more than once, every occurrence is rewritten so a later shell assignment
+cannot silently override the UI choice. Symlinked/non-regular
 config paths and invalid UTF-8 are treated as unreadable; original bytes are
 preserved and edits fail closed. If the lock, read, or
 replacement cannot be completed, the edit fails closed. Hearth does not apply a
