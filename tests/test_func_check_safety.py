@@ -1432,7 +1432,7 @@ def test_app_mute_optimistic_signature_is_reconciled_if_snapshot_disagrees(
     mixer.Strip._fill_listeners(strip, [listener])
     original_row = strip.listeners.children[0]
 
-    button = FakeWidget()
+    button = strip.listeners.children[0].children[2]
     name_label = strip.listeners.children[0].children[1]
     mixer.Strip._on_app_mute(strip, button, listener)
 
