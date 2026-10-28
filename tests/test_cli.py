@@ -52,6 +52,85 @@ def test_unknown_level_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) ->
     assert logging.getLogger().level == getattr(logging, logging_setup.DEFAULT_LEVEL)
 
 
+def test_legacy_mixer_config_writer_updates_multiple_keys_atomically(
+    tmp_path: Path,
+) -> None:
+    from hearth import legacy_core as core
+
+    conf = tmp_path / "roaring_mixer.conf"
+    conf.write_text(
+        '# keep this comment\nASTRO_TARGET="old"\nLATENCY_MSEC="12"\nUNKNOWN="keep"\n',
+        encoding="utf-8",
+    )
+    conf.chmod(0o640)
+
+    assert core.write_conf_keys(
+        conf,
+        {
+            "ASTRO_TARGET": "alsa_output.usb-Astro.stereo-game",
+            "LATENCY_MSEC": "18",
+        },
+    )
+
+    text = conf.read_text(encoding="utf-8")
+    assert 'ASTRO_TARGET="alsa_output.usb-Astro.stereo-game"' in text
+    assert 'LATENCY_MSEC="18"' in text
+    assert 'UNKNOWN="keep"' in text
+    assert "# keep this comment" in text
+    assert conf.stat().st_mode & 0o777 == 0o640
+    assert list(tmp_path.glob("*.tmp.*")) == []
+    assert (tmp_path / ".roaring_mixer.conf.lock").stat().st_mode & 0o777 == 0o600
+
+
+def test_legacy_mixer_config_writer_fails_closed_on_missing_invalid_or_symlinked_files(
+    tmp_path: Path,
+) -> None:
+    from hearth import legacy_core as core
+
+    absent = tmp_path / "absent.conf"
+    assert core.write_conf_keys(absent, {"LATENCY_MSEC": "20"}) is False
+
+    invalid = tmp_path / "invalid.conf"
+    raw = bytes([65, 83, 84, 82, 79, 95, 84, 65, 82, 71, 69, 84, 61, 255])
+    invalid.write_bytes(raw)
+    assert core.write_conf_keys(invalid, {"LATENCY_MSEC": "20"}) is False
+    assert invalid.read_bytes() == raw
+
+    victim = tmp_path / "victim.conf"
+    victim.write_text('ASTRO_TARGET="keep"\n', encoding="utf-8")
+    link = tmp_path / "linked.conf"
+    link.symlink_to(victim)
+    assert core.write_conf_keys(link, {"ASTRO_TARGET": "overwrite"}) is False
+    assert link.is_symlink()
+    assert victim.read_text(encoding="utf-8") == 'ASTRO_TARGET="keep"\n'
+
+
+def test_legacy_mixer_config_concurrent_updates_do_not_lose_keys(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from hearth import legacy_core as core
+
+    conf = tmp_path / "roaring_mixer.conf"
+    conf.write_text('ASTRO_TARGET="chat"\nLATENCY_MSEC="12"\n' + "# pad\n" * 20_000)
+    start = Barrier(3)
+
+    def update(values: dict[str, str]) -> bool:
+        start.wait()
+        return core.write_conf_keys(conf, values)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(update, {"ASTRO_TARGET": "game"})
+        second = pool.submit(update, {"LATENCY_MSEC": "24"})
+        start.wait()
+        assert first.result()
+        assert second.result()
+
+    text = conf.read_text()
+    assert 'ASTRO_TARGET="game"' in text
+    assert 'LATENCY_MSEC="24"' in text
+
+
 def test_show_does_not_trust_a_stale_pid_file(monkeypatch: pytest.MonkeyPatch) -> None:
     from hearth import legacy_core as core
     from hearth import ui

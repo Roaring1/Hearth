@@ -153,14 +153,23 @@ class SetupWindow(Gtk.Window):
 
         return box
 
-    def _on_reset_failed(self, _button: Gtk.Button) -> None:
+    def _on_reset_failed(self, button: Gtk.Button) -> None:
         failed = [u.name for u in self._units if u.failed]
         if failed:
-            services_mod.reset_failed(*failed)
+            if not services_mod.reset_failed(*failed):
+                button.set_tooltip_text("Could not start systemctl; check the user session")
+                return
+            button.set_tooltip_text(
+                "systemctl --user reset-failed. Use after a unit has been fixed\n"
+                "but systemd still refuses to start it."
+            )
             GLib.timeout_add_seconds(2, self._refresh_once)
 
-    def _on_restart(self, _button: Gtk.Button, unit: str) -> None:
-        services_mod.restart(unit)
+    def _on_restart(self, button: Gtk.Button, unit: str) -> None:
+        if not services_mod.restart(unit):
+            button.set_tooltip_text("Could not start systemctl; check the user session")
+            return
+        button.set_tooltip_text(None)
         # systemd is asynchronous, so re-read rather than claim success.
         GLib.timeout_add_seconds(3, self._refresh_once)
 
@@ -213,10 +222,27 @@ class SetupWindow(Gtk.Window):
     def _on_save_devices(self, _button: Gtk.Button) -> None:
         core = self._core
         target = core.ASTRO_GAME if self.astro_game.get_active() else core.ASTRO_CHAT
-        core.write_conf_key(core.MXCONF, "ASTRO_TARGET", target)
-        core.write_conf_key(core.MXCONF, "LATENCY_MSEC", str(int(self.latency.get_value())))
-        services_mod.restart(ROUTES_UNIT)
-        self.save_devices.set_label("Saved")
+        updates = {
+            "ASTRO_TARGET": target,
+            "LATENCY_MSEC": str(int(self.latency.get_value())),
+        }
+        if not core.write_conf_keys(core.MXCONF, updates):
+            self.save_devices.set_label("Save failed")
+            self.save_devices.set_tooltip_text(
+                "Could not save mixer configuration; the previous file was preserved"
+            )
+            GLib.timeout_add_seconds(4, self._devices_settled)
+            return
+
+        if not services_mod.restart(ROUTES_UNIT):
+            self.save_devices.set_label("Saved*")
+            self.save_devices.set_tooltip_text(
+                "Configuration was saved, but routing could not be restarted. "
+                "Restart the routing service manually to apply it."
+            )
+        else:
+            self.save_devices.set_label("Saved")
+            self.save_devices.set_tooltip_text("Write the config and restart routing")
         GLib.timeout_add_seconds(4, self._devices_settled)
 
     def _devices_settled(self) -> bool:

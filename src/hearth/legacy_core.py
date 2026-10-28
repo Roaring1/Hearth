@@ -40,8 +40,15 @@ Phase 3 is progressively replacing it with the typed modules alongside it
 #   - 29/04/2026: SIGUSR1/--dump -> tracemalloc snapshot in last_debug/
 #   - 29/04/2026: _drain used remove() not destroy() -> 11 GB RAM leak
 
-import os, re, time, threading, subprocess
+import fcntl
 import logging
+import os
+import re
+import stat
+import subprocess
+import tempfile
+import threading
+import time
 from pathlib import Path
 
 from hearth import config, ipc, paths, settings
@@ -493,32 +500,105 @@ def read_conf(path):
     return out
 
 
-def write_conf_key(path, key, value):
+def write_conf_keys(path, updates):
+    """Atomically update several assignments in the shared mixer shell config.
+
+    A private advisory lock protects the full read/merge/write transaction;
+    unique same-directory temporary files protect readers from partial writes
+    and avoid the old PID-only temp-name race. Missing, malformed, or
+    unreadable config files fail closed so Setup cannot report a false save.
+    """
     p = Path(path)
-    if not p.exists():
-        return
-    text = p.read_text()
-    nl = f'{key}="{value}"'
-    if re.search(rf"^{re.escape(key)}=", text, re.MULTILINE):
-        # literal replacement (lambda) so values containing backslashes or
-        # regex group refs like \1 / \g<0> are written verbatim, not
-        # interpreted as re.sub replacement escapes (fuzz-found bug).
-        text = re.sub(rf"^{re.escape(key)}=.*", lambda _m: nl, text, flags=re.MULTILINE)
-    else:
-        text += f"\n{nl}\n"
-    # Atomic replace: a partial write here used to leave the mixer or
-    # mic-router config truncated, which the shell daemons then read as
-    # "no settings at all".
-    tmp = p.with_name(p.name + f".tmp.{os.getpid()}")
+    if not updates:
+        return True
+
+    normalized = {}
+    for key, value in updates.items():
+        if not re.fullmatch(r"[A-Z0-9_]+", key) or "\n" in str(value) or "\r" in str(value):
+            log.warning("refusing invalid mixer config assignment %r", key)
+            return False
+        # Keep values literal inside the shell's double-quoted assignment.
+        literal = str(value)
+        literal = (
+            literal.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("$", "\\$")
+            .replace("`", "\\`")
+        )
+        normalized[key] = f'{key}="{literal}"'
+
     try:
-        tmp.write_text(text)
-        os.replace(tmp, p)
-    except Exception:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = p.with_name(f".{p.name}.lock")
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        lock_fd = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        log.warning("could not lock mixer config %s: %s", p, exc)
+        return False
+
+    try:
+        os.fchmod(lock_fd, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
         try:
-            tmp.unlink()
-        except Exception:
-            pass
-        raise
+            try:
+                metadata = p.lstat()
+                if not stat.S_ISREG(metadata.st_mode):
+                    log.warning("refusing to edit non-regular mixer config %s", p)
+                    return False
+                original = p.read_text(encoding="utf-8")
+                original_mode = stat.S_IMODE(metadata.st_mode)
+            except (OSError, UnicodeError) as exc:
+                log.warning("could not read mixer config %s: %s", p, exc)
+                return False
+
+            text = original
+            for key, assignment in normalized.items():
+                if re.search(rf"^{re.escape(key)}=", text, re.MULTILINE):
+                    # Use a lambda so replacement text is literal rather than
+                    # interpreting backslashes as regex replacement escapes.
+                    text = re.sub(
+                        rf"^{re.escape(key)}=.*",
+                        lambda _match, line=assignment: line,
+                        text,
+                        flags=re.MULTILINE,
+                    )
+                else:
+                    if text and not text.endswith("\n"):
+                        text += "\n"
+                    text += f"{assignment}\n"
+
+            fd, tmp_name = tempfile.mkstemp(prefix=f"{p.name}.tmp.", dir=p.parent)
+            tmp = Path(tmp_name)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    stream.write(text)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                tmp.chmod(original_mode)
+                tmp.replace(p)
+            except BaseException:
+                tmp.unlink(missing_ok=True)
+                raise
+        except (OSError, UnicodeError) as exc:
+            log.warning("could not update mixer config %s: %s", p, exc)
+            return False
+        return True
+    except OSError as exc:
+        log.warning("could not lock or update mixer config %s: %s", p, exc)
+        return False
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except OSError as exc:
+            log.debug("could not unlock mixer config %s: %s", p, exc)
+        finally:
+            os.close(lock_fd)
+
+
+def write_conf_key(path, key, value):
+    """Compatibility wrapper for one assignment."""
+    return write_conf_keys(path, {key: value})
 
 
 MOONLIGHT_SVC = Path.home() / ".config/systemd/user/roaring-moonlight-mic.service"

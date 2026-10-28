@@ -605,10 +605,13 @@ class RemapWindow(Gtk.Window):
 
     def _restart(self) -> None:
         try:
-            services_mod.restart(lpd8map.UNIT)
+            started = services_mod.restart(lpd8map.UNIT)
         except Exception as exc:  # pragma: no cover - surfaced, not raised
             log.warning("could not restart %s: %s", lpd8map.UNIT, exc)
             self._say(f"Could not restart the LPD8 service: {exc}")
+            return
+        if not started:
+            self._say("Could not restart the LPD8 service: systemctl could not be started")
 
     def _on_close(self, *_args) -> bool:
         # A queued restart must not outlive the window that promised it.

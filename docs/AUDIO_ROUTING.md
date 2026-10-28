@@ -38,10 +38,12 @@ Hearth preserves unknown keys, ordering, and comments when editing this shared
 shell config. Writers serialize the full read/merge/write transaction with a
 private advisory lock, then use a unique same-directory temporary file and
 atomic replacement. That prevents simultaneous edits to different keys from
-overwriting each other. If the lock, read, or replacement cannot be completed,
-the edit fails closed. Hearth does not apply a Carla live-link change
-when its config update failed, and the relevant checkbox returns to its previous
-state with an explanatory tooltip. A saved route may take the router daemon up
+overwriting each other. Invalid UTF-8 is treated as an unreadable config; the
+original bytes are preserved and edits fail closed. If the lock, read, or
+replacement cannot be completed, the edit fails closed. Hearth does not apply a
+Carla live-link change when its config update failed. If the config is saved but
+the pw-link executable cannot start or Carla is unavailable, the saved choice is
+retained and a warning is logged so the next patch launch can apply it. A saved route may take the router daemon up
 to one polling interval to converge; the UI schedules a refresh after that
 interval.
 
@@ -55,6 +57,23 @@ started, Hearth keeps the previous mute state or refreshes the displayed
 volume from the collector and shows an explanatory tooltip. Route creation and
 removal use a checked, bounded command because those operations need explicit
 ordering and a live-graph verification step.
+
+## Setup panel: headset target and latency
+
+The Setup panel saves the headset endpoint and LATENCY_MSEC together in
+the mixer configuration file under ~/.config/hearth/roaring_mixer.conf (or
+the legacy path selected when the new file is absent). Both assignments are
+edited in one locked, atomic transaction; comments and unrelated keys are
+preserved. A missing, malformed, unreadable, or symlinked config is not
+silently recreated or overwritten. If the write fails, Setup reports
+**Save failed** and does not restart the routing service.
+
+After a successful save, Setup requests a routing-service restart. A Saved*
+label means the file was persisted but systemctl could not be started; the
+tooltip explains that the service must be restarted manually. A plain Saved
+means the config was written and the restart command was successfully launched,
+not that systemd has finished the transition. Hearth refreshes the status
+after the asynchronous operation.
 
 ## Read-only troubleshooting
 

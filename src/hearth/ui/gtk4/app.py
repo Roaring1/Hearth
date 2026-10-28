@@ -1578,7 +1578,10 @@ class MixerWindow(Gtk.ApplicationWindow):
         """Restart whichever units own the buses that are missing."""
         if not self.banner_units:
             return
-        services_mod.restart(*self.banner_units)
+        if not services_mod.restart(*self.banner_units):
+            _button.set_tooltip_text("Could not start systemctl; check the user session")
+            return
+        _button.set_tooltip_text(None)
         self.banner_text.set_text(
             "restarting "
             + ", ".join(

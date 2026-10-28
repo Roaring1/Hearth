@@ -37,6 +37,7 @@ import tempfile
 from pathlib import Path
 
 from hearth import proc
+from hearth.errors import CommandError
 
 log = logging.getLogger(__name__)
 
@@ -102,11 +103,12 @@ def apply_edits(text: str, updates: dict[str, str]) -> str:
 
 
 def read(path: Path | None = None) -> dict[str, str]:
-    """Current config values, empty when the file is missing."""
+    """Current config values, empty when missing or unreadable."""
     target = path or CONF_PATH
     try:
         return parse(target.read_text(encoding="utf-8"))
-    except OSError:
+    except (OSError, UnicodeError) as exc:
+        log.warning("could not read microphone routing config %s: %s", target, exc)
         return {}
 
 
@@ -139,9 +141,10 @@ def write(updates: dict[str, str], path: Path | None = None) -> bool:
                 original = target.read_text(encoding="utf-8")
             except FileNotFoundError:
                 original = ""
-            except OSError as exc:
-                # Do not treat an unreadable existing file as missing: doing
-                # so would erase comments and settings this module doesn't own.
+            except (OSError, UnicodeError) as exc:
+                # Do not treat an unreadable/malformed existing file as
+                # missing: doing so would erase comments and settings this
+                # module doesn't own.
                 log.warning("could not read %s; refusing to overwrite: %s", target, exc)
                 return False
 
@@ -276,7 +279,11 @@ def set_carla(bus: str, on: bool, *, path: Path | None = None) -> bool:
         # choice was not persisted, applying it live would only be temporary
         # and would fight the daemon's authoritative configuration.
         return False
-    link_carla(bus, on)
+    if not link_carla(bus, on):
+        # The stored preference remains authoritative; the patch script can
+        # apply it when Carla is available again. Do not make a live-link
+        # launch failure look like a failed config write to the UI.
+        log.warning("saved Carla routing for %s, but the live link could not be applied", bus)
     return True
 
 
@@ -287,10 +294,22 @@ def link_carla(bus: str, on: bool, *, timeout: float = 5.0) -> bool:
     ok = True
     for source, port in CARLA_PORTS:
         cmd = ["pw-link"] if on else ["pw-link", "-d"]
-        result = proc.run([*cmd, source, f"{bus}:{port}"], timeout=timeout, check=False)
+        try:
+            result = proc.run([*cmd, source, f"{bus}:{port}"], timeout=timeout, check=False)
+        except CommandError as exc:
+            log.warning(
+                "pw-link %s %s -> %s:%s could not run: %s",
+                "on" if on else "off",
+                source,
+                bus,
+                port,
+                exc,
+            )
+            ok = False
+            continue
         if not result.ok:
-            # Already connected, already gone, or Carla is not up. None of
-            # those are worth a dialog; the next patch run reconciles.
+            # Already connected, already gone, or Carla is not up. The saved
+            # preference is retained and the next patch run can reconcile.
             log.debug("pw-link %s %s -> %s:%s failed", "on" if on else "off", source, bus, port)
             ok = False
     return ok

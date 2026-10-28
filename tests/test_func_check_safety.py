@@ -36,6 +36,12 @@ def _load_mixer() -> ModuleType:
     return app
 
 
+def _load_setup() -> ModuleType:
+    from hearth.ui.gtk4 import setup
+
+    return setup
+
+
 def _fake_pactl(calls: list[list[str]]):
     def run(command, **_kwargs):
         argv = list(command)
@@ -573,6 +579,126 @@ def test_app_move_surfaces_pactl_launch_failure(
 
     assert mixer.Strip._on_drop(strip, None, "app:42", 0.0, 0.0) is False
     assert "Could not move this app" in strip.tooltip
+
+
+def test_setup_save_reports_saved_config_when_restart_cannot_start(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    setup = _load_setup()
+    writes: list[tuple[Path, dict[str, str]]] = []
+    restart_calls: list[tuple[str, ...]] = []
+    timers: list[tuple[int, object]] = []
+
+    class FakeButton:
+        label = "Save"
+        tooltip = "Write the config and restart routing"
+
+        def set_label(self, label: str) -> None:
+            self.label = label
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+    class FakeToggle:
+        def get_active(self) -> bool:
+            return True
+
+    class FakeSpin:
+        def get_value(self) -> float:
+            return 18.0
+
+    core = SimpleNamespace(
+        MXCONF=tmp_path / "roaring_mixer.conf",
+        ASTRO_GAME="alsa_output.usb-Astro.stereo-game",
+        ASTRO_CHAT="alsa_output.usb-Astro.stereo-chat",
+        write_conf_keys=lambda path, updates: writes.append((path, dict(updates))) or True,
+    )
+    window = SimpleNamespace(
+        _core=core,
+        astro_game=FakeToggle(),
+        latency=FakeSpin(),
+        save_devices=FakeButton(),
+    )
+    window._devices_settled = lambda: False
+
+    def restart(*units: str) -> bool:
+        restart_calls.append(units)
+        return False
+
+    monkeypatch.setattr(setup.services_mod, "restart", restart)
+    monkeypatch.setattr(
+        setup.GLib,
+        "timeout_add_seconds",
+        lambda seconds, callback: timers.append((seconds, callback)) or 1,
+    )
+
+    setup.SetupWindow._on_save_devices(window, window.save_devices)
+
+    assert writes == [
+        (
+            core.MXCONF,
+            {
+                "ASTRO_TARGET": "alsa_output.usb-Astro.stereo-game",
+                "LATENCY_MSEC": "18",
+            },
+        )
+    ]
+    assert restart_calls == [(setup.ROUTES_UNIT,)]
+    assert window.save_devices.label == "Saved*"
+    assert "saved" in window.save_devices.tooltip.lower()
+    assert "could not be restarted" in window.save_devices.tooltip.lower()
+    assert len(timers) == 1
+
+
+def test_setup_save_does_not_restart_or_claim_success_when_config_write_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    setup = _load_setup()
+    restart_calls: list[tuple[str, ...]] = []
+
+    class FakeButton:
+        label = "Save"
+        tooltip = None
+
+        def set_label(self, label: str) -> None:
+            self.label = label
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+    class FakeToggle:
+        def get_active(self) -> bool:
+            return False
+
+    class FakeSpin:
+        def get_value(self) -> float:
+            return 12.0
+
+    core = SimpleNamespace(
+        MXCONF=tmp_path / "missing.conf",
+        ASTRO_GAME="game",
+        ASTRO_CHAT="chat",
+        write_conf_keys=lambda *_args, **_kwargs: False,
+    )
+    window = SimpleNamespace(
+        _core=core,
+        astro_game=FakeToggle(),
+        latency=FakeSpin(),
+        save_devices=FakeButton(),
+    )
+    window._devices_settled = lambda: False
+    monkeypatch.setattr(
+        setup.services_mod,
+        "restart",
+        lambda *units: restart_calls.append(units) or True,
+    )
+    monkeypatch.setattr(setup.GLib, "timeout_add_seconds", lambda *_args: 1)
+
+    setup.SetupWindow._on_save_devices(window, window.save_devices)
+
+    assert window.save_devices.label == "Save failed"
+    assert "could not save" in window.save_devices.tooltip.lower()
+    assert restart_calls == []
 
 
 def test_layout_gestures_do_not_persist_user_preferences() -> None:

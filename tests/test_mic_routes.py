@@ -230,6 +230,18 @@ def test_a_missing_file_reads_as_empty(tmp_path: Path) -> None:
     assert mic_routes.read(tmp_path / "absent.conf") == {}
 
 
+def test_invalid_utf8_config_reads_as_empty_and_refuses_overwrite(
+    tmp_path: Path,
+) -> None:
+    conf = tmp_path / "roaring_mic_router.conf"
+    original = bytes([66, 49, 95, 82, 79, 85, 84, 69, 61, 34, 115, 109, 55, 98, 34, 10, 255, 254])
+    conf.write_bytes(original)
+
+    assert mic_routes.read(conf) == {}
+    assert mic_routes.write({"B2_ROUTE": "none"}, conf) is False
+    assert conf.read_bytes() == original
+
+
 def test_flow_names_what_actually_feeds_each_bus() -> None:
     values = mic_routes.parse(
         mic_routes.apply_edits(SAMPLE, {"B1_ACTIVE": "true", "B1_ROUTE": "sm7b"})
@@ -257,6 +269,33 @@ def test_carla_live_link_is_not_changed_when_config_save_fails(
 
     assert mic_routes.set_carla("mic_b1", True) is False
     assert calls == []
+
+
+def test_carla_link_reports_missing_or_unexecutable_pw_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mic_routes.proc, "have", lambda _program: True)
+    calls: list[list[str]] = []
+
+    def cannot_run(argv, **_kwargs):
+        calls.append(list(argv))
+        from hearth.errors import CommandError
+
+        raise CommandError(argv, stderr="pw-link is not executable")
+
+    monkeypatch.setattr(mic_routes.proc, "run", cannot_run)
+
+    assert mic_routes.link_carla("mic_b1", True) is False
+    assert len(calls) == len(mic_routes.CARLA_PORTS)
+
+
+def test_carla_live_link_launch_failure_does_not_undo_a_saved_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mic_routes, "write", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(mic_routes, "link_carla", lambda *_args, **_kwargs: False)
+
+    assert mic_routes.set_carla("mic_b1", False) is True
 
 
 def test_carla_config_is_saved_before_applying_the_live_link(
