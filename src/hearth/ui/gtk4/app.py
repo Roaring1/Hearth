@@ -43,6 +43,7 @@ from hearth import mic_routes  # noqa: E402
 from hearth import services as services_mod  # noqa: E402
 from hearth import settings as settings_mod  # noqa: E402
 from hearth.audio import pactl  # noqa: E402
+from hearth.errors import CommandError  # noqa: E402
 from hearth.ui.gtk4 import icons as icons_mod  # noqa: E402
 from hearth.ui.gtk4 import style as style_mod  # noqa: E402
 from hearth.ui.gtk4.widgets import Fader, Meter, Scale, Sliver, parse_rgb, rounded  # noqa: E402
@@ -657,13 +658,24 @@ class Strip(Gtk.Box):
             GLib.timeout_add_seconds(4, self._route_settled)
             return
         if wanted:
-            pactl.load_loopback(
-                source,
-                self.channel.sink,
-                latency_msec=int(self.win.cfg.get("latency_msec", 12) or 12),
-            )
+            try:
+                pactl.load_loopback(
+                    source,
+                    self.channel.sink,
+                    latency_msec=int(self.win.cfg.get("latency_msec", 12) or 12),
+                )
+            except CommandError as exc:
+                log.warning("could not route %s to %s: %s", source, self.channel.sink, exc)
+                self._routing = True
+                try:
+                    check.set_active(not wanted)
+                    check.set_tooltip_text(f"Could not create this route: {exc}")
+                finally:
+                    self._routing = False
+                return
         else:
             pactl.unload_loopbacks(source, [self.channel.sink])
+        check.set_tooltip_text(None)
         GLib.timeout_add(400, self._route_settled)
 
     def _on_route(self, check: Gtk.CheckButton, sink: str) -> None:
@@ -674,9 +686,15 @@ class Strip(Gtk.Box):
             return
         source = f"{self.channel.sink}.monitor"
         if check.get_active():
-            pactl.load_loopback(
-                source, sink, latency_msec=int(self.win.cfg.get("latency_msec", 12) or 12)
-            )
+            try:
+                pactl.load_loopback(
+                    source, sink, latency_msec=int(self.win.cfg.get("latency_msec", 12) or 12)
+                )
+            except CommandError as exc:
+                log.warning("could not route %s to %s: %s", source, sink, exc)
+                check.set_tooltip_text(f"Could not create this route: {exc}")
+                GLib.timeout_add(100, self._route_settled)
+                return
             partner = EXCLUSIVE.get(sink)
             if partner:
                 # Both A50 endpoints were ending up ticked, so a bus played
@@ -696,6 +714,35 @@ class Strip(Gtk.Box):
 
     def _route_settled(self) -> bool:
         self.win.collector.refresh_now()
+        if not self._out_checks:
+            return False
+
+        source = f"{self.channel.sink}.monitor"
+        try:
+            modules = pactl.modules()
+            # An empty result is also how pactl's read wrapper represents a
+            # failed query; keep the current UI until a real snapshot arrives.
+            if not modules:
+                return False
+            live = {
+                loop.sink
+                for loop in pactl.select_loopbacks(modules, source=source, exact_source=True)
+            }
+        except Exception as exc:  # pragma: no cover - protect the GTK callback
+            log.warning("could not refresh routes for %s: %s", source, exc)
+            return False
+
+        # The initial checkbox state can be stale by the time a fire-and-
+        # forget pactl command completes. Reconcile to the actual graph while
+        # suppressing toggled callbacks, otherwise this would issue commands
+        # recursively or leave a failed request displayed as successful.
+        self._routing = True
+        try:
+            for sink, widget in self._out_checks.items():
+                widget.set_active(sink in live)
+                widget.set_tooltip_text(None)
+        finally:
+            self._routing = False
         return False
 
     def _on_app_mute(self, button: Gtk.Button, listener: Listener) -> None:

@@ -11,7 +11,7 @@ import importlib.util
 import subprocess
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -27,6 +27,12 @@ def _load_func_check() -> ModuleType:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _load_mixer() -> ModuleType:
+    from hearth.ui.gtk4 import app
+
+    return app
 
 
 def _fake_pactl(calls: list[list[str]]):
@@ -82,6 +88,133 @@ def test_live_audio_mutation_is_refused_without_complete_snapshot() -> None:
     assert module.can_restore_audio_state([50], "no")
     assert not module.can_restore_audio_state([], "yes")
     assert not module.can_restore_audio_state([50], "unknown")
+
+
+def test_route_settled_reconciles_open_checkboxes_to_the_actual_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+
+    class FakeCheck:
+        def __init__(self, active: bool) -> None:
+            self.active = active
+            self.tooltip = "stale failure"
+
+        def set_active(self, active: bool) -> None:
+            self.active = active
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+    class FakeCollector:
+        refreshes = 0
+
+        def refresh_now(self) -> None:
+            self.refreshes += 1
+
+    live_modules = [
+        mixer.pactl.Module(
+            index=55,
+            name="module-loopback",
+            args="source=vm_game.monitor sink=vm_chat",
+        ),
+        mixer.pactl.Module(
+            index=56,
+            name="module-loopback",
+            args="source=vm_game.monitor-extra sink=vm_music",
+        ),
+    ]
+    monkeypatch.setattr(mixer.pactl, "modules", lambda: live_modules)
+    collector = FakeCollector()
+    strip = SimpleNamespace(
+        win=SimpleNamespace(collector=collector),
+        channel=SimpleNamespace(sink="vm_game"),
+        _out_checks={
+            "vm_chat": FakeCheck(False),
+            "vm_music": FakeCheck(True),
+        },
+        _routing=False,
+    )
+
+    assert mixer.Strip._route_settled(strip) is False
+    assert collector.refreshes == 1
+    assert strip._out_checks["vm_chat"].active is True
+    assert strip._out_checks["vm_music"].active is False
+    assert all(check.tooltip is None for check in strip._out_checks.values())
+    assert strip._routing is False
+
+
+def test_route_settled_keeps_checkbox_state_when_module_read_is_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+
+    class FakeCheck:
+        def __init__(self) -> None:
+            self.active = True
+            self.tooltip = "leave unchanged"
+
+        def set_active(self, active: bool) -> None:
+            self.active = active
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+    class FakeCollector:
+        def refresh_now(self) -> None:
+            pass
+
+    monkeypatch.setattr(mixer.pactl, "modules", lambda: [])
+    check = FakeCheck()
+    strip = SimpleNamespace(
+        win=SimpleNamespace(collector=FakeCollector()),
+        channel=SimpleNamespace(sink="vm_game"),
+        _out_checks={"vm_chat": check},
+        _routing=False,
+    )
+
+    mixer.Strip._route_settled(strip)
+
+    assert check.active is True
+    assert check.tooltip == "leave unchanged"
+    assert strip._routing is False
+
+
+def test_input_route_launch_failure_reverts_checkbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+
+    class FakeCheck:
+        active = True
+        tooltip = None
+
+        def get_active(self) -> bool:
+            return self.active
+
+        def set_active(self, active: bool) -> None:
+            self.active = active
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+    def fail_to_load(*_args, **_kwargs):
+        raise mixer.CommandError(["pactl", "load-module"], stderr="not available")
+
+    monkeypatch.setattr(mixer.pactl, "load_loopback", fail_to_load)
+    check = FakeCheck()
+    strip = SimpleNamespace(
+        _routing=False,
+        channel=SimpleNamespace(sink="mic_b1"),
+        win=SimpleNamespace(cfg={"latency_msec": 12}),
+    )
+
+    mixer.Strip._on_mic_in(strip, check, "external_mic")
+
+    assert check.active is False
+    assert check.tooltip is not None
+    assert "Could not create this route" in check.tooltip
+    assert strip._routing is False
 
 
 def test_layout_gestures_do_not_persist_user_preferences() -> None:
