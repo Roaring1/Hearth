@@ -100,6 +100,7 @@ class SetupWindow(Gtk.Window):
         self._poll_id = 0
         self._scanning = False
         self._moonlight_updating = False
+        self._device_save_pending = False
         self._units: list[units_mod.Unit] = []
         self._fault_rows: dict[str, Gtk.Widget] = {}
 
@@ -221,33 +222,80 @@ class SetupWindow(Gtk.Window):
         return box
 
     def _on_save_devices(self, _button: Gtk.Button) -> None:
+        if self._device_save_pending:
+            return
         core = self._core
         target = core.ASTRO_GAME if self.astro_game.get_active() else core.ASTRO_CHAT
         updates = {
             "ASTRO_TARGET": target,
             "LATENCY_MSEC": str(int(self.latency.get_value())),
         }
-        if not core.write_conf_keys(core.MXCONF, updates):
+        self._device_save_pending = True
+        self.save_devices.set_sensitive(False)
+        self.astro_chat.set_sensitive(False)
+        self.astro_game.set_sensitive(False)
+        self.latency.set_sensitive(False)
+        self.save_devices.set_label("Saving…")
+        self.save_devices.set_tooltip_text(
+            "Writing mixer configuration and requesting routing restart"
+        )
+        try:
+            threading.Thread(
+                target=self._save_devices_worker,
+                args=(updates,),
+                name="hearth-headset-config-save",
+                daemon=True,
+            ).start()
+        except RuntimeError as exc:
+            self._finish_save_devices(False, False, f"Could not start config save: {exc}")
+
+    def _save_devices_worker(self, updates: dict[str, str]) -> None:
+        saved = False
+        restart_started = False
+        error = ""
+        try:
+            saved = bool(self._core.write_conf_keys(self._core.MXCONF, updates))
+            if not saved:
+                error = "Could not save mixer configuration; the previous file was preserved."
+            else:
+                restart_started = bool(services_mod.restart(ROUTES_UNIT))
+        except Exception as exc:  # pragma: no cover - surfaced, not raised
+            log.warning("setup: headset config save/restart failed: %s", exc)
+            if saved:
+                error = f"Configuration was saved, but routing restart failed: {exc}"
+            else:
+                error = f"Could not save mixer configuration: {exc}"
+        GLib.idle_add(self._finish_save_devices, saved, restart_started, error)
+
+    def _finish_save_devices(self, saved: bool, restart_started: bool, error: str = "") -> bool:
+        self._device_save_pending = False
+        self.save_devices.set_sensitive(True)
+        self.astro_chat.set_sensitive(True)
+        self.astro_game.set_sensitive(True)
+        self.latency.set_sensitive(True)
+        if not saved:
             self.save_devices.set_label("Save failed")
             self.save_devices.set_tooltip_text(
-                "Could not save mixer configuration; the previous file was preserved"
+                error or "Could not save mixer configuration; the previous file was preserved"
             )
-            GLib.timeout_add_seconds(4, self._devices_settled)
-            return
-
-        if not services_mod.restart(ROUTES_UNIT):
+        elif not restart_started:
             self.save_devices.set_label("Saved*")
             self.save_devices.set_tooltip_text(
-                "Configuration was saved, but routing could not be restarted. "
+                error
+                or "Configuration was saved, but routing could not be restarted. "
                 "Restart the routing service manually to apply it."
             )
         else:
             self.save_devices.set_label("Saved")
-            self.save_devices.set_tooltip_text("Write the config and restart routing")
+            self.save_devices.set_tooltip_text(
+                "Configuration was saved; routing restart was requested"
+            )
         GLib.timeout_add_seconds(4, self._devices_settled)
+        return False
 
     def _devices_settled(self) -> bool:
         self.save_devices.set_label("Save")
+        self.save_devices.set_tooltip_text("Write the config and restart routing")
         return False
 
     # -- where the mic ends up -------------------------------------------

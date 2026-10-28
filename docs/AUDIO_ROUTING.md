@@ -77,10 +77,12 @@ ordering and a live-graph verification step.
 The Setup panel saves the headset endpoint and LATENCY_MSEC together in
 the mixer configuration file under ~/.config/hearth/roaring_mixer.conf (or
 the legacy path selected when the new file is absent). Both assignments are
-edited in one locked, atomic transaction; comments and unrelated keys are
-preserved. A missing, malformed, unreadable, or symlinked config is not
-silently recreated or overwritten. If the write fails, Setup reports
-**Save failed** and does not restart the routing service.
+edited in one locked, atomic transaction on a background worker; comments and
+unrelated keys are preserved. The click handler does not wait for the lock or
+fsync, and the target/latency controls remain disabled until completion. A
+missing, malformed, unreadable, or symlinked config is not silently recreated
+or overwritten. If the write fails, Setup reports **Save failed** and does
+not restart the routing service.
 
 After a successful save, Setup requests a routing-service restart. A Saved*
 label means the file was persisted but systemctl could not be started; the

@@ -990,6 +990,191 @@ def test_app_move_surfaces_pactl_launch_failure(
     assert "Could not move this app" in strip.tooltip
 
 
+def test_setup_save_queues_file_write_outside_gtk_callback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    setup = _load_setup()
+    writes: list[tuple[Path, dict[str, str]]] = []
+    workers = []
+
+    class FakeButton:
+        label = "Save"
+        tooltip = ""
+        sensitive = True
+
+        def set_label(self, label: str) -> None:
+            self.label = label
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
+    class FakeToggle:
+        sensitive = True
+
+        def get_active(self) -> bool:
+            return True
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
+    class FakeSpin:
+        sensitive = True
+
+        def get_value(self) -> float:
+            return 18.0
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
+    class CapturedThread:
+        def __init__(self, *, target, args=(), kwargs=None, **_unused) -> None:
+            self.target = target
+            self.args = args
+            self.kwargs = kwargs or {}
+
+        def start(self) -> None:
+            workers.append(self)
+
+    core = SimpleNamespace(
+        MXCONF=tmp_path / "roaring_mixer.conf",
+        ASTRO_GAME="game",
+        ASTRO_CHAT="chat",
+        write_conf_keys=lambda path, updates: writes.append((path, dict(updates))) or True,
+    )
+    window = SimpleNamespace(
+        _core=core,
+        _device_save_pending=False,
+        astro_chat=FakeToggle(),
+        astro_game=FakeToggle(),
+        latency=FakeSpin(),
+        save_devices=FakeButton(),
+    )
+    window._save_devices_worker = lambda updates: setup.SetupWindow._save_devices_worker(
+        window, updates
+    )
+    window._finish_save_devices = lambda *args: setup.SetupWindow._finish_save_devices(
+        window, *args
+    )
+    window._devices_settled = lambda: False
+    monkeypatch.setattr(setup.threading, "Thread", CapturedThread)
+    monkeypatch.setattr(setup.GLib, "idle_add", lambda callback, *args: callback(*args))
+    monkeypatch.setattr(setup.GLib, "timeout_add_seconds", lambda *_args: 1)
+    monkeypatch.setattr(setup.services_mod, "restart", lambda *_args: True)
+
+    setup.SetupWindow._on_save_devices(window, window.save_devices)
+
+    # The click handler returned without touching the locked config file.
+    assert writes == []
+    assert len(workers) == 1
+    assert window._device_save_pending is True
+    assert window.save_devices.label == "Saving…"
+    assert not window.save_devices.sensitive
+    assert not window.astro_game.sensitive
+    assert not window.astro_chat.sensitive
+    assert not window.latency.sensitive
+
+    # Simulate the worker after the signal handler has returned.
+    worker = workers[0]
+    worker.target(*worker.args, **worker.kwargs)
+
+    assert writes == [
+        (
+            core.MXCONF,
+            {"ASTRO_TARGET": "game", "LATENCY_MSEC": "18"},
+        )
+    ]
+    assert window.save_devices.label == "Saved"
+    assert window._device_save_pending is False
+    assert window.save_devices.sensitive
+    assert window.astro_game.sensitive
+    assert window.astro_chat.sensitive
+    assert window.latency.sensitive
+
+
+def test_setup_save_recovers_if_worker_thread_cannot_start(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    setup = _load_setup()
+
+    class FakeButton:
+        label = "Save"
+        tooltip = ""
+        sensitive = True
+
+        def set_label(self, label: str) -> None:
+            self.label = label
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
+    class FakeToggle:
+        sensitive = True
+
+        def get_active(self) -> bool:
+            return False
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
+    class FakeSpin:
+        sensitive = True
+
+        def get_value(self) -> float:
+            return 12.0
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
+    class ThreadThatCannotStart:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("thread limit reached")
+
+    core = SimpleNamespace(
+        MXCONF=tmp_path / "unused.conf",
+        ASTRO_GAME="game",
+        ASTRO_CHAT="chat",
+        write_conf_keys=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("worker failed before the config write")
+        ),
+    )
+    window = SimpleNamespace(
+        _core=core,
+        _device_save_pending=False,
+        astro_chat=FakeToggle(),
+        astro_game=FakeToggle(),
+        latency=FakeSpin(),
+        save_devices=FakeButton(),
+    )
+    window._devices_settled = lambda: False
+    window._finish_save_devices = lambda *args: setup.SetupWindow._finish_save_devices(
+        window, *args
+    )
+    window._save_devices_worker = lambda _updates: (_ for _ in ()).throw(
+        AssertionError("worker must not run when thread start fails")
+    )
+    monkeypatch.setattr(setup.threading, "Thread", ThreadThatCannotStart)
+    monkeypatch.setattr(setup.GLib, "timeout_add_seconds", lambda *_args: 1)
+
+    setup.SetupWindow._on_save_devices(window, window.save_devices)
+
+    assert window.save_devices.label == "Save failed"
+    assert "could not start config save" in window.save_devices.tooltip.lower()
+    assert window._device_save_pending is False
+    assert window.save_devices.sensitive
+    assert window.astro_chat.sensitive
+    assert window.astro_game.sensitive
+    assert window.latency.sensitive
+
+
 def test_setup_save_reports_saved_config_when_restart_cannot_start(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1001,6 +1186,7 @@ def test_setup_save_reports_saved_config_when_restart_cannot_start(
     class FakeButton:
         label = "Save"
         tooltip = "Write the config and restart routing"
+        sensitive = True
 
         def set_label(self, label: str) -> None:
             self.label = label
@@ -1008,13 +1194,26 @@ def test_setup_save_reports_saved_config_when_restart_cannot_start(
         def set_tooltip_text(self, tooltip: str | None) -> None:
             self.tooltip = tooltip
 
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
     class FakeToggle:
+        sensitive = True
+
         def get_active(self) -> bool:
             return True
 
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
     class FakeSpin:
+        sensitive = True
+
         def get_value(self) -> float:
             return 18.0
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
 
     core = SimpleNamespace(
         MXCONF=tmp_path / "roaring_mixer.conf",
@@ -1024,11 +1223,31 @@ def test_setup_save_reports_saved_config_when_restart_cannot_start(
     )
     window = SimpleNamespace(
         _core=core,
+        astro_chat=FakeToggle(),
         astro_game=FakeToggle(),
         latency=FakeSpin(),
         save_devices=FakeButton(),
+        _device_save_pending=False,
     )
     window._devices_settled = lambda: False
+    window._finish_save_devices = lambda *args: setup.SetupWindow._finish_save_devices(
+        window, *args
+    )
+    window._save_devices_worker = lambda updates: setup.SetupWindow._save_devices_worker(
+        window, updates
+    )
+
+    class InlineThread:
+        def __init__(self, *, target, args=(), kwargs=None, **_unused) -> None:
+            self.target = target
+            self.args = args
+            self.kwargs = kwargs or {}
+
+        def start(self) -> None:
+            self.target(*self.args, **self.kwargs)
+
+    monkeypatch.setattr(setup.threading, "Thread", InlineThread)
+    monkeypatch.setattr(setup.GLib, "idle_add", lambda callback, *args: callback(*args))
 
     def restart(*units: str) -> bool:
         restart_calls.append(units)
@@ -1068,6 +1287,7 @@ def test_setup_save_does_not_restart_or_claim_success_when_config_write_fails(
     class FakeButton:
         label = "Save"
         tooltip = None
+        sensitive = True
 
         def set_label(self, label: str) -> None:
             self.label = label
@@ -1075,13 +1295,26 @@ def test_setup_save_does_not_restart_or_claim_success_when_config_write_fails(
         def set_tooltip_text(self, tooltip: str | None) -> None:
             self.tooltip = tooltip
 
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
     class FakeToggle:
+        sensitive = True
+
         def get_active(self) -> bool:
             return False
 
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
     class FakeSpin:
+        sensitive = True
+
         def get_value(self) -> float:
             return 12.0
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
 
     core = SimpleNamespace(
         MXCONF=tmp_path / "missing.conf",
@@ -1091,11 +1324,31 @@ def test_setup_save_does_not_restart_or_claim_success_when_config_write_fails(
     )
     window = SimpleNamespace(
         _core=core,
+        astro_chat=FakeToggle(),
         astro_game=FakeToggle(),
         latency=FakeSpin(),
         save_devices=FakeButton(),
+        _device_save_pending=False,
     )
     window._devices_settled = lambda: False
+    window._finish_save_devices = lambda *args: setup.SetupWindow._finish_save_devices(
+        window, *args
+    )
+    window._save_devices_worker = lambda updates: setup.SetupWindow._save_devices_worker(
+        window, updates
+    )
+
+    class InlineThread:
+        def __init__(self, *, target, args=(), kwargs=None, **_unused) -> None:
+            self.target = target
+            self.args = args
+            self.kwargs = kwargs or {}
+
+        def start(self) -> None:
+            self.target(*self.args, **self.kwargs)
+
+    monkeypatch.setattr(setup.threading, "Thread", InlineThread)
+    monkeypatch.setattr(setup.GLib, "idle_add", lambda callback, *args: callback(*args))
     monkeypatch.setattr(
         setup.services_mod,
         "restart",
