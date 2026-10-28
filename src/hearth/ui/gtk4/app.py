@@ -1083,8 +1083,12 @@ class Strip(Gtk.Box):
             if listener.muted:
                 name.add_css_class("muted")
             row.append(name)
-            initial_volume = max(0, min(150, held_values.get(listener.index, int(listener.volume))))
-            volume = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 150.0, 1.0)
+            initial_volume = max(
+                0, min(150, held_values.get(listener.index, int(listener.volume)))
+            )
+            volume = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.0, 150.0, 1.0
+            )
             volume.add_css_class("app-volume")
             volume.set_draw_value(False)
             volume.set_hexpand(False)
@@ -1097,7 +1101,9 @@ class Strip(Gtk.Box):
             volume_value.set_width_chars(4)
             row.append(volume)
             row.append(volume_value)
-            volume_handler = volume.connect("value-changed", self._on_app_volume, listener)
+            volume_handler = volume.connect(
+                "value-changed", self._on_app_volume, listener
+            )
             if listener.index:
                 self._listener_volume_controls[listener.index] = (
                     volume,
