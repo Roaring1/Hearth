@@ -14,6 +14,7 @@ import logging
 import os
 import socket
 import stat
+import tempfile
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -195,9 +196,28 @@ class Server:
 
 
 def write_pid(pid_path: Path | None = None) -> Path:
+    """Write a private PID fallback file atomically without following symlinks."""
     path = pid_path or paths.pid_file()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{os.getpid()}\n")
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        metadata = None
+    if metadata is not None and not stat.S_ISREG(metadata.st_mode):
+        raise OSError(f"refusing to replace non-regular PID path: {path}")
+
+    fd, tmp_name = tempfile.mkstemp(prefix=f"{path.name}.tmp.", dir=path.parent)
+    tmp = Path(tmp_name)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(f"{os.getpid()}\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return path
 
 

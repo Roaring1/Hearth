@@ -253,6 +253,30 @@ def test_pid_helpers(tmp_path):
     assert server.pid_alive(pid_max + 1) is False
 
 
+def test_write_pid_is_private_and_leaves_no_temporary_file(tmp_path):
+    pid_path = tmp_path / "hearth.pid"
+
+    server.write_pid(pid_path)
+
+    assert server.read_pid(pid_path) == os.getpid()
+    assert pid_path.stat().st_mode & 0o777 == 0o600
+    assert list(tmp_path.glob("hearth.pid.tmp.*")) == []
+
+
+def test_write_pid_refuses_a_symlink_without_touching_its_target(tmp_path):
+    pid_path = tmp_path / "hearth.pid"
+    target = tmp_path / "keep.txt"
+    target.write_text("not a pid")
+
+    pid_path.symlink_to(target)
+
+    with pytest.raises(OSError, match="non-regular PID path"):
+        server.write_pid(pid_path)
+
+    assert pid_path.is_symlink()
+    assert target.read_text() == "not a pid"
+
+
 def test_remove_pid_deletes_only_our_pid_file(tmp_path):
     pid_path = tmp_path / "hearth.pid"
     server.write_pid(pid_path)

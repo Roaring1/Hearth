@@ -25,5 +25,12 @@ example-rac_settings.json
     Template for ~/.config/hearth/rac_settings.json, the UI preferences file
     Hearth writes itself. Safe to copy as a starting point.
 
+Runtime files
+    Hearth keeps its IPC socket and PID fallback under the private
+    XDG_RUNTIME_DIR/hearth directory (or a per-UID temporary fallback when
+    XDG_RUNTIME_DIR is absent/invalid). The socket and PID file are created
+    with private permissions. Hearth refuses to replace a non-socket IPC path
+    or a non-regular PID path, and its PID file is written by atomic replace.
+
 Not included, by design: a populated config.json. It holds host details for
 the machines on the author's LAN and would be of no use on another rig.
