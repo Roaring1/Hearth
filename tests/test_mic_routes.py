@@ -7,6 +7,7 @@ and that nothing else in the file moves.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -137,6 +138,57 @@ def test_write_is_atomic_and_leaves_no_temp_file(tmp_path: Path) -> None:
     assert mic_routes.write({"B2_ROUTE": "none"}, conf) is True
     assert mic_routes.read(conf)["B2_ROUTE"] == "none"
     assert list(tmp_path.glob("*.tmp")) == []
+    assert list(tmp_path.glob("*.tmp.*")) == []
+
+
+def test_write_refuses_to_overwrite_an_unreadable_existing_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    conf = tmp_path / "roaring_mic_router.conf"
+    conf.write_text(SAMPLE, encoding="utf-8")
+    original = conf.read_text(encoding="utf-8")
+    read_text = Path.read_text
+
+    def unreadable(self: Path, *args, **kwargs):
+        if self == conf:
+            raise PermissionError("simulated read failure")
+        return read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", unreadable)
+
+    assert mic_routes.write({"B2_ROUTE": "none"}, conf) is False
+    assert read_text(conf, encoding="utf-8") == original
+
+
+def test_write_does_not_follow_a_preexisting_temp_symlink(tmp_path: Path) -> None:
+    conf = tmp_path / "roaring_mic_router.conf"
+    conf.write_text(SAMPLE, encoding="utf-8")
+    victim = tmp_path / "outside.txt"
+    victim.write_text("leave this alone")
+    fixed_temp = conf.with_suffix(conf.suffix + ".tmp")
+    fixed_temp.symlink_to(victim)
+
+    assert mic_routes.write({"B2_ROUTE": "none"}, conf) is True
+    assert victim.read_text(encoding="utf-8") == "leave this alone"
+    assert mic_routes.read(conf)["B2_ROUTE"] == "none"
+
+
+def test_concurrent_mic_route_writes_use_independent_atomic_temp_files(
+    tmp_path: Path,
+) -> None:
+    conf = tmp_path / "roaring_mic_router.conf"
+    conf.write_text(SAMPLE, encoding="utf-8")
+    values = ["none", "sm7b", "astro", "both"] * 10
+
+    def write_route(route: str) -> bool:
+        return mic_routes.write({"B1_ROUTE": route}, conf)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(write_route, values))
+
+    assert all(results)
+    assert mic_routes.read(conf)["B1_ROUTE"] in {"none", "sm7b", "astro", "both"}
+    assert list(tmp_path.glob("*.tmp.*")) == []
 
 
 def test_writing_creates_the_file_when_it_is_missing(tmp_path: Path) -> None:

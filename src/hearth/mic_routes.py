@@ -29,7 +29,10 @@ write is atomic.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import stat
+import tempfile
 from pathlib import Path
 
 from hearth import proc
@@ -107,26 +110,49 @@ def read(path: Path | None = None) -> dict[str, str]:
 
 
 def write(updates: dict[str, str], path: Path | None = None) -> bool:
-    """Apply ``updates`` atomically. False when the file could not be written.
+    """Apply updates atomically; fail closed if an existing file cannot be read.
 
     The daemon sources this file on a three-second timer, so a half-written
-    one is a half-configured microphone. Temp file plus rename makes that
-    impossible.
+    one is a half-configured microphone. A unique same-directory temporary
+    file plus rename preserves atomicity and avoids concurrent-writer clashes.
     """
     target = path or CONF_PATH
     try:
         original = target.read_text(encoding="utf-8")
-    except OSError:
+    except FileNotFoundError:
         original = ""
+    except OSError as exc:
+        # Do not treat an unreadable existing file as a missing file: doing so
+        # would erase its comments and every setting this module does not own.
+        log.warning("could not read %s; refusing to overwrite: %s", target, exc)
+        return False
+
     updated = apply_edits(original, updates)
-    tmp = target.with_suffix(target.suffix + ".tmp")
+    if not updates:
+        return True
+
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(updated, encoding="utf-8")
-        tmp.replace(target)
-    except OSError:
-        log.warning("could not write %s", target)
-        tmp.unlink(missing_ok=True)
+        try:
+            original_mode = stat.S_IMODE(target.stat().st_mode)
+        except FileNotFoundError:
+            original_mode = None
+
+        fd, tmp_name = tempfile.mkstemp(prefix=f"{target.name}.tmp.", dir=target.parent)
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(updated)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if original_mode is not None:
+                tmp.chmod(original_mode)
+            tmp.replace(target)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+    except OSError as exc:
+        log.warning("could not write %s: %s", target, exc)
         return False
     return True
 
