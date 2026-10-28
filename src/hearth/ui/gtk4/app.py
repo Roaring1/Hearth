@@ -21,7 +21,10 @@ onto the main loop with ``GLib.idle_add`` before a widget is touched.
 from __future__ import annotations
 
 import logging
+import os
+import stat
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -2004,16 +2007,11 @@ class MixerApp(Gtk.Application):
                 except FileNotFoundError:
                     existing = None
                 if existing is not None:
-                    import stat
-
                     if not stat.S_ISREG(existing.st_mode) or existing.st_uid != os.getuid():
                         raise OSError(f"refusing to replace non-regular or foreign dump: {target}")
 
                 # Publish one complete, private snapshot rather than a
                 # world-readable partial write under the default umask.
-                import os
-                import tempfile
-
                 fd, tmp_name = tempfile.mkstemp(prefix=f"{target.name}.tmp.", dir=target.parent)
                 tmp = Path(tmp_name)
                 try:
