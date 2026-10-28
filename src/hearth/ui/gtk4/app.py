@@ -1002,8 +1002,7 @@ class Strip(Gtk.Box):
     ) -> tuple[tuple[str, bool, bool, str], ...]:
         """Visible app-row state, excluding fields that have no UI representation."""
         return tuple(
-            (item.name, bool(item.muted), bool(item.live), item.index)
-            for item in listeners[:5]
+            (item.name, bool(item.muted), bool(item.live), item.index) for item in listeners[:5]
         )
 
     def _fill_listeners(self, listeners: list[Listener]) -> None:
