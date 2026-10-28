@@ -276,6 +276,13 @@ def set_stream_mute(index: str, muted: bool) -> bool:
     return _spawn_mutation("set-sink-input-mute", str(index), "1" if muted else "0")
 
 
+def set_stream_volume(index: str, percent: int) -> bool:
+    """Set one application's sink-input volume without changing its bus."""
+    if not index:
+        return True
+    return _spawn_mutation("set-sink-input-volume", str(index), f"{max(0, min(150, int(percent)))}%")
+
+
 def set_volume(sink: str, percent: int) -> bool:
     if not sink:
         return True
