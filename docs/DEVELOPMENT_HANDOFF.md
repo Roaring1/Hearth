@@ -9,9 +9,9 @@ This document is the durable checkpoint for the current repair/audit pass. It is
 - PR status: open, mergeable, **not merged**.
 - Base commit: 4600ebed949107114822827056f09d7cd0780b4e (the PR base; main has not been changed by this work).
 - Branch: fix/gtk4-install-and-smoke-test
-- Code snapshot fully verified before this handoff was added: 0fa2a605ccb13d5e386e15c4ff90cfa5fc27c786.
-- Last complete CI run for that code snapshot: GitHub Actions run #80, commit 0fa2a605, **all jobs successful**: https://github.com/Roaring1/Hearth/actions/runs/40700465469
-- This handoff was then added in commit 2b74af1f3fbeef30d6a0e2d0ee91894418babf36, triggering CI run #81. Always use the newest branch head and workflow run as the current truth.
+- Local checkout is synced and clean at `43e7c1c876456c7bccf8a81972b7d1624ae4cda5`; the diagnostic bundle script is executable (`100755`) again after a GitHub contents-API edit had changed its mode.
+- Latest completed CI run before the mode-only commit: run #82, commit `9d3cf26`, **all jobs successful**: https://github.com/Roaring1/Hearth/actions/runs/40703049769
+- CI run #83 is running for `43e7c1c` to verify the mode-only commit: https://github.com/Roaring1/Hearth/actions/runs/40784116221. Always use the newest branch head and workflow run as current truth.
 - The PR currently contains many small commits because GitHub's file-update endpoint made one commit per file while the development PC connector was unavailable. Prefer **Squash and merge** (or consolidate history before merging) instead of preserving the entire incremental history. Do not merge without the maintainer's decision.
 
 ## CI evidence
@@ -25,7 +25,7 @@ Run #80 passed each of these jobs:
 - Python 3.13 tests: success.
 - Package install smoke: success.
 
-Several intermediate commits were intentionally pushed and CI exposed issues before the green run: a missing module import in the dump writer, an incomplete fake-thread test double, and formatting differences under the current hosted Ruff version. Those were corrected; the latest run above is the verified result. Do not use an older failed/cancelled run as the current status.
+Several intermediate commits were intentionally pushed and CI exposed issues before the green run: a missing module import in the dump writer, incomplete fake-thread test doubles, and formatting differences under the current hosted Ruff version. Those were corrected. The local `./scripts/check.sh` gate also passed after syncing to the branch: Ruff, formatting, mypy, **450 tests**, compile checks, desktop-entry/metadata validation and ShellCheck. The AppStream uppercase-ID item remains a pedantic warning; validation is successful.
 
 ## Main findings and fixes on the PR branch
 
@@ -40,7 +40,7 @@ Several intermediate commits were intentionally pushed and CI exposed issues bef
 
 - An inactive hearth-ui.service (the optional mixer window) was incorrectly counted as a broken audio service by headless status, even though audio routing can work with the UI closed.
 - Excluded this optional UI unit in the shared health classifier and aligned the setup window with the same logic.
-- A real on-PC status check, before the supervisor connection was lost, returned **“Everything is working”** and reported all 17 monitored services healthy. It also reported the LPD8 controller connected and the Launchpad Mini controlled by Padfire. This is a historical observation, not a claim about current state while disconnected.
+- A real on-PC status check after reconnecting returned **“Everything is working”**, with all 17 monitored services healthy, LPD8 connected and Launchpad Mini controlled by Padfire. The check works when the user-session environment is set (`XDG_RUNTIME_DIR=/run/user/1000`, `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus`). Without it, a login-shell invocation fell back to `/tmp/hearth-1000` and produced misleading audio/service errors; the correctly configured recheck was healthy.
 
 ### GTK responsiveness and audio controls
 
@@ -60,60 +60,45 @@ Several intermediate commits were intentionally pushed and CI exposed issues bef
 - Changed the status-dump writer to use a private atomic file and made the diagnostic bundle script use umask 077. Diagnostic bundles can expose host/config details; share them deliberately.
 - The branch adds docs/AUDIO_ROUTING.md and docs/LPD8_REMAP.md for operational context and safe procedures.
 
-## NobaraSupervisor connection outage and local-only state
+## NobaraSupervisor reconnection and recovered PC state
 
-During this pass, NobaraSupervisor tool calls began failing with an MCP UNAVAILABLE / connection failed error for operations including shell execution, session status, path inspection, directory listing and text-file reads. Repeated attempts did not recover the connection. The outage is in the connector path as observed by the tool; do not infer whether the PC, the service, its network path, or MCP endpoint is the root cause without fresh diagnostics.
+The supervisor connection recovered and returned service version `1.5.0`, OAuth enabled, user mode for `roaring` (UID 1000), no active subprocess and available execution slots. The local checkout was fetched and safely fast-forwarded from `1416b1b` to the latest GitHub branch; before clearing the interrupted work, the local diff was backed up at `/tmp/hearth-handoff/pre-sync-local-work.patch`. The interrupted edits overlapped with improved versions already on the remote branch, so that backup was preserved and the checkout was fast-forwarded rather than force-reset.
 
-The following were observed or changed on the PC **before** the connection failed:
+The PC state now verified after reconnection:
 
-- Local checkout was under the user's GitHub projects directory, on the PR branch before the latest GitHub-side edits.
-- A ~/.local/bin/hearth symlink was added to the executable in-tree CLI shim. hearth --version, hearth --paths and hearth --status worked at the time.
-- The existing desktop launcher and its ~/bin/hearth-mixer wrapper were preserved; the launcher's WM-class metadata was aligned to the package app ID.
-- hearth-ui.service was left stopped with Result=success; it had exited cleanly, not been found in a crash loop. No audio service or live routing configuration was intentionally restarted/changed during the audit.
-- The most recent observed hearth --status output was healthy as recorded above.
+- Checkout was safely synced clean to `43e7c1c` on branch `fix/gtk4-install-and-smoke-test` before this handoff refresh; this documentation refresh is the next commit on that branch.
+- CLI: `hearth 5.1.0`; `hearth --paths` resolves config under `~/.config/hearth`, state under `~/.local/state/hearth`, cache under `~/.cache/hearth`, and runtime under `/run/user/1000/hearth` when the session environment is set.
+- Desktop integration: the existing desktop launcher and `~/bin/hearth-mixer` wrapper were preserved; `~/.local/bin/hearth` points to the executable in-tree shim.
+- User-session status: `hearth --status` says **Everything is working**, all 17 monitored services are healthy, LPD8 is connected and pads/knobs are live, and Launchpad Mini is controlled by Padfire.
+- The current service state differs from the earlier snapshot: `hearth-ui.service`, `lpd8-mixer.service`, and `roaring-audio-routesd.service` are all active/running with `Result=success`. Their current active state was inspected, not changed or restarted as part of this pass.
+- The initial health check without the user-session DBus environment reported PipeWire/portal down and no unit list. Repeating it with `XDG_RUNTIME_DIR=/run/user/1000` and `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus` returned healthy status. Do not diagnose that first result as a real audio outage.
 
-Since the connector failed, the remote branch has received more commits through GitHub's repository API (including the per-app volume controls and off-thread raw-mic config write). **Do not assume the PC's local checkout has those latest commits.** It may be behind origin/fix/gtk4-install-and-smoke-test. The local workspace and actual current on-PC state cannot be verified until the supervisor connection returns.
+### Existing file permissions repaired on the PC
+
+Before repair, the inspected Hearth config/state/cache directories were mode `0755`; config/settings/mic-router/mixer files and old status dumps included mode `0644`. After checking paths, ownership and symlink types, the repair removed group/other access only from regular files owned by UID 1000 and set Hearth-owned directories to `0700`. It did not delete or rewrite file contents.
+
+Verified result:
+
+- Directories `~/.config/hearth`, `~/.local/state/hearth`, `~/.local/state/hearth/dumps` and `~/.cache/hearth`: `0700`.
+- Regular files inside those Hearth data trees (including `config.json`, `rac_settings.json`, the mic-router config and backups, `roaring_mixer.conf`, `hearth.log`, `summary.txt`, and `tracemalloc.pkl`): `0600`.
+- The diagnostic bundle script's executable mode was restored to `100755` in commit `43e7c1c`.
+
+No dump or log contents were published to GitHub. Machine-specific configuration remains on the PC only.
 
 ## Remaining work, in priority order
 
-### P0 — resume safely when the supervisor connection works
+### P0 — remaining interactive verification
 
-1. Reconnect to the PC and establish the exact state before changing anything:
-   
-       cd ~/Documents/GitHub/Hearth
-       git status --short --branch
-       git fetch origin
-       git log --oneline --decorate -8
-
-   Preserve unrelated/uncommitted user changes. If the tree is clean, switch/update to fix/gtk4-install-and-smoke-test; do not reset or discard unknown work.
-
-2. Run the full local gate against the branch:
-
-       ./scripts/check.sh
-
-   Then exercise the GTK4 app under the real Plasma session (not only Xvfb): launch and close/reopen, adjust app volume and mute, move a listener to a different bus, toggle a route, open IN/OUT popovers during a route update, and verify LPD8 LED feedback. Confirm that no GTK freeze occurs if pactl/ALSA is briefly slow.
-
-3. Repair existing artifact permissions only after inspecting the paths reported by hearth --paths and preserving symlinks/unusual ownership. Metadata observed during this audit showed existing Hearth directories/files with permissive modes (directory mode 0755 and file mode 0644 on the inspected paths). The PR code hardens new writes and selected startup paths, but a direct mode-repair pass on old artifacts remains pending while disconnected.
-
-   Safe starting point after confirming actual XDG locations and ownership:
-
-       hearth --paths
-       # For default XDG locations only; substitute the exact config/state/cache
-       # paths printed by hearth --paths if this PC uses custom XDG locations.
-       find "$HOME/.config/hearth" "$HOME/.local/state/hearth" "$HOME/.cache/hearth" -type d -exec chmod 700 {} +
-       find "$HOME/.config/hearth" "$HOME/.local/state/hearth" "$HOME/.cache/hearth" -type f -exec chmod go-rwx {} +
-
-   Do not run the example unchanged when hearth --paths reports different locations. Inspect first if any path is a symlink, crosses into unrelated data, or contains files not owned by the current user. find does not follow symlinks by default; the second command removes group/other permissions without stripping owner execute bits. Do not delete old dumps or logs.
-
-4. Re-check the actual desktop launcher, command resolution, audio status, unit status and file modes after updating to the branch. Keep hearth-ui.service stopped unless a user-visible test explicitly requires launching the UI through that unit.
+1. Run a normal Plasma-session smoke test (not just Xvfb): open/close/reopen Hearth, adjust per-app volume and mute, drag an app to another bus, toggle a route, open IN/OUT popovers while a route job is pending, and verify LPD8 LED feedback. Check that controls remain responsive if pactl/ALSA is slow or the controller is disconnected.
+2. Inspect the machine-specific `config.json` writer and confirm its future writes always remain atomic/private. The existing on-disk config has been secured to `0600`; do not copy its contents into the public repo.
+3. Verify the current `hearth-ui.service` active/running state through a real UI interaction without restarting it just for the sake of testing.
 
 ### P1 — remaining audit/review
 
-- Inspect writes to the machine-specific config.json path separately from preferences and status dumps. Verify its mode/atomic-write behavior and add a regression if any writer can create a group/world-readable copy. Do not commit machine-specific contents, device serials, hostnames, addresses or captures to this public repository.
-- Review every remaining synchronous GTK signal handler for filesystem lock/fsync, systemctl, pactl, or amidi calls. In particular keep Setup save/restart feedback accurate and make sure per-app sliders behave smoothly during high-rate snapshots.
+- Review any remaining synchronous GTK signal handler for filesystem lock/fsync, systemctl, pactl or amidi calls. Keep Setup save/restart feedback accurate and verify the per-app sliders feel smooth during high-rate snapshots.
 - Consider consolidating the long PR's incremental commits before merging; a squash merge is the least invasive option.
-- Do a normal-user interactive smoke session; CI/Xvfb validates imports and mocked behavior but does not prove the mixer feels right in a live Plasma/PipeWire session.
-- Once those checks are complete, update this handoff with the real PC results, not assumptions. Leave PR #1 open until review/merge is deliberately requested.
+- CI/Xvfb validates imports and mocked behavior but does not prove the mixer feels right in a live Plasma/PipeWire session.
+- After the interactive smoke, append the result here. Leave PR #1 open until review/merge is deliberately requested.
 
 ## Safety boundaries
 
