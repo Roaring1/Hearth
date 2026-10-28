@@ -1355,6 +1355,7 @@ def test_led_queue_recovers_if_worker_thread_cannot_start(
         _led_pending={},
         _led_worker_active=False,
         cfg={},
+        _drain_led_updates=lambda: None,
     )
 
     mixer.MixerWindow._push_led(window, "vm_game", True)
