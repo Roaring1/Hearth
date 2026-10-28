@@ -1347,6 +1347,65 @@ def test_dump_ipc_does_not_claim_success_when_worker_cannot_start(
     assert not (tmp_path / "dumps").exists()
 
 
+def test_raw_mic_route_config_write_is_deferred_to_route_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+    writes: list[dict[str, str]] = []
+    captured: list[tuple[object, object, bool, dict[str, object]]] = []
+
+    monkeypatch.setattr(mixer.mic_routes, "read", lambda: {"B1_ROUTE": "sm7b"})
+    monkeypatch.setattr(
+        mixer.mic_routes,
+        "raw_edits",
+        lambda _conf, sink, source, wanted: {
+            "B1_ROUTE": f"{sink}:{source}:{wanted}"
+        },
+    )
+    monkeypatch.setattr(
+        mixer.mic_routes,
+        "write",
+        lambda updates: writes.append(updates) or True,
+    )
+
+    class FakeCheck:
+        active = True
+
+        def get_active(self) -> bool:
+            return self.active
+
+        def set_active(self, active: bool) -> None:
+            self.active = active
+
+        def set_tooltip_text(self, _text: str | None) -> None:
+            pass
+
+    check = FakeCheck()
+
+    def start_route_job(operation, widget, wanted, **kwargs) -> None:
+        captured.append((operation, widget, wanted, kwargs))
+
+    strip = SimpleNamespace(
+        _routing=False,
+        _route_busy=False,
+        channel=SimpleNamespace(sink="mic_b1"),
+        _start_route_job=start_route_job,
+    )
+
+    mixer.Strip._on_mic_in(strip, check, "sm7b_mono")
+
+    assert writes == []
+    assert len(captured) == 1
+    operation, widget, wanted, kwargs = captured[0]
+    assert widget is check
+    assert wanted is True
+    assert kwargs["error_prefix"] == "Could not save microphone routing"
+
+    # The locked/atomic write occurs only when the route-job worker invokes it.
+    operation()
+    assert writes == [{"B1_ROUTE": "mic_b1:sm7b_mono:True"}]
+
+
 def test_route_popovers_refresh_only_for_changed_inventory_and_defer_while_busy() -> None:
     mixer = _load_mixer()
     events: list[str] = []
