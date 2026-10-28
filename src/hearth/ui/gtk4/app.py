@@ -705,19 +705,21 @@ class Strip(Gtk.Box):
                 self._routing = False
             return
         if source in mic_routes.RAW_TOKEN:
-            conf = mic_routes.read()
-            if not mic_routes.write(mic_routes.raw_edits(conf, self.channel.sink, source, wanted)):
-                self._routing = True
-                try:
-                    check.set_active(not wanted)
-                    check.set_tooltip_text(
-                        "Could not save microphone routing; the previous setting is unchanged"
-                    )
-                finally:
-                    self._routing = False
-                return
-            check.set_tooltip_text(None)
-            GLib.timeout_add_seconds(4, self._route_settled)
+            # The router config write takes an advisory lock and fsyncs an
+            # atomic replacement. Keep even this short disk path off GTK.
+            def save_route() -> None:
+                conf = mic_routes.read()
+                if not mic_routes.write(
+                    mic_routes.raw_edits(conf, self.channel.sink, source, wanted)
+                ):
+                    raise RuntimeError("microphone routing config could not be saved")
+
+            self._start_route_job(
+                save_route,
+                check,
+                wanted,
+                error_prefix="Could not save microphone routing",
+            )
             return
 
         def mutate() -> None:
