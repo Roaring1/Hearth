@@ -16,11 +16,13 @@ mode, and atomically renamed over the script. The previous fixed
 the write. The lock path is also protected against symlinks.
 
 Missing assignments remain errors instead of being appended somewhere the
-service never reads. If a write cannot complete, the Remap window shows an
-error and does not queue a restart. When the script changes successfully,
-Hearth requests a service restart; this reports that the request was launched,
-not that systemd has completed the transition. The Setup/Remap status refresh
-then reads back the actual state.
+service never reads. The map write runs on a background worker, and the pad/knob
+controls are disabled until it finishes so concurrent edits cannot race. If
+the write or worker startup cannot complete, the Remap window shows an error
+and does not queue a restart. When the script changes successfully, Hearth
+requests a service restart; this reports that the request was launched, not
+that systemd has completed the transition. The Setup/Remap status refresh then
+reads back the actual state.
 
 ## Read-only checks
 

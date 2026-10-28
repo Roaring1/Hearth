@@ -83,22 +83,15 @@ def test_listener_rows_are_not_rebuilt_for_identical_snapshots() -> None:
     assert synced == [listeners]
 
 
-def test_per_app_volume_callback_targets_stream_not_bus(
+def test_per_app_volume_callback_queues_stream_not_bus(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     mixer = _load_mixer()
-    calls: list[tuple[str, int]] = []
+    calls: list[tuple[str, str, int]] = []
 
-    monkeypatch.setattr(
-        mixer.pactl,
-        "set_stream_volume",
-        lambda index, percent: calls.append((index, percent)) or True,
-    )
-
-    def forbidden_bus_volume(*_args, **_kwargs):
-        raise AssertionError("per-app control must not change the whole bus volume")
-
-    monkeypatch.setattr(mixer.pactl, "set_volume", forbidden_bus_volume)
+    def queue_volume(kind, target, percent, _on_failure):
+        calls.append((kind, target, percent))
+        return True
 
     class FakeScale:
         def __init__(self) -> None:
@@ -129,17 +122,134 @@ def test_per_app_volume_callback_targets_stream_not_bus(
     strip = SimpleNamespace(
         _listener_volume_held={},
         _listener_volume_controls={"42": (scale, label, 1)},
-        win=SimpleNamespace(collector=collector),
+        win=SimpleNamespace(collector=collector, queue_volume=queue_volume),
     )
     listener = SimpleNamespace(index="42", name="Firefox")
 
     mixer.Strip._on_app_volume(strip, scale, listener)
 
-    assert calls == [("42", 73)]
+    assert calls == [("stream", "42", 73)]
     assert label.text == "73%"
     assert scale.tooltip == "Firefox: 73%"
     assert strip._listener_volume_held["42"] > 0
     assert collector.refreshes == 0
+
+
+def test_volume_worker_coalesces_rapid_updates_per_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+    workers = []
+    sent: list[tuple[str, str, int]] = []
+    failures: list[str] = []
+
+    class CapturedThread:
+        def __init__(self, *, target, **_kwargs) -> None:
+            self.target = target
+
+        def start(self) -> None:
+            workers.append(self)
+
+    monkeypatch.setattr(mixer.threading, "Thread", CapturedThread)
+    monkeypatch.setattr(mixer.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(mixer.GLib, "idle_add", lambda callback: callback())
+
+    monkeypatch.setattr(
+        mixer.pactl,
+        "set_volume",
+        lambda sink, percent: sent.append(("sink", sink, percent)) or True,
+    )
+    monkeypatch.setattr(
+        mixer.pactl,
+        "set_stream_volume",
+        lambda index, percent: sent.append(("stream", index, percent)) or True,
+    )
+    window = SimpleNamespace(
+        _volume_lock=threading.Lock(),
+        _volume_pending={},
+        _volume_worker_active=False,
+    )
+    window._drain_volume_updates = lambda: mixer.MixerWindow._drain_volume_updates(window)
+
+    def queue(kind: str, target: str, percent: int) -> bool:
+        return mixer.MixerWindow.queue_volume(
+            window, kind, target, percent, lambda: failures.append(target)
+        )
+
+    assert queue("sink", "vm_game", 20)
+    assert queue("sink", "vm_game", 64)
+    assert queue("stream", "42", 15)
+    assert queue("stream", "42", 77)
+    # Different targets coalesce independently; only one worker is launched.
+    assert len(workers) == 1
+    assert sent == []
+
+    workers[0].target()
+
+    assert sent == [("sink", "vm_game", 64), ("stream", "42", 77)]
+    assert failures == []
+    assert window._volume_pending == {}
+    assert window._volume_worker_active is False
+
+
+def test_volume_worker_reports_deferred_pactl_launch_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+    workers = []
+    failures: list[str] = []
+
+    class CapturedThread:
+        def __init__(self, *, target, **_kwargs) -> None:
+            self.target = target
+
+        def start(self) -> None:
+            workers.append(self)
+
+    monkeypatch.setattr(mixer.threading, "Thread", CapturedThread)
+    monkeypatch.setattr(mixer.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(mixer.GLib, "idle_add", lambda callback: callback())
+    monkeypatch.setattr(mixer.pactl, "set_volume", lambda *_args: False)
+
+    window = SimpleNamespace(
+        _volume_lock=threading.Lock(),
+        _volume_pending={},
+        _volume_worker_active=False,
+    )
+    window._drain_volume_updates = lambda: mixer.MixerWindow._drain_volume_updates(window)
+
+    assert mixer.MixerWindow.queue_volume(
+        window, "sink", "vm_game", 64, lambda: failures.append("vm_game")
+    )
+    workers[0].target()
+
+    assert failures == ["vm_game"]
+    assert window._volume_worker_active is False
+
+
+def test_volume_worker_recovers_if_worker_thread_cannot_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+
+    class ThreadThatCannotStart:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("thread limit reached")
+
+    monkeypatch.setattr(mixer.threading, "Thread", ThreadThatCannotStart)
+    window = SimpleNamespace(
+        _volume_lock=threading.Lock(),
+        _volume_pending={},
+        _volume_worker_active=False,
+    )
+    window._drain_volume_updates = lambda: mixer.MixerWindow._drain_volume_updates(window)
+
+    assert mixer.MixerWindow.queue_volume(window, "sink", "vm_game", 64, lambda: None) is False
+    assert window._volume_pending == {}
+    assert window._volume_worker_active is False
 
 
 def test_listener_volume_snapshot_sync_respects_drag_hold_and_blocks_signal() -> None:
@@ -861,11 +971,10 @@ def test_other_input_route_toggles_are_rejected_while_a_route_job_is_busy(
     assert strip._routing is False
 
 
-def test_volume_callback_recovers_from_pactl_spawn_failure(
+def test_volume_callback_recovers_if_volume_worker_cannot_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     mixer = _load_mixer()
-    monkeypatch.setattr(mixer.pactl, "set_volume", lambda *_args: False)
 
     class FakeWidget:
         text = ""
@@ -884,6 +993,7 @@ def test_volume_callback_recovers_from_pactl_spawn_failure(
         _held_until=0.0,
         win=SimpleNamespace(
             quicken=lambda: None,
+            queue_volume=lambda *_args: False,
             collector=SimpleNamespace(refresh_now=lambda: refreshes.append(True)),
         ),
         value=value,
@@ -1802,3 +1912,131 @@ def test_led_queue_recovers_if_worker_thread_cannot_start(
 
     assert window._led_worker_active is False
     assert window._led_pending == {"vm_game": True}
+
+
+def _fake_remap_window(remap):
+    class FakeControl:
+        def __init__(self) -> None:
+            self.sensitive = True
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
+    controls = [FakeControl(), FakeControl()]
+    messages: list[str] = []
+    refreshed: list[bool] = []
+    restarts: list[bool] = []
+    window = SimpleNamespace(
+        _write_pending=False,
+        _pads={1: controls[0]},
+        _knobs={1: controls[1]},
+        _say=messages.append,
+        _queue_restart=lambda: restarts.append(True),
+    )
+
+    def refresh() -> None:
+        refreshed.append(True)
+        for control in controls:
+            control.set_sensitive(not window._write_pending)
+
+    window._refresh_map = refresh
+    window._finish_write = lambda changed, error="": remap.RemapWindow._finish_write(
+        window, changed, error
+    )
+    return window, controls, messages, refreshed, restarts
+
+
+def test_lpd8_remap_mapping_write_is_deferred_and_queues_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hearth.ui.gtk4 import remap
+
+    workers = []
+
+    class CapturedThread:
+        def __init__(self, *, target, **_kwargs) -> None:
+            self.target = target
+
+        def start(self) -> None:
+            workers.append(self)
+
+    monkeypatch.setattr(remap.threading, "Thread", CapturedThread)
+    monkeypatch.setattr(remap.GLib, "idle_add", lambda callback, *args: callback(*args))
+    window, controls, messages, refreshed, restarts = _fake_remap_window(remap)
+    edits: list[bool] = []
+
+    remap.RemapWindow._write(window, lambda: edits.append(True) or True)
+
+    # The signal handler returns without taking the map file lock or writing it.
+    assert edits == []
+    assert len(workers) == 1
+    assert window._write_pending is True
+    assert all(not control.sensitive for control in controls)
+    assert messages == ["Saving LPD8 mapping…"]
+    assert restarts == []
+
+    workers[0].target()
+
+    assert edits == [True]
+    assert window._write_pending is False
+    assert all(control.sensitive for control in controls)
+    assert refreshed == [True]
+    assert restarts == [True]
+
+
+def test_lpd8_remap_write_error_restores_controls_without_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hearth.ui.gtk4 import remap
+
+    workers = []
+
+    class CapturedThread:
+        def __init__(self, *, target, **_kwargs) -> None:
+            self.target = target
+
+        def start(self) -> None:
+            workers.append(self)
+
+    monkeypatch.setattr(remap.threading, "Thread", CapturedThread)
+    monkeypatch.setattr(remap.GLib, "idle_add", lambda callback, *args: callback(*args))
+    window, controls, messages, refreshed, restarts = _fake_remap_window(remap)
+
+    def failed_edit() -> bool:
+        raise OSError("disk full")
+
+    remap.RemapWindow._write(window, failed_edit)
+    assert window._write_pending is True
+    workers[0].target()
+
+    assert window._write_pending is False
+    assert all(control.sensitive for control in controls)
+    assert refreshed == [True]
+    assert "Could not save that: disk full" in messages[-1]
+    assert restarts == []
+
+
+def test_lpd8_remap_write_recovers_if_worker_cannot_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hearth.ui.gtk4 import remap
+
+    class ThreadThatCannotStart:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("thread limit reached")
+
+    monkeypatch.setattr(remap.threading, "Thread", ThreadThatCannotStart)
+    window, controls, messages, refreshed, restarts = _fake_remap_window(remap)
+    edits: list[bool] = []
+
+    remap.RemapWindow._write(window, lambda: edits.append(True) or True)
+
+    assert edits == []
+    assert window._write_pending is False
+    assert all(control.sensitive for control in controls)
+    assert refreshed == [True]
+    assert "Could not start LPD8 map save: thread limit reached" in messages[-1]
+    assert restarts == []

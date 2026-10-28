@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 
 import gi
 
@@ -273,6 +274,7 @@ class RemapWindow(Gtk.Window):
 
         self.pal = style_mod.palette()
         self._restart_id = 0
+        self._write_pending = False
         self._pads: dict[int, _Pad] = {}
         self._knobs: dict[int, _Knob] = {}
         #: pad -> slots it triggers, and knob -> constants it drives.
@@ -437,7 +439,7 @@ class RemapWindow(Gtk.Window):
             full = " and ".join(knob_labels.get(c, c) for c in consts)
             widget.show_job(short, full or f"Knob {knob} moves nothing yet")
 
-        usable = bool(knobs or pads)
+        usable = bool(knobs or pads) and not self._write_pending
         for widget in (*self._pads.values(), *self._knobs.values()):
             widget.set_sensitive(usable)
         if not usable:
@@ -563,7 +565,7 @@ class RemapWindow(Gtk.Window):
 
     # -- writing ---------------------------------------------------------
     def _on_choice(self, drop: Gtk.DropDown, _param) -> None:
-        if self._open is None:
+        if self._write_pending or self._open is None:
             return
         widget = self._open
         number = widget.number
@@ -581,17 +583,38 @@ class RemapWindow(Gtk.Window):
         self.menu.popdown()
 
     def _write(self, edit) -> None:
-        """Run one edit and queue the restart."""
+        """Save one mapping off GTK and queue restart only after success."""
+        if self._write_pending:
+            return
+        self._write_pending = True
+        for widget in (*self._pads.values(), *self._knobs.values()):
+            widget.set_sensitive(False)
+        self._say("Saving LPD8 mapping…")
+
+        def run() -> None:
+            changed = False
+            error = ""
+            try:
+                changed = bool(edit())
+            except Exception as exc:  # surfaced to the GTK thread below
+                log.warning("LPD8 remap failed: %s", exc)
+                error = str(exc) or type(exc).__name__
+            GLib.idle_add(self._finish_write, changed, error)
+
         try:
-            changed = edit()
-        except (OSError, ValueError) as exc:
-            log.warning("LPD8 remap failed: %s", exc)
-            self._say(f"Could not save that: {exc}")
-            return
-        if not changed:
-            return
+            threading.Thread(target=run, daemon=True, name="hearth-lpd8-map-save").start()
+        except RuntimeError as exc:
+            self._finish_write(False, f"Could not start LPD8 map save: {exc}")
+
+    def _finish_write(self, changed: bool, error: str = "") -> bool:
+        """Restore controls and publish the worker result on the GTK thread."""
+        self._write_pending = False
         self._refresh_map()
-        self._queue_restart()
+        if error:
+            self._say(f"Could not save that: {error}")
+        elif changed:
+            self._queue_restart()
+        return False
 
     def _queue_restart(self) -> None:
         if self._restart_id:

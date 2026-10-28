@@ -63,14 +63,17 @@ interval.
 
 ## Volume and mute controls
 
-Fader, bus-mute, stream-mute, app-move and default-sink changes stay
-fire-and-forget so frequent input events do not stall GTK. The audio wrapper
-returns whether `pactl` could be started; that is **not** a guarantee that the
-child later exited successfully. If the executable is missing or cannot be
-started, Hearth keeps the previous mute state or refreshes the displayed
-volume from the collector and shows an explanatory tooltip. Route creation and
-removal use a checked, bounded command because those operations need explicit
-ordering and a live-graph verification step.
+Bus and per-app fader values are coalesced on a shared background worker:
+it keeps the latest pending value per sink or stream and dispatches at most one
+batch about every 30 ms. Rapid pointer movement therefore doesn't spawn one
+`pactl` process per GTK event, and the process-launch path never blocks GTK.
+Mute, app-move and default-sink changes remain fire-and-forget. The audio
+wrapper returns whether `pactl` could be started; that is **not** a guarantee
+that the child later exited successfully. If a worker or executable cannot be
+started, Hearth refreshes the displayed value from the collector and shows an
+explanatory tooltip. Route creation and removal use a checked, bounded command
+because those operations need explicit ordering and a live-graph verification
+step.
 
 ## Setup panel: headset target and latency
 

@@ -445,10 +445,14 @@ class Strip(Gtk.Box):
         self._held_until = time.monotonic() + HOLD_S
         self.win.quicken()
         self.value.set_text(f"{value}")
-        if not pactl.set_volume(self.channel.sink, value):
+
+        def failed() -> None:
             self._held_until = 0.0
             self.fader.set_tooltip_text("Could not set volume; check pactl/PipeWire")
             self.win.collector.refresh_now()
+
+        if not self.win.queue_volume("sink", self.channel.sink, value, failed):
+            failed()
             return
         self.fader.set_tooltip_text(None)
 
@@ -1007,10 +1011,14 @@ class Strip(Gtk.Box):
             _control, value_label, _handler = controls
             value_label.set_text(f"{percent}%")
         scale.set_tooltip_text(f"{listener.name}: {percent}%")
-        if not pactl.set_stream_volume(listener.index, percent):
+
+        def failed() -> None:
             self._listener_volume_held[listener.index] = 0.0
             scale.set_tooltip_text("Could not set app volume; check pactl/PipeWire")
             self.win.collector.refresh_now()
+
+        if not self.win.queue_volume("stream", listener.index, percent, failed):
+            failed()
 
     def _sync_listener_volumes(self, listeners: list[Listener]) -> None:
         """Sync unchanged app rows to snapshots without fighting the user."""
@@ -1177,6 +1185,11 @@ class MixerWindow(Gtk.ApplicationWindow):
         self._led_lock = threading.Lock()
         self._led_pending: dict[str, bool] = {}
         self._led_worker_active = False
+        # Fader gestures can emit many value changes per second. Keep only
+        # the newest pending value per sink/stream and send at a bounded rate.
+        self._volume_lock = threading.Lock()
+        self._volume_pending: dict[tuple[str, str], tuple[int, Callable[[], None]]] = {}
+        self._volume_worker_active = False
         # Laptop audio is plugged in occasionally; when it has been
         # silent and unused for a while it should get out of the way
         # rather than hold a full strip open.
@@ -1591,6 +1604,69 @@ class MixerWindow(Gtk.ApplicationWindow):
         self._update_banner()
         self._feed_remap()
         return False
+
+    def queue_volume(
+        self, kind: str, target: str, percent: int, on_failure: Callable[[], None]
+    ) -> bool:
+        """Queue a volume update, coalescing rapid changes per target.
+
+        The UI updates immediately, but only the latest value for each bus or
+        app stream is sent every 30 ms. Pactl mutations stay off GTK, and a
+        burst of pointer events cannot create a matching burst of processes.
+        True means the worker was queued/already active, not that pactl has
+        finished changing the server state.
+        """
+        if kind not in {"sink", "stream"} or not target:
+            return False
+        key = (kind, target)
+        with self._volume_lock:
+            self._volume_pending[key] = (max(0, min(150, int(percent))), on_failure)
+            if self._volume_worker_active:
+                return True
+            self._volume_worker_active = True
+
+        try:
+            threading.Thread(
+                target=self._drain_volume_updates,
+                daemon=True,
+                name="hearth-volume-writer",
+            ).start()
+        except RuntimeError as exc:
+            with self._volume_lock:
+                self._volume_pending.clear()
+                self._volume_worker_active = False
+            log.warning("could not queue volume update: %s", exc)
+            return False
+        return True
+
+    def _drain_volume_updates(self) -> None:
+        """Send coalesced bus/app volume changes on one worker thread."""
+        try:
+            while True:
+                time.sleep(0.03)
+                with self._volume_lock:
+                    if not self._volume_pending:
+                        self._volume_worker_active = False
+                        return
+                    pending = self._volume_pending
+                    self._volume_pending = {}
+
+                for (kind, target), (percent, on_failure) in pending.items():
+                    try:
+                        if kind == "sink":
+                            started = pactl.set_volume(target, percent)
+                        else:
+                            started = pactl.set_stream_volume(target, percent)
+                    except Exception as exc:
+                        log.warning("volume update for %s failed to start: %s", target, exc)
+                        started = False
+                    if not started:
+                        GLib.idle_add(on_failure)
+        except Exception as exc:
+            # Never let an unexpected worker error permanently wedge the queue.
+            log.warning("volume worker failed: %s", exc)
+            with self._volume_lock:
+                self._volume_worker_active = False
 
     def _push_led(self, sink: str, muted: bool) -> None:
         """Queue the latest desired LED state without blocking GTK."""
