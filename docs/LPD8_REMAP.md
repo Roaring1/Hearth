@@ -29,5 +29,8 @@ reads back the actual state.
 To inspect the configured mapping without changing it, open LPD8 Controls and
 choose Refresh. The UI reads the script's current knob/pad values and shows
 unknown mappings as unknown rather than assuming that a missing binding is
-unbound. The controller's live LEDs still depend on the LPD8 being in Note
-Toggle mode; the mapping file alone cannot change the device's hardware mode.
+unbound. The systemd unit state is queried on a background worker when the
+map is refreshed; if systemd is unreachable, Hearth does not report a
+confident "service stopped" state from a failed query. The controller's live
+LEDs still depend on the LPD8 being in Note Toggle mode; the mapping file alone
+cannot change the device's hardware mode.

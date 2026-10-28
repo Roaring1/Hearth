@@ -1928,22 +1928,131 @@ def _fake_remap_window(remap):
     restarts: list[bool] = []
     window = SimpleNamespace(
         _write_pending=False,
+        _write_error="",
+        _service_state=None,
+        _service_query_pending=False,
+        _map_usable=True,
+        _clash_note="",
         _pads={1: controls[0]},
         _knobs={1: controls[1]},
         _say=messages.append,
         _queue_restart=lambda: restarts.append(True),
     )
+    window._service_note = lambda: remap.RemapWindow._service_note(window)
+    window._show_status = lambda: remap.RemapWindow._show_status(window)
 
     def refresh() -> None:
         refreshed.append(True)
         for control in controls:
             control.set_sensitive(not window._write_pending)
+        window._show_status()
 
     window._refresh_map = refresh
     window._finish_write = lambda changed, error="": remap.RemapWindow._finish_write(
         window, changed, error
     )
     return window, controls, messages, refreshed, restarts
+
+
+def test_lpd8_remap_service_status_query_runs_off_gtk_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hearth.ui.gtk4 import remap
+
+    workers = []
+    calls: list[list[str]] = []
+    messages: list[str] = []
+
+    class CapturedThread:
+        def __init__(self, *, target, **_kwargs) -> None:
+            self.target = target
+
+        def start(self) -> None:
+            workers.append(self)
+
+    monkeypatch.setattr(remap.threading, "Thread", CapturedThread)
+    monkeypatch.setattr(remap.GLib, "idle_add", lambda callback, *args: callback(*args))
+    monkeypatch.setattr(
+        remap.services_mod,
+        "states",
+        lambda units: calls.append(list(units)) or {remap.lpd8map.UNIT: "inactive"},
+    )
+    window = SimpleNamespace(
+        _service_query_pending=False,
+        _service_state=None,
+        _write_pending=False,
+        _write_error="",
+        _map_usable=True,
+        _clash_note="",
+        _say=messages.append,
+    )
+    window._service_note = lambda: remap.RemapWindow._service_note(window)
+    window._show_status = lambda: remap.RemapWindow._show_status(window)
+    window._finish_service_state = lambda state: remap.RemapWindow._finish_service_state(
+        window, state
+    )
+
+    remap.RemapWindow._queue_service_state_refresh(window)
+
+    assert calls == []
+    assert window._service_query_pending is True
+    assert messages == []
+
+    workers[0].target()
+
+    assert calls == [[remap.lpd8map.UNIT]]
+    assert window._service_query_pending is False
+    assert window._service_state == "inactive"
+    assert messages == ["The LPD8 service is not running — knobs and pads do nothing until it is"]
+
+
+def test_lpd8_remap_refresh_keeps_controls_busy_without_claiming_map_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hearth.ui.gtk4 import remap
+
+    class FakeControl:
+        def __init__(self) -> None:
+            self.sensitive = True
+            self.label = ""
+            self.tooltip = ""
+
+        def show_job(self, label: str, tooltip: str) -> None:
+            self.label = label
+            self.tooltip = tooltip
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
+    monkeypatch.setattr(remap.lpd8map, "read_map", lambda: {"CC_VM_GAME": 0})
+    monkeypatch.setattr(remap.lpd8map, "read_pad_map", lambda: {1: 1})
+    controls = [FakeControl(), FakeControl()]
+    messages: list[str] = []
+    query_requests: list[bool] = []
+    window = SimpleNamespace(
+        _write_pending=True,
+        _write_error="",
+        _service_state=None,
+        _service_query_pending=True,
+        _map_usable=False,
+        _clash_note="",
+        _pads={1: controls[0]},
+        _knobs={1: controls[1]},
+        _open=None,
+        _say=messages.append,
+        _queue_service_state_refresh=lambda: query_requests.append(True),
+        _paint_live=lambda: None,
+        _clashes=lambda *_args: "",
+    )
+    window._service_note = lambda: remap.RemapWindow._service_note(window)
+    window._show_status = lambda: remap.RemapWindow._show_status(window)
+
+    remap.RemapWindow._refresh_map(window)
+
+    assert window._map_usable is True
+    assert all(not control.sensitive for control in controls)
+    assert messages == ["Saving LPD8 mapping…"]
+    assert query_requests == [True]
 
 
 def test_lpd8_remap_mapping_write_is_deferred_and_queues_restart(

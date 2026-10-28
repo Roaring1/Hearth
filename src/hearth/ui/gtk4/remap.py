@@ -275,6 +275,11 @@ class RemapWindow(Gtk.Window):
         self.pal = style_mod.palette()
         self._restart_id = 0
         self._write_pending = False
+        self._write_error = ""
+        self._service_state: str | None = None
+        self._service_query_pending = False
+        self._map_usable = False
+        self._clash_note = ""
         self._pads: dict[int, _Pad] = {}
         self._knobs: dict[int, _Knob] = {}
         #: pad -> slots it triggers, and knob -> constants it drives.
@@ -392,20 +397,50 @@ class RemapWindow(Gtk.Window):
         self._refresh_map()
 
     def _service_note(self) -> str:
-        """Say the service is down only when it is known to be down.
-
-        ``is_active()`` folds "systemd did not answer" into False, which
-        would print a confident lie. The raw state keeps three answers:
-        running, not running, and don't know -- and only the middle one is
-        worth a line on screen.
-        """
-        try:
-            state = services_mod.states([lpd8map.UNIT]).get(lpd8map.UNIT)
-        except Exception:  # pragma: no cover - a dead systemd is not a crash
-            return ""
+        """Describe the last asynchronously queried service state, if known."""
+        state = self._service_state
         if state in (None, "", services_mod.UNKNOWN, "active"):
             return ""
         return "The LPD8 service is not running \u2014 knobs and pads do nothing until it is"
+
+    def _queue_service_state_refresh(self) -> None:
+        """Read systemd away from GTK and update only the cached status."""
+        if self._service_query_pending:
+            return
+        self._service_query_pending = True
+
+        def query() -> None:
+            try:
+                state = services_mod.states([lpd8map.UNIT]).get(lpd8map.UNIT)
+            except Exception as exc:  # pragma: no cover - systemd failures are diagnostic
+                log.warning("could not read %s state: %s", lpd8map.UNIT, exc)
+                state = None
+            GLib.idle_add(self._finish_service_state, state)
+
+        try:
+            threading.Thread(target=query, daemon=True, name="hearth-remap-service-state").start()
+        except RuntimeError as exc:
+            self._service_query_pending = False
+            log.warning("could not queue %s state read: %s", lpd8map.UNIT, exc)
+
+    def _finish_service_state(self, state: str | None) -> bool:
+        self._service_query_pending = False
+        self._service_state = state
+        self._show_status()
+        return False
+
+    def _show_status(self) -> None:
+        if self._write_pending:
+            self._say("Saving LPD8 mapping…")
+        elif self._write_error:
+            self._say(self._write_error)
+        elif not self._map_usable:
+            self._say(
+                f"No map found in {lpd8map.SCRIPT} — nothing here can be "
+                "changed until that script is back"
+            )
+        else:
+            self._say("; ".join(x for x in (self._clash_note, self._service_note()) if x))
 
     def _refresh_map(self) -> None:
         try:
@@ -439,19 +474,21 @@ class RemapWindow(Gtk.Window):
             full = " and ".join(knob_labels.get(c, c) for c in consts)
             widget.show_job(short, full or f"Knob {knob} moves nothing yet")
 
-        usable = bool(knobs or pads) and not self._write_pending
+        usable = bool(knobs or pads)
+        self._map_usable = usable
         for widget in (*self._pads.values(), *self._knobs.values()):
-            widget.set_sensitive(usable)
+            widget.set_sensitive(usable and not self._write_pending)
         if not usable:
-            self._say(
-                f"No map found in {lpd8map.SCRIPT} \u2014 nothing here can be "
-                "changed until that script is back"
-            )
+            self._clash_note = ""
+            self._show_status()
+            self._queue_service_state_refresh()
             return
 
         if self._open is not None:
             self._fill_choice(self._open)
-        self._say("; ".join(x for x in (self._clashes(knobs, pads), self._service_note()) if x))
+        self._clash_note = self._clashes(knobs, pads)
+        self._show_status()
+        self._queue_service_state_refresh()
         # A control that just changed job now watches a different bus.
         self._paint_live()
 
@@ -586,10 +623,11 @@ class RemapWindow(Gtk.Window):
         """Save one mapping off GTK and queue restart only after success."""
         if self._write_pending:
             return
+        self._write_error = ""
         self._write_pending = True
         for widget in (*self._pads.values(), *self._knobs.values()):
             widget.set_sensitive(False)
-        self._say("Saving LPD8 mapping…")
+        self._show_status()
 
         def run() -> None:
             changed = False
@@ -609,9 +647,10 @@ class RemapWindow(Gtk.Window):
     def _finish_write(self, changed: bool, error: str = "") -> bool:
         """Restore controls and publish the worker result on the GTK thread."""
         self._write_pending = False
+        self._write_error = f"Could not save that: {error}" if error else ""
         self._refresh_map()
         if error:
-            self._say(f"Could not save that: {error}")
+            self._say(self._write_error)
         elif changed:
             self._queue_restart()
         return False
