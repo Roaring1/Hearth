@@ -120,21 +120,54 @@ class PeakPoller(threading.Thread):
             return dict(self._levels)
 
     def stop(self, *, timeout: float = 1.0) -> None:
-        """Exit the loop and reap every child, leaving no stray ``parec``."""
+        """Ask the worker to exit; its finally block owns child cleanup."""
         self._stopping.set()
+        if self.ident is None:
+            # Useful for a poller whose stream was prepared before start().
+            self._cleanup_children()
+            return
         if self.is_alive():
             self.join(timeout=timeout)
-        for source, child in list(self._procs.items()):
+        if self.is_alive():
+            # Do not concurrently mutate _procs while run() may still be
+            # using it. The worker's finally block will reap children on exit.
+            log.warning("meter worker did not stop within %.1fs", timeout)
+
+    def _discard_source(self, source: str, *, dead_at: float | None = None) -> None:
+        """Drop one stream and its cached meter state."""
+        child = self._procs.pop(source, None)
+        self._leftover.pop(source, None)
+        if dead_at is None:
+            self._dead_at.pop(source, None)
+        else:
+            self._dead_at[source] = dead_at
+        with self._lock:
+            self._levels.pop(source, None)
+
+        if child is None:
+            return
+        try:
             proc.terminate(child, timeout=0.2)
-            self._procs.pop(source, None)
+        except Exception as exc:  # cleanup must continue for the other streams
+            log.warning("could not stop meter stream %s: %s", source, exc)
+        finally:
+            if child.stdout is not None:
+                try:
+                    child.stdout.close()
+                except OSError as exc:
+                    log.debug("could not close meter pipe %s: %s", source, exc)
+
+    def _cleanup_children(self) -> None:
+        """Reap every stream on the worker thread that owns the process map."""
+        for source in list(self._procs):
+            self._discard_source(source)
 
     def _ensure(self, source: str, now: float) -> None:
         child = self._procs.get(source)
         if child is not None and child.poll() is None:
             return
         if child is not None:
-            self._procs.pop(source, None)
-            self._dead_at[source] = now
+            self._discard_source(source, dead_at=now)
         if now - self._dead_at.get(source, 0.0) < RESTART_COOLDOWN:
             return
         try:
@@ -144,38 +177,58 @@ class PeakPoller(threading.Thread):
             log.warning("cannot meter %s: %s", source, exc)
 
     def run(self) -> None:
-        if not self.available:
-            log.info("parec is not installed; VU meters are disabled")
-            return
-        while not self._stopping.is_set():
-            now = time.monotonic()
-            with self._lock:
-                sources = list(self._sources)
-            for source in sources:
-                self._ensure(source, now)
-            for source in [s for s in self._procs if s not in sources]:
-                proc.terminate(self._procs.pop(source), timeout=0.2)
-
-            # Build the map from the pipe object itself, not from the child,
-            # so the None case is eliminated once here rather than being
-            # re-proved (or ignored) at every select() and read().
-            pipes: dict[IO[bytes], str] = {}
-            for source, child in self._procs.items():
-                pipe = child.stdout
-                if pipe is not None:
-                    pipes[pipe] = source
-            if not pipes:
-                self._stopping.wait(0.1)
-                continue
-            readable, _, _ = select.select(list(pipes), [], [], 0.1)
-            for pipe in readable:
-                source = pipes[pipe]
-                data = pipe.read(READ_CHUNK) or b""
-                if not data:
-                    continue
-                buffered = self._leftover.pop(source, b"") + data
-                usable = len(buffered) - (len(buffered) % SAMPLE_BYTES)
-                self._leftover[source] = buffered[usable:]
-                rms, _peak = rms_peak(buffered[:usable])
+        try:
+            if not self.available:
+                log.info("parec is not installed; VU meters are disabled")
+                return
+            while not self._stopping.is_set():
+                now = time.monotonic()
                 with self._lock:
-                    self._levels[source] = rms
+                    sources = list(self._sources)
+                for source in sources:
+                    self._ensure(source, now)
+                for source in [s for s in self._procs if s not in sources]:
+                    self._discard_source(source)
+
+                # Build the map from the pipe object itself, not from the child,
+                # so the None case is eliminated once here rather than being
+                # re-proved (or ignored) at every select() and read().
+                pipes: dict[IO[bytes], str] = {}
+                for source, child in self._procs.items():
+                    pipe = child.stdout
+                    if pipe is not None:
+                        pipes[pipe] = source
+                if not pipes:
+                    self._stopping.wait(0.1)
+                    continue
+                try:
+                    readable, _, _ = select.select(list(pipes), [], [], 0.1)
+                except (OSError, ValueError) as exc:
+                    log.warning("meter pipe selection failed: %s", exc)
+                    for source in set(pipes.values()):
+                        self._discard_source(source, dead_at=time.monotonic())
+                    self._stopping.wait(0.1)
+                    continue
+
+                for pipe in readable:
+                    source = pipes[pipe]
+                    try:
+                        data = pipe.read(READ_CHUNK) or b""
+                    except (OSError, ValueError) as exc:
+                        log.warning("meter read failed for %s: %s", source, exc)
+                        self._discard_source(source, dead_at=time.monotonic())
+                        continue
+                    if not data:
+                        # EOF is permanently readable. Leaving the child in
+                        # the map would spin this thread at 100% CPU until
+                        # poll() notices the exit (and can leak the pipe).
+                        self._discard_source(source, dead_at=time.monotonic())
+                        continue
+                    buffered = self._leftover.pop(source, b"") + data
+                    usable = len(buffered) - (len(buffered) % SAMPLE_BYTES)
+                    self._leftover[source] = buffered[usable:]
+                    rms, _peak = rms_peak(buffered[:usable])
+                    with self._lock:
+                        self._levels[source] = rms
+        finally:
+            self._cleanup_children()
