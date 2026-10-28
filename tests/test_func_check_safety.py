@@ -1293,7 +1293,11 @@ def test_listener_rows_keep_widget_identity_for_unchanged_snapshots(
     monkeypatch.setattr(mixer.Gtk, "Button", FakeWidget)
     monkeypatch.setattr(mixer.Gtk, "DragSource", FakeDragSource)
     monkeypatch.setattr(mixer, "_set_mute_icon", lambda *_args: None)
-    monkeypatch.setattr(mixer.Strip, "_clear", lambda _self, box: cleared.append(box) or box.children.clear())
+    def clear_children(_self, box) -> None:
+        cleared.append(box)
+        box.children.clear()
+
+    monkeypatch.setattr(mixer.Strip, "_clear", clear_children)
     monkeypatch.setattr(mixer.Strip, "_mark", lambda _self, _name, _size: FakeWidget())
 
     initial = mixer.Listener(name="Firefox", muted=False, index="42")
@@ -1385,7 +1389,11 @@ def test_app_mute_optimistic_signature_is_reconciled_if_snapshot_disagrees(
     monkeypatch.setattr(mixer, "_set_mute_icon", lambda *_args: None)
     monkeypatch.setattr(mixer.pactl, "set_stream_mute", lambda *_args: True)
     cleared: list[object] = []
-    monkeypatch.setattr(mixer.Strip, "_clear", lambda _self, box: cleared.append(box) or box.children.clear())
+    def clear_children(_self, box) -> None:
+        cleared.append(box)
+        box.children.clear()
+
+    monkeypatch.setattr(mixer.Strip, "_clear", clear_children)
     monkeypatch.setattr(mixer.Strip, "_mark", lambda _self, _name, _size: FakeWidget())
 
     listener = mixer.Listener(name="Firefox", muted=False, index="42")
