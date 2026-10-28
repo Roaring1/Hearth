@@ -217,8 +217,9 @@ class Listener:
     name: str
     muted: bool = False
     live: bool = True
-    #: PulseAudio sink-input index, needed to mute this app alone.
+    #: PulseAudio sink-input index, needed to mute/adjust this app alone.
     index: str = ""
+    volume: int = 100
 
 
 @dataclass
@@ -260,6 +261,8 @@ class Strip(Gtk.Box):
         self._route_prior_sensitivity: list[tuple[Gtk.Widget, bool]] = []
         self._route_generation = 0
         self._route_popover_dirty = False
+        self._listener_volume_controls: dict[str, tuple[Gtk.Scale, Gtk.Label, int]] = {}
+        self._listener_volume_held: dict[str, float] = {}
 
         # header: grip, name, minimise
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -991,6 +994,40 @@ class Strip(Gtk.Box):
         else:
             button.remove_css_class("on")
 
+    def _on_app_volume(self, scale: Gtk.Scale, listener: Listener) -> None:
+        """Adjust one sink input without changing the bus volume."""
+        if not listener.index:
+            return
+        percent = max(0, min(150, round(scale.get_value())))
+        self._listener_volume_held[listener.index] = time.monotonic() + HOLD_S
+        controls = self._listener_volume_controls.get(listener.index)
+        if controls is not None:
+            _control, value_label, _handler = controls
+            value_label.set_text(f"{percent}%")
+        scale.set_tooltip_text(f"{listener.name}: {percent}%")
+        if not pactl.set_stream_volume(listener.index, percent):
+            self._listener_volume_held[listener.index] = 0.0
+            scale.set_tooltip_text("Could not set app volume; check pactl/PipeWire")
+            self.win.collector.refresh_now()
+
+    def _sync_listener_volumes(self, listeners: list[Listener]) -> None:
+        """Sync unchanged app rows to snapshots without fighting the user."""
+        now = time.monotonic()
+        for listener in listeners:
+            controls = self._listener_volume_controls.get(listener.index)
+            if controls is None or now <= self._listener_volume_held.get(listener.index, 0.0):
+                continue
+            scale, value_label, handler = controls
+            percent = max(0, min(150, int(listener.volume)))
+            if round(scale.get_value()) != percent:
+                scale.handler_block(handler)
+                try:
+                    scale.set_value(percent)
+                finally:
+                    scale.handler_unblock(handler)
+            value_label.set_text(f"{percent}%")
+            scale.set_tooltip_text(f"{listener.name}: {percent}%")
+
     def _fill_listeners(self, listeners: list[Listener]) -> None:
         # A snapshot arrives every 250-500 ms. Recreating these rows on each
         # poll is unnecessary GTK churn and can disturb pointer/keyboard focus.
@@ -999,8 +1036,16 @@ class Strip(Gtk.Box):
             (listener.index, listener.name, listener.muted) for listener in listeners[:5]
         )
         if getattr(self, "_listener_signature", None) == signature:
+            self._sync_listener_volumes(listeners[:5])
             return
+        now = time.monotonic()
+        held_values = {
+            index: round(scale.get_value())
+            for index, (scale, _label, _handler) in self._listener_volume_controls.items()
+            if now <= self._listener_volume_held.get(index, 0.0)
+        }
         self._listener_signature = signature
+        self._listener_volume_controls = {}
         self._clear(self.listeners)
         for listener in listeners[:5]:
             # Round 10 gives every app its own row: brand chip, name, and the
@@ -1019,7 +1064,7 @@ class Strip(Gtk.Box):
                     "prepare",
                     lambda *_a, idx=listener.index: Gdk.ContentProvider.new_for_value(f"app:{idx}"),
                 )
-                row.add_controller(grab)
+                app_drag = grab
                 row.set_tooltip_text(f"{listener.name} \u2014 drag onto another bus")
             row.append(mark)
             name = Gtk.Label(label=listener.name, xalign=0.0)
@@ -1032,9 +1077,35 @@ class Strip(Gtk.Box):
             name.set_width_chars(0)
             name.set_hexpand(True)
             name.set_tooltip_text(listener.name)
+            if listener.index:
+                name.add_controller(app_drag)
+                name.set_tooltip_text(f"{listener.name} — drag to another bus")
             if listener.muted:
                 name.add_css_class("muted")
             row.append(name)
+            initial_volume = max(
+                0, min(150, held_values.get(listener.index, int(listener.volume)))
+            )
+            volume = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 150.0, 1.0)
+            volume.add_css_class("app-volume")
+            volume.set_draw_value(False)
+            volume.set_hexpand(False)
+            volume.set_size_request(46, -1)
+            volume.set_sensitive(bool(listener.index))
+            volume.set_value(initial_volume)
+            volume.set_tooltip_text(f"{listener.name}: {initial_volume}%")
+            volume_value = Gtk.Label(label=f"{initial_volume}%", xalign=1.0)
+            volume_value.add_css_class("app-volume-value")
+            volume_value.set_width_chars(4)
+            row.append(volume)
+            row.append(volume_value)
+            volume_handler = volume.connect("value-changed", self._on_app_volume, listener)
+            if listener.index:
+                self._listener_volume_controls[listener.index] = (
+                    volume,
+                    volume_value,
+                    volume_handler,
+                )
             box = Gtk.Button()
             box.add_css_class("appmute")
             _set_mute_icon(box, listener.muted)
@@ -1478,7 +1549,13 @@ class MixerWindow(Gtk.ApplicationWindow):
         sinks = dict(snapshot.sinks)
         streams: dict[str, list[Listener]] = {
             sink: [
-                Listener(name=s.name or "app", muted=bool(s.muted), index=s.index) for s in entries
+                Listener(
+                    name=s.name or "app",
+                    muted=bool(s.muted),
+                    index=s.index,
+                    volume=int(s.volume),
+                )
+                for s in entries
             ]
             for sink, entries in snapshot.streams.items()
         }
