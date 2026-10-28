@@ -112,6 +112,10 @@ at the top of `src/hearth/legacy_core.py`. Adapting Hearth to a different rig
 means editing those lists. (`hearth.py` in the repository root is a 26-line
 shim kept so existing symlinks and launchers keep working.)
 
+For live routing behavior, including the mic-router config authority, exact
+loopback matching, and what happens when a route command fails, see
+[`docs/AUDIO_ROUTING.md`](docs/AUDIO_ROUTING.md).
+
 ---
 
 ## Usage

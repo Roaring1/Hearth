@@ -182,7 +182,11 @@ def sources() -> list[ShortEntry]:
     return parse_short_list(_text("list", "short", "sources"))
 
 
-def modules() -> list[Module]:
+def modules(*, strict: bool = False) -> list[Module]:
+    """List loaded modules; strict mode lets mutation callers detect query failure."""
+    if strict:
+        result = proc.run(["pactl", "list", "short", "modules"], timeout=2.0)
+        return parse_modules(result.stdout)
     return parse_modules(_text("list", "short", "modules"))
 
 
@@ -250,9 +254,20 @@ def set_default_sink(sink: str) -> None:
         proc.spawn(["pactl", "set-default-sink", sink])
 
 
-def load_loopback(source: str, sink: str, *, latency_msec: int = 12) -> None:
-    """Route *source* into *sink* with a new ``module-loopback``."""
-    proc.spawn(
+def load_loopback(
+    source: str,
+    sink: str,
+    *,
+    latency_msec: int = 12,
+    timeout: float = 2.0,
+) -> None:
+    """Load a loopback and wait for a checked, bounded pactl result.
+
+    Callers that mutate routes should run this outside the GTK thread. Unlike
+    volume fader changes, route operations are infrequent and need ordering:
+    the caller must know whether loading completed before it reconciles state.
+    """
+    proc.run(
         [
             "pactl",
             "load-module",
@@ -266,7 +281,8 @@ def load_loopback(source: str, sink: str, *, latency_msec: int = 12) -> None:
             "remix=yes",
             "source_dont_move=true",
             "sink_dont_move=true",
-        ]
+        ],
+        timeout=timeout,
     )
 
 
@@ -278,10 +294,18 @@ def unload_loopbacks(
 
     Returns how many modules were unloaded.
     """
-    targets = select_loopbacks(modules(), source=source, sinks=sinks_wanted, exact_source=True)
+    targets = select_loopbacks(
+        modules(strict=True), source=source, sinks=sinks_wanted, exact_source=True
+    )
+    unloaded = 0
+    errors: list[CommandError] = []
     for loopback in targets:
         try:
-            proc.run(["pactl", "unload-module", str(loopback.index)])
+            proc.run(["pactl", "unload-module", str(loopback.index)], timeout=2.0)
+            unloaded += 1
         except CommandError as exc:
             log.warning("could not unload loopback %s: %s", loopback.index, exc)
-    return len(targets)
+            errors.append(exc)
+    if errors:
+        raise errors[0]
+    return unloaded

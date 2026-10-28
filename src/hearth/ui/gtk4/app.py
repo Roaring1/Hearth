@@ -24,6 +24,7 @@ import logging
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -259,6 +260,9 @@ class Strip(Gtk.Box):
         # Destination checkboxes, kept so one endpoint can untick another.
         self._out_checks: dict[str, Gtk.CheckButton] = {}
         self._routing = False
+        self._route_busy = False
+        self._route_errors: dict[str, str] = {}
+        self._route_prior_sensitivity: list[tuple[Gtk.Widget, bool]] = []
 
         # header: grip, name, minimise
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -657,60 +661,135 @@ class Strip(Gtk.Box):
             check.set_tooltip_text(None)
             GLib.timeout_add_seconds(4, self._route_settled)
             return
-        if wanted:
-            try:
+
+        def mutate() -> None:
+            if wanted:
                 pactl.load_loopback(
                     source,
                     self.channel.sink,
                     latency_msec=int(self.win.cfg.get("latency_msec", 12) or 12),
                 )
-            except CommandError as exc:
-                log.warning("could not route %s to %s: %s", source, self.channel.sink, exc)
-                self._routing = True
-                try:
-                    check.set_active(not wanted)
-                    check.set_tooltip_text(f"Could not create this route: {exc}")
-                finally:
-                    self._routing = False
-                return
-        else:
-            pactl.unload_loopbacks(source, [self.channel.sink])
-        check.set_tooltip_text(None)
-        GLib.timeout_add(400, self._route_settled)
+            else:
+                pactl.unload_loopbacks(source, [self.channel.sink])
+
+        self._start_route_job(
+            mutate,
+            check,
+            wanted,
+            error_prefix=f"Could not route {source}",
+        )
 
     def _on_route(self, check: Gtk.CheckButton, sink: str) -> None:
         """Wire or unwire one destination for this bus."""
-        if self._routing:
-            # A partner checkbox is being corrected; its toggle is not a
-            # user decision and must not re-enter this handler.
+        if self._routing or self._route_busy:
             return
         source = f"{self.channel.sink}.monitor"
-        if check.get_active():
-            try:
+        wanted = check.get_active()
+        partner = EXCLUSIVE.get(sink) if wanted else None
+        self._route_errors.pop(sink, None)
+        if partner:
+            self._route_errors.pop(partner, None)
+
+        def mutate() -> None:
+            if wanted:
                 pactl.load_loopback(
                     source, sink, latency_msec=int(self.win.cfg.get("latency_msec", 12) or 12)
                 )
-            except CommandError as exc:
-                log.warning("could not route %s to %s: %s", source, sink, exc)
-                check.set_tooltip_text(f"Could not create this route: {exc}")
-                GLib.timeout_add(100, self._route_settled)
-                return
-            partner = EXCLUSIVE.get(sink)
-            if partner:
-                # Both A50 endpoints were ending up ticked, so a bus played
-                # into the same ears twice. Choosing one endpoint is
-                # choosing, not adding.
-                pactl.unload_loopbacks(source, [partner])
-                widget = self._out_checks.get(partner)
-                if widget is not None and widget.get_active():
-                    self._routing = True
-                    try:
-                        widget.set_active(False)
-                    finally:
-                        self._routing = False
+                # Selecting one exclusive endpoint removes its partner only
+                # after the requested load has actually completed.
+                if partner:
+                    pactl.unload_loopbacks(source, [partner])
+            else:
+                pactl.unload_loopbacks(source, [sink])
+
+        self._start_route_job(
+            mutate,
+            check,
+            wanted,
+            route_sink=sink,
+            error_prefix=f"Could not route {source}",
+        )
+
+    def _start_route_job(
+        self,
+        operation: Callable[[], None],
+        check: Gtk.CheckButton,
+        desired: bool,
+        *,
+        route_sink: str | None = None,
+        error_prefix: str = "Could not change this route",
+    ) -> None:
+        """Serialize a bounded route mutation off the GTK thread."""
+        if self._route_busy:
+            self._routing = True
+            try:
+                check.set_active(not desired)
+                check.set_tooltip_text("Another route change is still running")
+            finally:
+                self._routing = False
+            return
+
+        self._route_busy = True
+        self._route_prior_sensitivity = []
+        seen: set[int] = set()
+        for widget in (*self._out_checks.values(), check):
+            if id(widget) in seen:
+                continue
+            seen.add(id(widget))
+            self._route_prior_sensitivity.append((widget, widget.get_sensitive()))
+            widget.set_sensitive(False)
+
+        def run() -> None:
+            error: Exception | None = None
+            try:
+                operation()
+            except Exception as exc:
+                error = exc
+                log.warning("route change failed for %s: %s", route_sink or self.channel.sink, exc)
+            GLib.idle_add(self._finish_route_job, check, desired, route_sink, error_prefix, error)
+
+        try:
+            threading.Thread(
+                target=run, name=f"hearth-route-{self.channel.sink}", daemon=True
+            ).start()
+        except RuntimeError as exc:
+            self._finish_route_job(check, desired, route_sink, error_prefix, exc)
+
+    def _finish_route_job(
+        self,
+        check: Gtk.CheckButton,
+        desired: bool,
+        route_sink: str | None,
+        error_prefix: str,
+        error: Exception | None,
+    ) -> bool:
+        """Return to GTK, surface errors, and reconcile to the live graph."""
+        self._route_busy = False
+        for widget, was_sensitive in self._route_prior_sensitivity:
+            widget.set_sensitive(was_sensitive)
+        self._route_prior_sensitivity = []
+
+        if route_sink is not None:
+            if error is not None:
+                self._route_errors[route_sink] = f"{error_prefix}: {error}"
+            else:
+                self._route_errors.pop(route_sink, None)
+
+        if error is not None:
+            self._routing = True
+            try:
+                check.set_active(not desired)
+                check.set_tooltip_text(f"{error_prefix}: {error}")
+            finally:
+                self._routing = False
+        elif route_sink is None:
+            check.set_tooltip_text(None)
+
+        if route_sink is not None:
+            self._route_settled()
         else:
-            pactl.unload_loopbacks(source, [sink])
-        GLib.timeout_add_seconds(1, self._route_settled)
+            self.win.collector.refresh_now()
+        return False
 
     def _route_settled(self) -> bool:
         self.win.collector.refresh_now()
@@ -719,7 +798,7 @@ class Strip(Gtk.Box):
 
         source = f"{self.channel.sink}.monitor"
         try:
-            modules = pactl.modules()
+            modules = pactl.modules(strict=True)
             # An empty result is also how pactl's read wrapper represents a
             # failed query; keep the current UI until a real snapshot arrives.
             if not modules:
@@ -740,7 +819,7 @@ class Strip(Gtk.Box):
         try:
             for sink, widget in self._out_checks.items():
                 widget.set_active(sink in live)
-                widget.set_tooltip_text(None)
+                widget.set_tooltip_text(self._route_errors.get(sink))
         finally:
             self._routing = False
         return False
