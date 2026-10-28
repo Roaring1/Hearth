@@ -1231,6 +1231,193 @@ def test_route_popovers_refresh_only_for_changed_inventory_and_defer_while_busy(
     assert strip._route_popover_dirty is False
 
 
+def test_listener_rows_keep_widget_identity_for_unchanged_snapshots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+    cleared: list[object] = []
+
+    class FakeWidget:
+        def __init__(self, *args, **kwargs) -> None:
+            self.children = []
+            self.label = kwargs.get("label", "")
+            self.active = False
+            self.tooltip = None
+            self.classes: set[str] = set()
+
+        def append(self, child) -> None:
+            self.children.append(child)
+
+        def add_css_class(self, name: str) -> None:
+            self.classes.add(name)
+
+        def remove_css_class(self, name: str) -> None:
+            self.classes.discard(name)
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+        def set_ellipsize(self, _mode) -> None:
+            pass
+
+        def set_max_width_chars(self, _value: int) -> None:
+            pass
+
+        def set_width_chars(self, _value: int) -> None:
+            pass
+
+        def set_hexpand(self, _value: bool) -> None:
+            pass
+
+        def set_sensitive(self, _value: bool) -> None:
+            pass
+
+        def connect(self, *_args) -> None:
+            pass
+
+        def add_controller(self, _controller) -> None:
+            pass
+
+    class FakeDragSource:
+        def __init__(self) -> None:
+            pass
+
+        def set_actions(self, _actions) -> None:
+            pass
+
+        def connect(self, *_args) -> None:
+            pass
+
+    monkeypatch.setattr(mixer.Gtk, "Box", FakeWidget)
+    monkeypatch.setattr(mixer.Gtk, "Label", FakeWidget)
+    monkeypatch.setattr(mixer.Gtk, "Button", FakeWidget)
+    monkeypatch.setattr(mixer.Gtk, "DragSource", FakeDragSource)
+    monkeypatch.setattr(mixer, "_set_mute_icon", lambda *_args: None)
+    monkeypatch.setattr(mixer.Strip, "_clear", lambda _self, box: cleared.append(box) or box.children.clear())
+    monkeypatch.setattr(mixer.Strip, "_mark", lambda _self, _name, _size: FakeWidget())
+
+    initial = mixer.Listener(name="Firefox", muted=False, index="42")
+    strip = SimpleNamespace(
+        channel=SimpleNamespace(group="audio"),
+        listeners=FakeWidget(),
+        _listener_signature=None,
+        _rendered_listeners=[],
+        _on_app_mute=lambda *_args: None,
+    )
+
+    mixer.Strip._fill_listeners(strip, [initial])
+    original_row = strip.listeners.children[0]
+
+    # Each collector tick constructs a new Listener, but identical visible
+    # state must preserve the existing row, drag controller and mute button.
+    fresh_but_identical = mixer.Listener(name="Firefox", muted=False, index="42")
+    mixer.Strip._fill_listeners(strip, [fresh_but_identical])
+
+    assert len(cleared) == 1
+    assert strip.listeners.children[0] is original_row
+    assert strip._rendered_listeners[0] is initial
+
+    # A real visible state change still rebuilds that row.
+    now_muted = mixer.Listener(name="Firefox", muted=True, index="42")
+    mixer.Strip._fill_listeners(strip, [now_muted])
+    assert len(cleared) == 2
+    assert strip.listeners.children[0] is not original_row
+    assert strip._rendered_listeners[0] is now_muted
+
+
+def test_app_mute_optimistic_signature_is_reconciled_if_snapshot_disagrees(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+
+    class FakeWidget:
+        def __init__(self, *args, **kwargs) -> None:
+            self.children = []
+            self.label = kwargs.get("label", "")
+            self.tooltip = None
+            self.classes: set[str] = set()
+
+        def append(self, child) -> None:
+            self.children.append(child)
+
+        def add_css_class(self, name: str) -> None:
+            self.classes.add(name)
+
+        def remove_css_class(self, name: str) -> None:
+            self.classes.discard(name)
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+        def set_ellipsize(self, _mode) -> None:
+            pass
+
+        def set_max_width_chars(self, _value: int) -> None:
+            pass
+
+        def set_width_chars(self, _value: int) -> None:
+            pass
+
+        def set_hexpand(self, _value: bool) -> None:
+            pass
+
+        def set_sensitive(self, _value: bool) -> None:
+            pass
+
+        def connect(self, *_args) -> None:
+            pass
+
+        def add_controller(self, _controller) -> None:
+            pass
+
+    class FakeDragSource:
+        def set_actions(self, _actions) -> None:
+            pass
+
+        def connect(self, *_args) -> None:
+            pass
+
+    monkeypatch.setattr(mixer.Gtk, "Box", FakeWidget)
+    monkeypatch.setattr(mixer.Gtk, "Label", FakeWidget)
+    monkeypatch.setattr(mixer.Gtk, "Button", FakeWidget)
+    monkeypatch.setattr(mixer.Gtk, "DragSource", FakeDragSource)
+    monkeypatch.setattr(mixer, "_set_mute_icon", lambda *_args: None)
+    monkeypatch.setattr(mixer.pactl, "set_stream_mute", lambda *_args: True)
+    cleared: list[object] = []
+    monkeypatch.setattr(mixer.Strip, "_clear", lambda _self, box: cleared.append(box) or box.children.clear())
+    monkeypatch.setattr(mixer.Strip, "_mark", lambda _self, _name, _size: FakeWidget())
+
+    listener = mixer.Listener(name="Firefox", muted=False, index="42")
+    strip = SimpleNamespace(
+        channel=SimpleNamespace(group="audio"),
+        listeners=FakeWidget(),
+        _listener_signature=None,
+        _rendered_listeners=[],
+        _on_app_mute=lambda *_args: None,
+        win=SimpleNamespace(collector=SimpleNamespace(refresh_now=lambda: None)),
+    )
+    strip._listener_signature_for = mixer.Strip._listener_signature_for.__get__(strip)
+    mixer.Strip._fill_listeners(strip, [listener])
+    original_row = strip.listeners.children[0]
+
+    button = FakeWidget()
+    mixer.Strip._on_app_mute(strip, button, listener)
+
+    assert listener.muted is True
+    assert strip._listener_signature == mixer.Strip._listener_signature_for(
+        strip._rendered_listeners
+    )
+    # If Pactl launched but the backend didn't apply the change, the next
+    # snapshot's old mute state differs from the optimistic signature and
+    # must rebuild/revert the row rather than pinning the stale button state.
+    old_snapshot = mixer.Listener(name="Firefox", muted=False, index="42")
+    mixer.Strip._fill_listeners(strip, [old_snapshot])
+
+    assert len(cleared) == 2
+    assert strip.listeners.children[0] is not original_row
+    assert strip._rendered_listeners[0].muted is False
+
+
 def test_layout_gestures_do_not_persist_user_preferences() -> None:
     module = _load_func_check()
 
