@@ -2,6 +2,19 @@
 
 This document is the durable checkpoint for the current repair/audit pass. It is kept in the PR branch so work can continue even when the NobaraSupervisor connection to the development PC is unavailable.
 
+## Latest verified checkpoint — 2026-10-28 16:10 PDT
+
+- NobaraSupervisor reconnection is healthy: service version 1.5.0, OAuth enabled, user session `roaring` (UID 1000), and no active subprocess.
+- The code fix for the headset-target/latency save was committed as [`d86b030`](https://github.com/Roaring1/Hearth/commit/d86b03008a2fe062d8449d480af2ce4692f1e220) (`Move Setup headset save off GTK thread`) and is now the published PR head. GitHub Actions run [#86](https://github.com/Roaring1/Hearth/actions/runs/40785107082) completed successfully for that exact commit. All six jobs passed: lint/types, Python 3.11/3.12/3.13 tests, GTK4/Xvfb import smoke, and install smoke.
+- That fix moves the headset-target/latency config save and routing restart request off the GTK click callback, disables the related controls while the operation is pending, and surfaces write/thread-start/restart failures. It includes safety tests for the deferred write and the thread-start failure path.
+- The local `./scripts/check.sh` gate passed on the fixed code: Ruff lint and formatting, mypy (33 source files), **452 pytest tests**, legacy-module compile, desktop-entry validation, ShellCheck, and AppStream validation. AppStream still emits the existing pedantic uppercase application-ID warning while reporting successful validation.
+- The correct user-session check (`XDG_RUNTIME_DIR=/run/user/1000`, `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus`) reports “Everything is working” and all 17 monitored services healthy; LPD8 is connected and Launchpad Mini is controlled by Padfire.
+- Current read-only service snapshot differs from the older checkpoint: `hearth-ui.service` is `inactive/dead` with `Result=success` (optional UI, not an audio-health failure); `lpd8-mixer.service` and `roaring-audio-routesd.service` are `active/running` with `Result=success`. No services were started, stopped, or restarted.
+- The normal interactive Plasma smoke test remains unverified in this session. CI/Xvfb and automated safety tests passed, but they do not replace manually adjusting the per-app volume slider, moving a strip by its title, opening route/input popovers, and checking LPD8 LED feedback in the actual desktop session. Do not claim this test is complete until it is actually performed.
+- PR #1 remains open, mergeable, and unmerged. Do not merge automatically; the handoff still recommends squash-and-merge after the maintainer reviews the live UI behavior.
+
+
+
 ## Current GitHub state
 
 - Repository: https://github.com/Roaring1/Hearth
