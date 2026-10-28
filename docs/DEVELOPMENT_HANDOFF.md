@@ -2,10 +2,10 @@
 
 This document is the durable checkpoint for the current repair/audit pass. It is kept in the PR branch so work can continue even when the NobaraSupervisor connection to the development PC is unavailable.
 
-## Latest verified checkpoint — 2026-10-28 16:22 PDT
+## Latest verified checkpoint — 2026-10-28 16:23 PDT
 
 - NobaraSupervisor reconnection is healthy: service version 1.5.0, OAuth enabled, user session `roaring` (UID 1000), and no active subprocess.
-- Current code HEAD is [`dc839f2`](https://github.com/Roaring1/Hearth/commit/dc839f26870c269d5bd3cea95d62bd452e925fde). CI run [#89](https://github.com/Roaring1/Hearth/actions/runs/40786455641) passed all six jobs for `a4b637e`, including the volume coalescing and first LPD8 remap-worker fixes. Run [#90](https://github.com/Roaring1/Hearth/actions/runs/40786803750) is verifying `dc839f2`, which moves the LPD8 service-status query off GTK and adds regressions for its unknown-state/pending-write behavior.
+- Current code HEAD is [`dc839f2`](https://github.com/Roaring1/Hearth/commit/dc839f26870c269d5bd3cea95d62bd452e925fde). CI run [#89](https://github.com/Roaring1/Hearth/actions/runs/40786455641) passed all six jobs for `a4b637e`, including the volume coalescing and first LPD8 remap-worker fixes. Run [#90](https://github.com/Roaring1/Hearth/actions/runs/40786803750) completed successfully for `dc839f2`; all six jobs passed, including lint/types, Python 3.11/3.12/3.13 tests, GTK4/Xvfb smoke, and install smoke. This commit moves the LPD8 service-status query off GTK and adds regressions for its unknown-state/pending-write behavior.
 - The Setup headset-target/latency config save and routing-restart request run off the GTK click callback, disable dependent controls while pending, and report write/thread-start/restart failures separately. The latest code also coalesces bus and per-app slider values on one background worker at roughly 30 ms per batch, moves LPD8 mapping writes and service-status probes off GTK, and keeps the newest pending volume request per sink/stream.
 - The local `./scripts/check.sh` gate passed on the latest combined local tree: Ruff lint and formatting, mypy (33 source files), **460 pytest tests**, legacy-module compile, desktop-entry validation, ShellCheck, and AppStream validation. AppStream still emits the existing pedantic uppercase application-ID warning while reporting successful validation.
 - The correct user-session check (`XDG_RUNTIME_DIR=/run/user/1000`, `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus`) reports “Everything is working” and all 17 monitored services healthy; LPD8 is connected and Launchpad Mini is controlled by Padfire.
@@ -25,7 +25,7 @@ This document is the durable checkpoint for the current repair/audit pass. It is
 - Local checkout is synchronized and clean at code commit `dc839f26870c269d5bd3cea95d62bd452e925fde` before this handoff refresh. The diagnostic bundle script is executable (`100755`) again after a GitHub contents-API edit had changed its mode.
 - CI run #83 for `43e7c1c` passed lint/types, GTK4 smoke, Python 3.11/3.12/3.13 and install smoke: https://github.com/Roaring1/Hearth/actions/runs/40784116221.
 - CI run #84 for `d8ad784` passed: https://github.com/Roaring1/Hearth/actions/runs/40784293718. CI run #85 for `7ab6bec` passed all jobs: https://github.com/Roaring1/Hearth/actions/runs/40784474690.
-- CI run #86 for `d86b030`, run #87 for `65047a6`, run #88 for `a82b57b`, and run #89 for `a4b637e` all passed all six jobs. Run #90 for `dc839f2` is in progress at https://github.com/Roaring1/Hearth/actions/runs/40786803750. Always use the newest branch head and workflow run as current truth.
+- CI run #86 for `d86b030`, run #87 for `65047a6`, run #88 for `a82b57b`, and run #89 for `a4b637e` all passed all six jobs. Run #90 for `dc839f2` completed successfully with all six jobs passing: https://github.com/Roaring1/Hearth/actions/runs/40786803750. Always use the newest branch head and workflow run as current truth.
 - The PR currently contains many small commits because GitHub's file-update endpoint made one commit per file while the development PC connector was unavailable. Prefer **Squash and merge** (or consolidate history before merging) instead of preserving the entire incremental history. Do not merge without the maintainer's decision.
 
 ## CI evidence
