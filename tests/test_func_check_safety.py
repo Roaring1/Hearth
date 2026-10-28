@@ -113,6 +113,15 @@ def test_route_settled_reconciles_open_checkboxes_to_the_actual_graph(
         def refresh_now(self) -> None:
             self.refreshes += 1
 
+    class InlineThread:
+        def __init__(self, *, target, **_kwargs) -> None:
+            self.target = target
+
+        def start(self) -> None:
+            self.target()
+
+    monkeypatch.setattr(mixer.threading, "Thread", InlineThread)
+    monkeypatch.setattr(mixer.GLib, "idle_add", lambda callback, *args: callback(*args))
     live_modules = [
         mixer.pactl.Module(
             index=55,
@@ -135,8 +144,12 @@ def test_route_settled_reconciles_open_checkboxes_to_the_actual_graph(
             "vm_music": FakeCheck(True),
         },
         _routing=False,
+        _route_busy=False,
         _route_errors={},
+        _route_generation=0,
     )
+    strip._apply_live_routes = lambda *args: mixer.Strip._apply_live_routes(strip, *args)
+    strip._apply_route_snapshot = lambda *args: mixer.Strip._apply_route_snapshot(strip, *args)
 
     assert mixer.Strip._route_settled(strip) is False
     assert collector.refreshes == 1
@@ -167,14 +180,28 @@ def test_route_settled_keeps_checkbox_state_when_module_read_is_empty(
             pass
 
     monkeypatch.setattr(mixer.pactl, "modules", lambda **_kwargs: [])
+
+    class InlineThread:
+        def __init__(self, *, target, **_kwargs) -> None:
+            self.target = target
+
+        def start(self) -> None:
+            self.target()
+
+    monkeypatch.setattr(mixer.threading, "Thread", InlineThread)
+    monkeypatch.setattr(mixer.GLib, "idle_add", lambda callback, *args: callback(*args))
     check = FakeCheck()
     strip = SimpleNamespace(
         win=SimpleNamespace(collector=FakeCollector()),
         channel=SimpleNamespace(sink="vm_game"),
         _out_checks={"vm_chat": check},
         _routing=False,
+        _route_busy=False,
         _route_errors={},
+        _route_generation=0,
     )
+    strip._apply_live_routes = lambda *args: mixer.Strip._apply_live_routes(strip, *args)
+    strip._apply_route_snapshot = lambda *args: mixer.Strip._apply_route_snapshot(strip, *args)
 
     mixer.Strip._route_settled(strip)
 
@@ -232,6 +259,7 @@ def test_input_route_launch_failure_reverts_checkbox(
         _route_busy=False,
         _route_errors={},
         _route_prior_sensitivity=[],
+        _route_generation=0,
         _out_checks={},
         channel=SimpleNamespace(sink="mic_b1"),
         win=SimpleNamespace(cfg={"latency_msec": 12}, collector=FakeCollector()),
@@ -291,7 +319,13 @@ def test_route_job_runs_off_caller_thread_and_disables_controls_until_reconcile(
             args="source=vm_game.monitor sink=vm_chat",
         )
     ]
-    monkeypatch.setattr(mixer.pactl, "modules", lambda **_kwargs: modules)
+    query_threads: list[int] = []
+
+    def list_modules(**_kwargs):
+        query_threads.append(threading.get_ident())
+        return modules
+
+    monkeypatch.setattr(mixer.pactl, "modules", list_modules)
 
     def queue_idle(callback, *args):
         queued.append((callback, args))
@@ -305,11 +339,13 @@ def test_route_job_runs_off_caller_thread_and_disables_controls_until_reconcile(
         _route_busy=False,
         _route_errors={},
         _route_prior_sensitivity=[],
+        _route_generation=0,
         _out_checks={"vm_chat": check},
         channel=SimpleNamespace(sink="vm_game"),
         win=SimpleNamespace(collector=FakeCollector()),
     )
     strip._finish_route_job = lambda *args: mixer.Strip._finish_route_job(strip, *args)
+    strip._apply_live_routes = lambda *args: mixer.Strip._apply_live_routes(strip, *args)
     strip._route_settled = lambda: mixer.Strip._route_settled(strip)
 
     def operation() -> None:
@@ -322,6 +358,7 @@ def test_route_job_runs_off_caller_thread_and_disables_controls_until_reconcile(
     assert finished.wait(timeout=2)
     assert callback_ready.wait(timeout=2)
     assert operation_thread[0] != caller
+    assert query_threads and query_threads[0] != caller
     assert check.sensitive is False
 
     callback, args = queued[0]
@@ -330,6 +367,83 @@ def test_route_job_runs_off_caller_thread_and_disables_controls_until_reconcile(
     assert strip._route_busy is False
     assert check.sensitive is True
     assert check.active is True
+
+
+def test_stale_route_query_cannot_overwrite_a_newer_snapshot() -> None:
+    mixer = _load_mixer()
+
+    class FakeCheck:
+        def __init__(self) -> None:
+            self.active = False
+            self.tooltip = None
+
+        def set_active(self, active: bool) -> None:
+            self.active = active
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+    strip = SimpleNamespace(
+        _route_generation=8,
+        _route_busy=False,
+        _routing=False,
+        _route_errors={},
+        _out_checks={"vm_chat": FakeCheck(), "vm_music": FakeCheck()},
+    )
+    strip._apply_live_routes = lambda *args: mixer.Strip._apply_live_routes(strip, *args)
+
+    # Generation 7 completed late; generation 8 is the newest live graph.
+    mixer.Strip._apply_route_snapshot(strip, 7, {"vm_chat"})
+    assert strip._out_checks["vm_chat"].active is False
+
+    mixer.Strip._apply_route_snapshot(strip, 8, {"vm_music"})
+    assert strip._out_checks["vm_chat"].active is False
+    assert strip._out_checks["vm_music"].active is True
+
+
+def test_other_input_route_toggles_are_rejected_while_a_route_job_is_busy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+    writes: list[str] = []
+    monkeypatch.setattr(
+        mixer.mic_routes,
+        "write",
+        lambda *_args, **_kwargs: writes.append("raw") or True,
+    )
+    monkeypatch.setattr(
+        mixer.mic_routes,
+        "set_carla",
+        lambda *_args, **_kwargs: writes.append("carla") or True,
+    )
+
+    class FakeCheck:
+        def __init__(self) -> None:
+            self.active = True
+            self.tooltip = None
+
+        def get_active(self) -> bool:
+            return self.active
+
+        def set_active(self, active: bool) -> None:
+            self.active = active
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+    strip = SimpleNamespace(_routing=False, _route_busy=True)
+    raw = FakeCheck()
+    carla = FakeCheck()
+
+    mixer.Strip._on_mic_in(strip, raw, "sm7b_mono")
+    mixer.Strip._on_carla_in(strip, carla)
+
+    assert raw.active is False
+    assert carla.active is False
+    assert "still running" in raw.tooltip
+    assert "still running" in carla.tooltip
+    assert writes == []
+    assert strip._routing is False
 
 
 def test_layout_gestures_do_not_persist_user_preferences() -> None:

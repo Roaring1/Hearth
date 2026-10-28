@@ -10,14 +10,17 @@ Selecting an output requests a loopback from that strip's exact monitor source
 to the selected sink. A small set of headset endpoints is exclusive: selecting
 one removes its paired endpoint after the requested route has loaded.
 
-Route mutations run away from GTK's main thread and have a bounded command
-timeout. While a mutation is pending, route controls on that strip are disabled
-to prevent overlapping load/unload requests. When the command completes,
-Hearth reads the module table again and sets open checkboxes from the live graph.
+Route mutations and the follow-up module-table query run away from GTK's main
+thread, with bounded command timeouts. While a mutation is pending, the
+initiating checkbox and output destination controls on that strip are disabled;
+other input-route toggles are rejected and restored while the strip is busy.
+This prevents overlapping load/unload requests without freezing the mixer.
 If `pactl` rejects the operation, Hearth reports the error in the checkbox
-tooltip and still reconciles the visible state with the graph. If the module
-query itself fails, Hearth keeps the last known checkbox state instead of
-claiming that an empty result proves the route is gone.
+tooltip and still reconciles the visible state with the graph. Each asynchronous
+query carries a generation number, so a late result cannot overwrite a newer
+route request. If the module query itself fails or returns an empty table,
+Hearth keeps the last known checkbox state instead of claiming that the route
+is gone.
 
 When removing a route, Hearth matches both the exact source name and requested
 sink. It does not use a substring match for destructive operations; for example,

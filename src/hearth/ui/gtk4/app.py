@@ -44,7 +44,7 @@ from hearth import mic_routes  # noqa: E402
 from hearth import services as services_mod  # noqa: E402
 from hearth import settings as settings_mod  # noqa: E402
 from hearth.audio import pactl  # noqa: E402
-from hearth.errors import CommandError  # noqa: E402
+
 from hearth.ui.gtk4 import icons as icons_mod  # noqa: E402
 from hearth.ui.gtk4 import style as style_mod  # noqa: E402
 from hearth.ui.gtk4.widgets import Fader, Meter, Scale, Sliver, parse_rgb, rounded  # noqa: E402
@@ -263,6 +263,7 @@ class Strip(Gtk.Box):
         self._route_busy = False
         self._route_errors: dict[str, str] = {}
         self._route_prior_sensitivity: list[tuple[Gtk.Widget, bool]] = []
+        self._route_generation = 0
 
         # header: grip, name, minimise
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -620,20 +621,27 @@ class Strip(Gtk.Box):
         if self._routing:
             return
         wanted = check.get_active()
-        if not mic_routes.set_carla(self.channel.sink, wanted):
-            # Keep the widget honest if its authoritative config could not be
-            # saved. Block the toggled signal while restoring the saved value.
+        if self._route_busy:
             self._routing = True
             try:
                 check.set_active(not wanted)
-                check.set_tooltip_text(
-                    "Could not save microphone routing; the previous setting is unchanged"
-                )
+                check.set_tooltip_text("Another route change is still running")
             finally:
                 self._routing = False
             return
-        check.set_tooltip_text("2i2 → Carla → this bus")
-        GLib.timeout_add(400, self._route_settled)
+
+        def mutate() -> None:
+            if not mic_routes.set_carla(self.channel.sink, wanted):
+                raise RuntimeError("microphone routing config could not be saved")
+
+        # set_carla can run pw-link commands with several-second timeouts; do
+        # that off GTK just like module-loopback mutations.
+        self._start_route_job(
+            mutate,
+            check,
+            wanted,
+            error_prefix="Could not save or apply Carla routing",
+        )
 
     def _on_mic_in(self, check: Gtk.CheckButton, source: str) -> None:
         """Wire or unwire one capture device into this mic bus.
@@ -646,6 +654,14 @@ class Strip(Gtk.Box):
         if self._routing:
             return
         wanted = check.get_active()
+        if self._route_busy:
+            self._routing = True
+            try:
+                check.set_active(not wanted)
+                check.set_tooltip_text("Another route change is still running")
+            finally:
+                self._routing = False
+            return
         if source in mic_routes.RAW_TOKEN:
             conf = mic_routes.read()
             if not mic_routes.write(mic_routes.raw_edits(conf, self.channel.sink, source, wanted)):
@@ -719,7 +735,7 @@ class Strip(Gtk.Box):
         route_sink: str | None = None,
         error_prefix: str = "Could not change this route",
     ) -> None:
-        """Serialize a bounded route mutation off the GTK thread."""
+        """Serialize a bounded route mutation and its verification off GTK."""
         if self._route_busy:
             self._routing = True
             try:
@@ -730,6 +746,8 @@ class Strip(Gtk.Box):
             return
 
         self._route_busy = True
+        self._route_generation += 1
+        generation = self._route_generation
         self._route_prior_sensitivity = []
         seen: set[int] = set()
         for widget in (*self._out_checks.values(), check):
@@ -741,19 +759,55 @@ class Strip(Gtk.Box):
 
         def run() -> None:
             error: Exception | None = None
+            live: set[str] | None = None
+            verification_error: Exception | None = None
             try:
                 operation()
             except Exception as exc:
                 error = exc
                 log.warning("route change failed for %s: %s", route_sink or self.channel.sink, exc)
-            GLib.idle_add(self._finish_route_job, check, desired, route_sink, error_prefix, error)
+
+            # Route verification is I/O too. Keep it off GTK so a wedged Pulse
+            # compatibility server cannot freeze the whole mixer for 2 seconds.
+            if route_sink is not None and self._out_checks:
+                source = f"{self.channel.sink}.monitor"
+                try:
+                    modules = pactl.modules(strict=True)
+                    if modules:
+                        live = {
+                            loop.sink
+                            for loop in pactl.select_loopbacks(
+                                modules, source=source, exact_source=True
+                            )
+                        }
+                    else:
+                        verification_error = RuntimeError(
+                            "pactl returned an empty module table; live state is unknown"
+                        )
+                except Exception as exc:
+                    verification_error = exc
+                    log.warning("could not verify route state for %s: %s", source, exc)
+
+            GLib.idle_add(
+                self._finish_route_job,
+                check,
+                desired,
+                route_sink,
+                error_prefix,
+                error,
+                live,
+                verification_error,
+                generation,
+            )
 
         try:
             threading.Thread(
                 target=run, name=f"hearth-route-{self.channel.sink}", daemon=True
             ).start()
         except RuntimeError as exc:
-            self._finish_route_job(check, desired, route_sink, error_prefix, exc)
+            self._finish_route_job(
+                check, desired, route_sink, error_prefix, exc, None, None, generation
+            )
 
     def _finish_route_job(
         self,
@@ -762,8 +816,14 @@ class Strip(Gtk.Box):
         route_sink: str | None,
         error_prefix: str,
         error: Exception | None,
+        live: set[str] | None,
+        verification_error: Exception | None,
+        generation: int,
     ) -> bool:
-        """Return to GTK, surface errors, and reconcile to the live graph."""
+        """Return to GTK after I/O completes; apply only the latest graph read."""
+        if generation != self._route_generation:
+            return False
+
         self._route_busy = False
         for widget, was_sensitive in self._route_prior_sensitivity:
             widget.set_sensitive(was_sensitive)
@@ -772,6 +832,11 @@ class Strip(Gtk.Box):
         if route_sink is not None:
             if error is not None:
                 self._route_errors[route_sink] = f"{error_prefix}: {error}"
+            elif verification_error is not None:
+                self._route_errors[route_sink] = (
+                    f"Route command finished, but live state could not be verified: "
+                    f"{verification_error}"
+                )
             else:
                 self._route_errors.pop(route_sink, None)
 
@@ -782,39 +847,21 @@ class Strip(Gtk.Box):
                 check.set_tooltip_text(f"{error_prefix}: {error}")
             finally:
                 self._routing = False
-        elif route_sink is None:
+        elif route_sink is not None and verification_error is not None:
+            check.set_tooltip_text(self._route_errors[route_sink])
+        else:
             check.set_tooltip_text(None)
 
         if route_sink is not None:
-            self._route_settled()
+            if live is not None:
+                self._apply_live_routes(live)
+            self.win.collector.refresh_now()
         else:
             self.win.collector.refresh_now()
         return False
 
-    def _route_settled(self) -> bool:
-        self.win.collector.refresh_now()
-        if not self._out_checks:
-            return False
-
-        source = f"{self.channel.sink}.monitor"
-        try:
-            modules = pactl.modules(strict=True)
-            # An empty result is also how pactl's read wrapper represents a
-            # failed query; keep the current UI until a real snapshot arrives.
-            if not modules:
-                return False
-            live = {
-                loop.sink
-                for loop in pactl.select_loopbacks(modules, source=source, exact_source=True)
-            }
-        except Exception as exc:  # pragma: no cover - protect the GTK callback
-            log.warning("could not refresh routes for %s: %s", source, exc)
-            return False
-
-        # The initial checkbox state can be stale by the time a fire-and-
-        # forget pactl command completes. Reconcile to the actual graph while
-        # suppressing toggled callbacks, otherwise this would issue commands
-        # recursively or leave a failed request displayed as successful.
+    def _apply_live_routes(self, live: set[str]) -> None:
+        """Paint route checkbox state from a verified graph snapshot."""
         self._routing = True
         try:
             for sink, widget in self._out_checks.items():
@@ -822,6 +869,44 @@ class Strip(Gtk.Box):
                 widget.set_tooltip_text(self._route_errors.get(sink))
         finally:
             self._routing = False
+
+    def _apply_route_snapshot(self, generation: int, live: set[str] | None) -> bool:
+        if generation != self._route_generation or self._route_busy or live is None:
+            return False
+        self._apply_live_routes(live)
+        return False
+
+    def _route_settled(self) -> bool:
+        """Refresh state without querying PipeWire from the GTK main thread."""
+        self.win.collector.refresh_now()
+        if not self._out_checks or self._route_busy:
+            return False
+
+        self._route_generation += 1
+        generation = self._route_generation
+        source = f"{self.channel.sink}.monitor"
+
+        def query() -> None:
+            live: set[str] | None = None
+            try:
+                modules = pactl.modules(strict=True)
+                if modules:
+                    live = {
+                        loop.sink
+                        for loop in pactl.select_loopbacks(
+                            modules, source=source, exact_source=True
+                        )
+                    }
+            except Exception as exc:  # pragma: no cover - logged from worker
+                log.warning("could not refresh routes for %s: %s", source, exc)
+            GLib.idle_add(self._apply_route_snapshot, generation, live)
+
+        try:
+            threading.Thread(
+                target=query, name=f"hearth-route-query-{self.channel.sink}", daemon=True
+            ).start()
+        except RuntimeError as exc:  # pragma: no cover - thread creation is exceptionally rare
+            log.warning("could not start route query for %s: %s", source, exc)
         return False
 
     def _on_app_mute(self, button: Gtk.Button, listener: Listener) -> None:
