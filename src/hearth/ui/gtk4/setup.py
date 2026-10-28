@@ -445,7 +445,7 @@ class SetupWindow(Gtk.Window):
         # closed the mixer once and started it by hand, and the unit is
         # allowed to be dead. It stays in the full list, honestly, but it
         # never counts as something wrong.
-        problems = [u for u in units_mod.problems(found) if not u.name.startswith("hearth")]
+        problems = units_mod.problems(found)
 
         if not found:
             self.verdict.set_text("systemd did not answer")
