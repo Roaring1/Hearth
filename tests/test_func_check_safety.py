@@ -165,6 +165,280 @@ def test_route_settled_reconciles_open_checkboxes_to_the_actual_graph(
     assert strip._routing is False
 
 
+def test_output_popover_uses_cached_routes_without_pactl_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+
+    class FakeBox:
+        def __init__(self, **_kwargs) -> None:
+            self.children = []
+
+        def append(self, child) -> None:
+            self.children.append(child)
+
+    class FakeCheck:
+        def __init__(self, *, label: str) -> None:
+            self.label = label
+            self.active = False
+            self.sensitive = True
+            self.tooltip = None
+
+        def set_active(self, active: bool) -> None:
+            self.active = active
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+        def connect(self, *_args) -> None:
+            pass
+
+    class FakePopover:
+        child = None
+
+        def set_child(self, child) -> None:
+            self.child = child
+
+    monkeypatch.setattr(mixer.Gtk, "Box", FakeBox)
+    monkeypatch.setattr(mixer.Gtk, "CheckButton", FakeCheck)
+    monkeypatch.setattr(
+        mixer.pactl,
+        "modules",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("GTK callback spawned Pactl")),
+    )
+    strip = SimpleNamespace(
+        win=SimpleNamespace(
+            _routes={
+                "vm_game.monitor": {
+                    "vm_chat",
+                    "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat",
+                }
+            },
+            _routes_known=True,
+        ),
+        channel=SimpleNamespace(sink="vm_game", group="headset"),
+        out_popover=FakePopover(),
+        _route_busy=False,
+        _route_errors={},
+        _on_route=lambda *_args: None,
+    )
+
+    mixer.Strip._fill_outputs(strip)
+
+    checks = {check.label: check for check in strip._out_checks.values()}
+    assert checks["A50 chat"].active is True
+    assert all(check.sensitive for check in checks.values())
+    assert strip.out_popover.child.children
+
+
+def test_opening_output_popover_during_route_job_defers_refresh_until_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+
+    class FakeBox:
+        def __init__(self, **_kwargs) -> None:
+            self.children = []
+
+        def append(self, child) -> None:
+            self.children.append(child)
+
+    class FakeCheck:
+        def __init__(self, *, label: str) -> None:
+            self.label = label
+            self.active = False
+            self.sensitive = True
+            self.tooltip = None
+
+        def set_active(self, active: bool) -> None:
+            self.active = active
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+        def connect(self, *_args) -> None:
+            pass
+
+    class FakePopover:
+        child = None
+
+        def set_child(self, child) -> None:
+            self.child = child
+
+    monkeypatch.setattr(mixer.Gtk, "Box", FakeBox)
+    monkeypatch.setattr(mixer.Gtk, "CheckButton", FakeCheck)
+    strip = SimpleNamespace(
+        win=SimpleNamespace(
+            _routes={"vm_game.monitor": {"vm_chat"}},
+            _routes_known=True,
+        ),
+        channel=SimpleNamespace(sink="vm_game", group="headset"),
+        out_popover=FakePopover(),
+        _route_busy=True,
+        _route_popover_dirty=False,
+        _route_errors={},
+        _on_route=lambda *_args: None,
+    )
+
+    mixer.Strip._fill_outputs(strip)
+
+    assert strip._route_popover_dirty is True
+    assert all(not check.sensitive for check in strip._out_checks.values())
+
+
+def test_output_popover_disables_controls_until_route_state_is_verified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+
+    class FakeBox:
+        def __init__(self, **_kwargs) -> None:
+            self.children = []
+
+        def append(self, child) -> None:
+            self.children.append(child)
+
+    class FakeLabel:
+        def __init__(self, *, label: str, **_kwargs) -> None:
+            self.label = label
+
+        def add_css_class(self, *_args) -> None:
+            pass
+
+        def set_wrap(self, *_args) -> None:
+            pass
+
+    class FakeCheck:
+        def __init__(self, *, label: str) -> None:
+            self.label = label
+            self.active = False
+            self.sensitive = True
+            self.tooltip = None
+
+        def set_active(self, active: bool) -> None:
+            self.active = active
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+        def connect(self, *_args) -> None:
+            pass
+
+    class FakePopover:
+        child = None
+
+        def set_child(self, child) -> None:
+            self.child = child
+
+    monkeypatch.setattr(mixer.Gtk, "Box", FakeBox)
+    monkeypatch.setattr(mixer.Gtk, "Label", FakeLabel)
+    monkeypatch.setattr(mixer.Gtk, "CheckButton", FakeCheck)
+    strip = SimpleNamespace(
+        win=SimpleNamespace(_routes={}, _routes_known=False),
+        channel=SimpleNamespace(sink="vm_game", group="headset"),
+        out_popover=FakePopover(),
+        _route_busy=False,
+        _route_errors={},
+        _on_route=lambda *_args: None,
+    )
+
+    mixer.Strip._fill_outputs(strip)
+
+    checks = list(strip._out_checks.values())
+    assert checks
+    assert all(check.active is False and not check.sensitive for check in checks)
+    assert all("verified" in check.tooltip for check in checks)
+    assert strip.out_popover.child.children[0].label.startswith("Waiting for live routing")
+
+
+def test_input_popover_uses_cached_sources_without_pactl_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+
+    class FakeBox:
+        def __init__(self, **_kwargs) -> None:
+            self.children = []
+
+        def append(self, child) -> None:
+            self.children.append(child)
+
+    class FakeLabel:
+        def __init__(self, *, label: str, **_kwargs) -> None:
+            self.label = label
+
+        def add_css_class(self, *_args) -> None:
+            pass
+
+    class FakeCheck:
+        def __init__(self, *, label: str) -> None:
+            self.label = label
+            self.active = False
+            self.sensitive = True
+            self.tooltip = None
+
+        def set_active(self, active: bool) -> None:
+            self.active = active
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+        def connect(self, *_args) -> None:
+            pass
+
+    class FakePopover:
+        child = None
+
+        def set_child(self, child) -> None:
+            self.child = child
+
+    monkeypatch.setattr(mixer.Gtk, "Box", FakeBox)
+    monkeypatch.setattr(mixer.Gtk, "Label", FakeLabel)
+    monkeypatch.setattr(mixer.Gtk, "CheckButton", FakeCheck)
+    monkeypatch.setattr(mixer.mic_routes, "read", lambda: {})
+    monkeypatch.setattr(
+        mixer.pactl,
+        "sources",
+        lambda: (_ for _ in ()).throw(AssertionError("GTK callback spawned Pactl")),
+    )
+    strip = SimpleNamespace(
+        win=SimpleNamespace(
+            _routes={"sm7b_mono": {"mic_b1"}},
+            _sources_present={"sm7b_mono", "astro_mic_48k"},
+            _sources_known=True,
+        ),
+        channel=SimpleNamespace(sink="mic_b1"),
+        in_popover=FakePopover(),
+        _route_busy=False,
+        _on_carla_in=lambda *_args: None,
+        _on_mic_in=lambda *_args: None,
+    )
+
+    mixer.Strip._fill_inputs(strip)
+
+    checks = {
+        check.label: check
+        for check in strip.in_popover.child.children
+        if hasattr(check, "sensitive")
+    }
+    assert checks["SM7B (raw)"].sensitive is True
+    assert checks["A50 boom mic"].sensitive is True
+    assert checks["LifeCam"].sensitive is False
+    assert checks["LifeCam"].tooltip == "Not plugged in"
+
+
 def test_route_settled_keeps_checkbox_state_when_module_read_is_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -220,6 +494,7 @@ def test_input_route_launch_failure_reverts_checkbox(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     mixer = _load_mixer()
+    from hearth.errors import CommandError
 
     class FakeCheck:
         active = True
@@ -241,7 +516,7 @@ def test_input_route_launch_failure_reverts_checkbox(
             self.sensitive = sensitive
 
     def fail_to_load(*_args, **_kwargs):
-        raise mixer.CommandError(["pactl", "load-module"], stderr="not available")
+        raise CommandError(["pactl", "load-module"], stderr="not available")
 
     monkeypatch.setattr(mixer.pactl, "load_loopback", fail_to_load)
 
@@ -266,6 +541,8 @@ def test_input_route_launch_failure_reverts_checkbox(
         _route_errors={},
         _route_prior_sensitivity=[],
         _route_generation=0,
+        _route_popover_dirty=False,
+        _refresh_visible_route_popovers=lambda **_kwargs: None,
         _out_checks={},
         channel=SimpleNamespace(sink="mic_b1"),
         win=SimpleNamespace(cfg={"latency_msec": 12}, collector=FakeCollector()),
@@ -346,6 +623,8 @@ def test_route_job_runs_off_caller_thread_and_disables_controls_until_reconcile(
         _route_errors={},
         _route_prior_sensitivity=[],
         _route_generation=0,
+        _route_popover_dirty=False,
+        _refresh_visible_route_popovers=lambda **_kwargs: None,
         _out_checks={"vm_chat": check},
         channel=SimpleNamespace(sink="vm_game"),
         win=SimpleNamespace(collector=FakeCollector()),
@@ -904,6 +1183,52 @@ def test_dump_ipc_does_not_claim_success_when_worker_cannot_start(
     assert reply.startswith("dump failed to start")
     assert "thread limit reached" in reply
     assert not (tmp_path / "dumps").exists()
+
+
+def test_route_popovers_refresh_only_for_changed_inventory_and_defer_while_busy() -> None:
+    mixer = _load_mixer()
+    events: list[str] = []
+
+    class FakePopover:
+        def __init__(self, visible: bool) -> None:
+            self.visible = visible
+
+        def get_visible(self) -> bool:
+            return self.visible
+
+    strip = SimpleNamespace(
+        _route_busy=False,
+        _route_popover_dirty=False,
+        out_popover=FakePopover(True),
+        in_button=object(),
+        in_popover=FakePopover(True),
+        _fill_outputs=lambda: events.append("out"),
+        _fill_inputs=lambda: events.append("in"),
+    )
+
+    # Identical consecutive collector snapshots must not rebuild a popover
+    # out from under a user's click every 500 ms.
+    mixer.Strip._refresh_visible_route_popovers(strip, routes_changed=False, sources_changed=False)
+    assert events == []
+
+    mixer.Strip._refresh_visible_route_popovers(strip, routes_changed=True, sources_changed=False)
+    assert events == ["out", "in"]
+
+    # If the route worker is mutating the graph, defer any rebuild until its
+    # completion callback has released the controls.
+    strip._route_busy = True
+    mixer.Strip._refresh_visible_route_popovers(strip, routes_changed=True, sources_changed=True)
+    assert events == ["out", "in"]
+    assert strip._route_popover_dirty is True
+
+    strip._route_busy = False
+    mixer.Strip._refresh_visible_route_popovers(
+        strip,
+        routes_changed=strip._route_popover_dirty,
+        sources_changed=strip._route_popover_dirty,
+    )
+    assert events == ["out", "in", "out", "in"]
+    assert strip._route_popover_dirty is False
 
 
 def test_layout_gestures_do_not_persist_user_preferences() -> None:

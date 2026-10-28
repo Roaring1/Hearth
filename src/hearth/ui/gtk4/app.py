@@ -173,14 +173,6 @@ APP_CLASSES = {
 }
 
 
-def _sources_safe() -> list:
-    """Live capture devices, or nothing if pactl is unreachable."""
-    try:
-        return pactl.sources()
-    except OSError:  # pragma: no cover - no pactl, no sources
-        return []
-
-
 def app_class(name: str) -> str:
     """The mark CSS class for an application name, or "" for the default."""
     key = (name or "").lower()
@@ -264,6 +256,7 @@ class Strip(Gtk.Box):
         self._route_errors: dict[str, str] = {}
         self._route_prior_sensitivity: list[tuple[Gtk.Widget, bool]] = []
         self._route_generation = 0
+        self._route_popover_dirty = False
 
         # header: grip, name, minimise
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -566,23 +559,26 @@ class Strip(Gtk.Box):
         return chip
 
     def _fill_outputs(self) -> None:
-        """Build the routing list from the live module table.
+        """Build routing controls from the latest background snapshot.
 
-        Read at open time rather than cached: somebody else's script can
-        load or unload a loopback at any moment, and a checkbox that
-        disagrees with the graph is worse than no checkbox.
+        The collector refreshes the route graph several times per second.
+        Reading system state here would block GTK if the Pulse compatibility
+        server is slow. While no verified graph is available, keep controls
+        disabled rather than showing a guessed all-off state.
         """
+        if self._route_busy:
+            # A popover may be opened while an earlier operation owns the
+            # graph. Mark it dirty so worker completion re-renders it enabled.
+            self._route_popover_dirty = True
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         source = f"{self.channel.sink}.monitor"
-        try:
-            live = {
-                loop.sink
-                for loop in pactl.select_loopbacks(
-                    pactl.modules(), source=source, exact_source=True
-                )
-            }
-        except Exception:  # pragma: no cover - a dead server must not crash the UI
-            live = set()
+        live = self.win._routes.get(source, set())
+        known = self.win._routes_known
+        if not known:
+            hint = Gtk.Label(label="Waiting for live routing state…", xalign=0.0)
+            hint.add_css_class("outhint")
+            hint.set_wrap(True)
+            box.append(hint)
         if self.channel.group == "mic":
             hint = Gtk.Label(
                 label="2i2 \u2192 Carla \u2192 this bus. Tick a device to hear it.",
@@ -598,6 +594,14 @@ class Strip(Gtk.Box):
                 continue
             check = Gtk.CheckButton(label=label)
             check.set_active(sink in live)
+            check.set_sensitive(known and not self._route_busy)
+            route_errors = getattr(self, "_route_errors", {})
+            if sink in route_errors:
+                check.set_tooltip_text(route_errors[sink])
+            elif not known:
+                check.set_tooltip_text("Waiting for a verified live routing snapshot")
+            elif self._route_busy:
+                check.set_tooltip_text("Another route change is still running")
             check.connect("toggled", self._on_route, sink)
             self._out_checks[sink] = check
             box.append(check)
@@ -605,12 +609,20 @@ class Strip(Gtk.Box):
 
     def _fill_inputs(self) -> None:
         """Which capture devices are poured into this mic bus."""
+        if self._route_busy:
+            self._route_popover_dirty = True
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         hint = Gtk.Label(label="Feeding this mic bus", xalign=0.0)
         hint.add_css_class("outhint")
         box.append(hint)
         live = {source for source, sinks in self.win._routes.items() if self.channel.sink in sinks}
-        present = {entry.name for entry in _sources_safe()}
+        sources_known = self.win._sources_known
+        present = self.win._sources_present if sources_known else set()
+        if not sources_known:
+            note = Gtk.Label(label="Waiting for capture-device inventory…", xalign=0.0)
+            note.add_css_class("outhint")
+            note.set_wrap(True)
+            box.append(note)
         conf = mic_routes.read()
 
         # Carla's processed chain comes first because on this rig it is the
@@ -629,8 +641,12 @@ class Strip(Gtk.Box):
             check.set_active(
                 mic_routes.raw_enabled(conf, self.channel.sink, source) if known else source in live
             )
-            check.set_sensitive(source in present)
-            if source not in present:
+            check.set_sensitive(sources_known and source in present and not self._route_busy)
+            if not sources_known:
+                check.set_tooltip_text("Waiting for capture-device inventory")
+            elif self._route_busy:
+                check.set_tooltip_text("Another route change is still running")
+            elif source not in present:
                 check.set_tooltip_text("Not plugged in")
             check.connect("toggled", self._on_mic_in, source)
             box.append(check)
@@ -872,6 +888,11 @@ class Strip(Gtk.Box):
         else:
             check.set_tooltip_text(None)
 
+        dirty = getattr(self, "_route_popover_dirty", False)
+        self._refresh_visible_route_popovers(
+            routes_changed=dirty,
+            sources_changed=dirty,
+        )
         if route_sink is not None:
             if live is not None:
                 self._apply_live_routes(live)
@@ -879,6 +900,28 @@ class Strip(Gtk.Box):
         else:
             self.win.collector.refresh_now()
         return False
+
+    def _refresh_visible_route_popovers(
+        self, *, routes_changed: bool = False, sources_changed: bool = False
+    ) -> None:
+        """Refresh only visible popovers, deferring replacement while busy."""
+        dirty = getattr(self, "_route_popover_dirty", False)
+        routes_changed = routes_changed or dirty
+        sources_changed = sources_changed or dirty
+        if not routes_changed and not sources_changed:
+            return
+        if self._route_busy:
+            self._route_popover_dirty = dirty or routes_changed or sources_changed
+            return
+        if routes_changed and self.out_popover.get_visible():
+            self._fill_outputs()
+        if (
+            (routes_changed or sources_changed)
+            and self.in_button is not None
+            and self.in_popover.get_visible()
+        ):
+            self._fill_inputs()
+        self._route_popover_dirty = False
 
     def _apply_live_routes(self, live: set[str]) -> None:
         """Paint route checkbox state from a verified graph snapshot."""
@@ -1020,8 +1063,12 @@ class MixerWindow(Gtk.ApplicationWindow):
         # are deliberately not written to mixer_hidden -- hiding is the
         # user's choice, absence is the world's.
         self.absent: set[str] = set()
-        #: source -> sinks, refreshed with every snapshot.
+        #: source -> sinks, refreshed with every background snapshot.
         self._routes: dict[str, set[str]] = {}
+        self._routes_known = False
+        #: Source inventory from the same checked background snapshot.
+        self._sources_present: set[str] = set()
+        self._sources_known = False
         #: destinations that are muted at the device itself
         self._muted_outs: set[str] = set()
         #: in-flight window resize, if any
@@ -1382,8 +1429,24 @@ class MixerWindow(Gtk.ApplicationWindow):
         # optional route query failed; keep the last verified graph rather
         # than painting every route as disconnected during a transient error.
         routes = getattr(snapshot, "routes", None)
+        routes_changed = routes is not None and (not self._routes_known or routes != self._routes)
         if routes is not None:
             self._routes = routes
+            self._routes_known = True
+        sources_present = set(snapshot.sources)
+        sources_changed = not self._sources_known or sources_present != self._sources_present
+        self._sources_present = sources_present
+        self._sources_known = True
+
+        # Rebuild open routing popovers only when their backing inventory
+        # changed. Rebuilding on every poll disrupts clicks; while a mutation
+        # is busy the strip defers the redraw until its worker completes.
+        if routes_changed or sources_changed:
+            for strip in self.strips.values():
+                strip._refresh_visible_route_popovers(
+                    routes_changed=routes_changed,
+                    sources_changed=sources_changed,
+                )
 
         # The verbose sink snapshot already includes each sink's mute state.
         # Derive destination mute labels from it instead of launching another
