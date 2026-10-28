@@ -216,15 +216,34 @@ def is_muted(sink: str) -> bool:
     return "yes" in _text("get-sink-mute", sink).lower()
 
 
-def set_mute(sink: str, muted: bool) -> None:
-    if sink:
-        proc.spawn(["pactl", "set-sink-mute", sink, "1" if muted else "0"])
+def _spawn_mutation(*args: str) -> bool:
+    """Launch a pactl mutation without blocking the UI.
+
+    True means the child process was started, not that its eventual exit code
+    was successful. Callers can immediately recover from missing executables
+    or permission failures without awaiting a high-frequency audio command.
+    """
+    try:
+        proc.spawn(["pactl", *args])
+    except CommandError as exc:
+        # Volume faders can call this many times per second, so the UI reports
+        # a visible failure and the shared logger stays quiet at normal level.
+        log.debug("pactl %s could not start: %s", args[0] if args else "", exc)
+        return False
+    return True
 
 
-def move_sink_input(index: str, sink: str) -> None:
+def set_mute(sink: str, muted: bool) -> bool:
+    if not sink:
+        return True
+    return _spawn_mutation("set-sink-mute", sink, "1" if muted else "0")
+
+
+def move_sink_input(index: str, sink: str) -> bool:
     """Send one application's stream to a different bus."""
-    if index and sink:
-        proc.spawn(["pactl", "move-sink-input", str(index), sink])
+    if not index or not sink:
+        return True
+    return _spawn_mutation("move-sink-input", str(index), sink)
 
 
 def is_source_muted(source: str) -> bool:
@@ -233,25 +252,29 @@ def is_source_muted(source: str) -> bool:
     return "yes" in _text("get-source-mute", source).lower()
 
 
-def set_source_mute(source: str, muted: bool) -> None:
-    if source:
-        proc.spawn(["pactl", "set-source-mute", source, "1" if muted else "0"])
+def set_source_mute(source: str, muted: bool) -> bool:
+    if not source:
+        return True
+    return _spawn_mutation("set-source-mute", source, "1" if muted else "0")
 
 
-def set_stream_mute(index: str, muted: bool) -> None:
+def set_stream_mute(index: str, muted: bool) -> bool:
     """Mute one sink input (a single application), not the whole bus."""
-    if index:
-        proc.spawn(["pactl", "set-sink-input-mute", str(index), "1" if muted else "0"])
+    if not index:
+        return True
+    return _spawn_mutation("set-sink-input-mute", str(index), "1" if muted else "0")
 
 
-def set_volume(sink: str, percent: int) -> None:
-    if sink:
-        proc.spawn(["pactl", "set-sink-volume", sink, f"{int(percent)}%"])
+def set_volume(sink: str, percent: int) -> bool:
+    if not sink:
+        return True
+    return _spawn_mutation("set-sink-volume", sink, f"{int(percent)}%")
 
 
-def set_default_sink(sink: str) -> None:
-    if sink:
-        proc.spawn(["pactl", "set-default-sink", sink])
+def set_default_sink(sink: str) -> bool:
+    if not sink:
+        return True
+    return _spawn_mutation("set-default-sink", sink)
 
 
 def load_loopback(

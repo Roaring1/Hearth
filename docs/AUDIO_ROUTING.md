@@ -45,6 +45,17 @@ state with an explanatory tooltip. A saved route may take the router daemon up
 to one polling interval to converge; the UI schedules a refresh after that
 interval.
 
+## Volume and mute controls
+
+Fader, bus-mute, stream-mute, app-move and default-sink changes stay
+fire-and-forget so frequent input events do not stall GTK. The audio wrapper
+returns whether `pactl` could be started; that is **not** a guarantee that the
+child later exited successfully. If the executable is missing or cannot be
+started, Hearth keeps the previous mute state or refreshes the displayed
+volume from the collector and shows an explanatory tooltip. Route creation and
+removal use a checked, bounded command because those operations need explicit
+ordering and a live-graph verification step.
+
 ## Read-only troubleshooting
 
 These commands inspect the session without changing audio routing:

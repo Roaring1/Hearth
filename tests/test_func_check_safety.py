@@ -446,6 +446,135 @@ def test_other_input_route_toggles_are_rejected_while_a_route_job_is_busy(
     assert strip._routing is False
 
 
+def test_volume_callback_recovers_from_pactl_spawn_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+    monkeypatch.setattr(mixer.pactl, "set_volume", lambda *_args: False)
+
+    class FakeWidget:
+        text = ""
+        tooltip = None
+
+        def set_text(self, text: str) -> None:
+            self.text = text
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+    refreshes = []
+    fader = FakeWidget()
+    value = FakeWidget()
+    strip = SimpleNamespace(
+        _held_until=0.0,
+        win=SimpleNamespace(
+            quicken=lambda: None,
+            collector=SimpleNamespace(refresh_now=lambda: refreshes.append(True)),
+        ),
+        value=value,
+        fader=fader,
+        channel=SimpleNamespace(sink="vm_game"),
+    )
+
+    mixer.Strip._on_moved(strip, None, 55)
+
+    assert strip._held_until == 0.0
+    assert value.text == "55"
+    assert "Could not set volume" in fader.tooltip
+    assert refreshes == [True]
+
+
+def test_mute_callback_reverts_optimistic_toggle_when_pactl_cannot_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+    monkeypatch.setattr(mixer.pactl, "set_mute", lambda *_args: False)
+
+    class FakeButton:
+        active = True
+        label = ""
+        tooltip = None
+
+        def get_active(self) -> bool:
+            return self.active
+
+        def set_active(self, active: bool) -> None:
+            self.active = active
+
+        def set_label(self, label: str) -> None:
+            self.label = label
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+        def handler_block(self, _handler) -> None:
+            pass
+
+        def handler_unblock(self, _handler) -> None:
+            pass
+
+    refreshes = []
+    button = FakeButton()
+    strip = SimpleNamespace(
+        mute=button,
+        _mute_handler=1,
+        channel=SimpleNamespace(sink="vm_game"),
+        win=SimpleNamespace(collector=SimpleNamespace(refresh_now=lambda: refreshes.append(True))),
+    )
+
+    mixer.Strip._on_mute(strip, button)
+
+    assert button.active is False
+    assert button.label == "MUTE"
+    assert "Could not change mute" in button.tooltip
+    assert refreshes == [True]
+
+
+def test_app_mute_does_not_paint_success_when_pactl_cannot_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+    monkeypatch.setattr(mixer.pactl, "set_stream_mute", lambda *_args: False)
+
+    class FakeButton:
+        tooltip = None
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+    refreshes = []
+    listener = mixer.Listener(name="Firefox", index="42", muted=False)
+    button = FakeButton()
+    strip = SimpleNamespace(
+        win=SimpleNamespace(collector=SimpleNamespace(refresh_now=lambda: refreshes.append(True)))
+    )
+
+    mixer.Strip._on_app_mute(strip, button, listener)
+
+    assert listener.muted is False
+    assert "Could not change app mute" in button.tooltip
+    assert refreshes == [True]
+
+
+def test_app_move_surfaces_pactl_launch_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+    monkeypatch.setattr(mixer.pactl, "move_sink_input", lambda *_args: False)
+
+    class FakeStrip:
+        tooltip = None
+        channel = SimpleNamespace(sink="vm_chat")
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+    strip = FakeStrip()
+
+    assert mixer.Strip._on_drop(strip, None, "app:42", 0.0, 0.0) is False
+    assert "Could not move this app" in strip.tooltip
+
+
 def test_layout_gestures_do_not_persist_user_preferences() -> None:
     module = _load_func_check()
 

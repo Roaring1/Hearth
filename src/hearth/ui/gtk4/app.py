@@ -432,7 +432,10 @@ class Strip(Gtk.Box):
         if payload.startswith("app:"):
             # An application landed on this strip: move its stream here
             # rather than reordering anything.
-            pactl.move_sink_input(payload[4:], self.channel.sink)
+            if not pactl.move_sink_input(payload[4:], self.channel.sink):
+                self.set_tooltip_text("Could not move this app; check pactl/PipeWire")
+                return False
+            self.set_tooltip_text(None)
             GLib.timeout_add(400, self._route_settled)
             return True
         self.win.reorder(payload, self.channel.sink)
@@ -443,12 +446,29 @@ class Strip(Gtk.Box):
         self._held_until = time.monotonic() + HOLD_S
         self.win.quicken()
         self.value.set_text(f"{value}")
-        pactl.set_volume(self.channel.sink, value)
+        if not pactl.set_volume(self.channel.sink, value):
+            self._held_until = 0.0
+            self.fader.set_tooltip_text("Could not set volume; check pactl/PipeWire")
+            self.win.collector.refresh_now()
+            return
+        self.fader.set_tooltip_text(None)
 
     def _on_mute(self, button: Gtk.ToggleButton) -> None:
         active = button.get_active()
+        if not pactl.set_mute(self.channel.sink, active):
+            # Restore the last known mute state without recursively issuing
+            # another pactl command from the toggled signal.
+            self.mute.handler_block(self._mute_handler)
+            try:
+                button.set_active(not active)
+                button.set_label("MUTED" if not active else "MUTE")
+                button.set_tooltip_text("Could not change mute; check pactl/PipeWire")
+            finally:
+                self.mute.handler_unblock(self._mute_handler)
+            self.win.collector.refresh_now()
+            return
         button.set_label("MUTED" if active else "MUTE")
-        pactl.set_mute(self.channel.sink, active)
+        button.set_tooltip_text(None)
 
     # -- state -----------------------------------------------------------
     @property
@@ -912,7 +932,10 @@ class Strip(Gtk.Box):
     def _on_app_mute(self, button: Gtk.Button, listener: Listener) -> None:
         """Mute one app without touching the bus everything else rides on."""
         muted = not listener.muted
-        pactl.set_stream_mute(listener.index, muted)
+        if not pactl.set_stream_mute(listener.index, muted):
+            button.set_tooltip_text("Could not change app mute; check pactl/PipeWire")
+            self.win.collector.refresh_now()
+            return
         # Paint immediately; the next snapshot confirms it.
         listener.muted = muted
         _set_mute_icon(button, muted)
@@ -1822,10 +1845,8 @@ class MixerApp(Gtk.Application):
     def _ctl_unmute(self) -> str:
         def work() -> None:
             for channel in CHANNELS:
-                try:
-                    pactl.set_mute(channel.sink, False)
-                except Exception as exc:  # a missing bus must not stop the rest
-                    log.warning("unmute %s: %s", channel.sink, exc)
+                if not pactl.set_mute(channel.sink, False):
+                    log.warning("unmute %s: pactl could not be started", channel.sink)
 
         threading.Thread(target=work, daemon=True, name="hearth-unmute").start()
         return "ok"

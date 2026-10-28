@@ -152,6 +152,28 @@ def test_commands_are_argv_and_never_shell(monkeypatch):
     assert calls[2] == ["pactl", "set-default-sink", "vm_game"]
 
 
+@pytest.mark.parametrize(
+    ("name", "args"),
+    [
+        ("set_mute", ("vm_game", True)),
+        ("move_sink_input", ("42", "vm_chat")),
+        ("set_source_mute", ("sm7b_mono", True)),
+        ("set_stream_mute", ("42", True)),
+        ("set_volume", ("vm_game", 65)),
+        ("set_default_sink", ("vm_game",)),
+    ],
+)
+def test_detached_mutators_report_immediate_spawn_failure(
+    monkeypatch, name: str, args: tuple[object, ...]
+) -> None:
+    def fail(argv, **_kwargs):
+        raise CommandError(argv, stderr="pactl is not executable")
+
+    monkeypatch.setattr(proc, "spawn", fail)
+
+    assert getattr(pactl, name)(*args) is False
+
+
 def test_empty_sink_name_is_a_no_op(monkeypatch):
     called = False
 
