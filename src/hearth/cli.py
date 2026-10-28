@@ -133,12 +133,12 @@ def _dispatch(args: argparse.Namespace) -> int:
         print(reply or "no running instance")
         return EXIT_OK
 
-    # Default and --show: hand off to a live instance, else become one.
+    # Default and --show: a socket reply is the reliable IPC signal. A PID
+    # file alone is not proof Hearth is running: old files can outlive a
+    # session and the kernel may later reuse that PID for an unrelated process.
+    # Launching the GTK Application is safe too: its application ID activates
+    # the existing instance if IPC is temporarily unavailable.
     if core.ipc_send("show"):
-        return EXIT_OK
-    pid = core._read_pid()
-    if pid and core._pid_alive(pid):
-        core.ipc_send("show")
         return EXIT_OK
 
     from hearth.ui import run_app

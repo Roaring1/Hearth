@@ -1516,8 +1516,11 @@ class MixerApp(Gtk.Application):
 
     def do_shutdown(self) -> None:
         if self._ipc is not None:
-            self._ipc.stop()
-            self._ipc = None
+            try:
+                self._ipc.stop()
+            finally:
+                self._ipc = None
+                ipc_mod.remove_pid()
         if self.window is not None:
             self.window.shutdown()
         Gtk.Application.do_shutdown(self)
@@ -1531,16 +1534,24 @@ class MixerApp(Gtk.Application):
     # die with the old app.
 
     def _start_control_socket(self) -> None:
-        ipc_mod.write_pid()
         server = ipc_mod.Server(self._on_control)
         try:
             server.start()
         except OSError as exc:
             # A mixer that works is worth more than a mixer with IPC, and
             # a second instance losing the bind must not be fatal.
+            # Do not write the shared PID file until this process owns the
+            # socket; otherwise a failed second startup overwrites the first
+            # instance's PID and breaks the CLI fallback path.
             log.warning("control socket unavailable: %s", exc)
             return
         self._ipc = server
+        try:
+            ipc_mod.write_pid()
+        except OSError as exc:
+            # IPC remains useful even if the optional PID fallback cannot be
+            # written (e.g. a read-only runtime directory).
+            log.warning("control PID file unavailable: %s", exc)
 
     def _on_control(self, request: str) -> str:
         """Answer one socket request. Runs on the IPC thread, never the main one."""

@@ -6,8 +6,11 @@ running instance instead of starting a second mixer.
 
 from __future__ import annotations
 
+import contextlib
+import errno
 import logging
 import socket
+import stat
 from pathlib import Path
 
 from hearth import paths
@@ -45,15 +48,62 @@ def is_running(*, socket_path: Path | None = None) -> bool:
 
 
 def clear_stale_socket(socket_path: Path | None = None) -> bool:
-    """Remove a socket file that no process is listening on.
+    """Remove a stale Unix socket without unlinking a live or unrelated path.
 
-    Returns True when a stale file was removed. Never removes a live socket.
+    A reply timeout does not mean a listener is dead: it may simply be busy.
+    A successful connect proves that something is listening, even when its
+    handler takes longer than the normal CLI timeout to reply.
     """
     path = socket_path or paths.socket_file()
-    if not path.exists():
+    try:
+        initial = path.lstat()
+    except FileNotFoundError:
         return False
-    if send("show", socket_path=path) is not None:
+    except OSError as exc:
+        log.debug("could not inspect IPC path %s: %s", path, exc)
         return False
+
+    if not stat.S_ISSOCK(initial.st_mode):
+        return False
+
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    connected = False
+    try:
+        probe.settimeout(protocol.TIMEOUT)
+        try:
+            probe.connect(str(path))
+            connected = True
+        except OSError as exc:
+            if exc.errno not in (errno.ECONNREFUSED, errno.ENOENT):
+                log.debug("could not safely probe IPC path %s: %s", path, exc)
+                return False
+        if connected:
+            # Keep the current instance's UX: ask a live mixer to focus itself.
+            # Whether it replies quickly is not used to determine liveness.
+            with contextlib.suppress(OSError, TimeoutError):
+                probe.sendall(protocol.encode("show"))
+                protocol.read_line(probe)
+    finally:
+        probe.close()
+
+    if connected:
+        return False
+
+    # Only unlink the exact stale socket inspected before connecting. If a
+    # concurrent launcher replaced the path, leave it alone.
+    try:
+        current = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        log.debug("could not re-check IPC path %s: %s", path, exc)
+        return False
+    if not stat.S_ISSOCK(current.st_mode) or (
+        current.st_dev,
+        current.st_ino,
+    ) != (initial.st_dev, initial.st_ino):
+        return False
+
     try:
         path.unlink()
     except OSError as exc:  # pragma: no cover - permissions on our own dir

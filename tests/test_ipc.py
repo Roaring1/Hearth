@@ -7,8 +7,10 @@ truncated ``get_sinks`` JSON into something that would not parse.
 from __future__ import annotations
 
 import json
+import os
 import socket
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -90,6 +92,24 @@ def test_stale_socket_file_is_detected_and_removed(sock_path):
 def test_live_socket_is_never_removed(running, sock_path):
     assert client.clear_stale_socket(sock_path) is False
     assert sock_path.exists()
+
+
+def test_stale_cleanup_preserves_a_live_socket_when_reply_is_slow(running, sock_path):
+    def slow_handler(_request):
+        time.sleep(0.75)
+        return "still alive"
+
+    running[1]["handler"] = slow_handler
+    assert client.clear_stale_socket(sock_path) is False
+    assert sock_path.exists()
+
+
+def test_stale_cleanup_never_removes_a_regular_file(sock_path):
+    sock_path.parent.mkdir(parents=True, exist_ok=True)
+    sock_path.write_text("not a socket")
+
+    assert client.clear_stale_socket(sock_path) is False
+    assert sock_path.read_text() == "not a socket"
 
 
 def test_bind_replaces_a_stale_unix_socket(sock_path):
@@ -218,7 +238,7 @@ def test_is_known_filters_unsupported_commands():
 def test_pid_helpers(tmp_path):
     pid_path = tmp_path / "hearth.pid"
     server.write_pid(pid_path)
-    assert server.read_pid(pid_path) == __import__("os").getpid()
+    assert server.read_pid(pid_path) == os.getpid()
     assert server.pid_alive(server.read_pid(pid_path)) is True
 
     pid_path.write_text("not a number")
@@ -231,3 +251,30 @@ def test_pid_helpers(tmp_path):
     pid_max_file = Path("/proc/sys/kernel/pid_max")
     pid_max = int(pid_max_file.read_text()) if pid_max_file.exists() else 32768
     assert server.pid_alive(pid_max + 1) is False
+
+
+def test_remove_pid_deletes_only_our_pid_file(tmp_path):
+    pid_path = tmp_path / "hearth.pid"
+    server.write_pid(pid_path)
+
+    assert server.remove_pid(pid_path) is True
+    assert not pid_path.exists()
+
+
+def test_remove_pid_preserves_a_replaced_or_unrelated_pid(tmp_path):
+    pid_path = tmp_path / "hearth.pid"
+    pid_path.write_text("1234567" + chr(10))
+
+    assert server.remove_pid(pid_path, expected_pid=os.getpid()) is False
+    assert pid_path.read_text() == "1234567" + chr(10)
+
+
+def test_remove_pid_does_not_unlink_a_symlink(tmp_path):
+    pid_path = tmp_path / "hearth.pid"
+    target = tmp_path / "keep.txt"
+    target.write_text(str(os.getpid()))
+    pid_path.symlink_to(target)
+
+    assert server.remove_pid(pid_path) is False
+    assert pid_path.is_symlink()
+    assert target.exists()

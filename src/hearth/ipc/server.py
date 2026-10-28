@@ -209,6 +209,39 @@ def read_pid(pid_path: Path | None = None) -> int | None:
         return None
 
 
+def remove_pid(pid_path: Path | None = None, *, expected_pid: int | None = None) -> bool:
+    """Remove a PID record only when it still belongs to the expected process."""
+    path = pid_path or paths.pid_file()
+    expected = os.getpid() if expected_pid is None else expected_pid
+    try:
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode):
+            return False
+        actual = int(path.read_text().strip())
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError) as exc:
+        log.debug("could not inspect PID file %s: %s", path, exc)
+        return False
+    if actual != expected:
+        return False
+    try:
+        current = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        log.warning("could not re-check PID file %s: %s", path, exc)
+        return False
+    if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
+        return False
+    try:
+        path.unlink()
+    except OSError as exc:
+        log.warning("could not remove PID file %s: %s", path, exc)
+        return False
+    return True
+
+
 def pid_alive(pid: int | None) -> bool:
     if not pid or pid <= 0:
         return False

@@ -50,3 +50,19 @@ def test_unknown_level_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("HEARTH_LOG_LEVEL", "chatty")
     logging_setup.configure(None, to_file=False)
     assert logging.getLogger().level == getattr(logging, logging_setup.DEFAULT_LEVEL)
+
+
+def test_show_does_not_trust_a_stale_pid_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    from hearth import legacy_core as core
+    from hearth import ui
+
+    monkeypatch.setattr(core, "ipc_send", lambda _command: False)
+    # Simulate a stale PID file that happens to point at a live unrelated PID.
+    monkeypatch.setattr(core, "_read_pid", lambda: 12345)
+    monkeypatch.setattr(core, "_pid_alive", lambda _pid: True)
+    launched: list[bool] = []
+    monkeypatch.setattr(ui, "run_app", lambda: launched.append(True) or 37)
+
+    args = cli.build_parser().parse_args(["--show"])
+    assert cli._dispatch(args) == 37
+    assert launched == [True]
