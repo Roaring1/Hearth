@@ -220,6 +220,9 @@ Those are not yet part of this repository, so a fresh clone gives you the
 control panel and the mixer, while the service-control buttons will report
 missing units until an equivalent stack exists on the machine.
 
+The LPD8 mapping editor is documented in [`docs/LPD8_REMAP.md`](docs/LPD8_REMAP.md);
+it updates the local script atomically and protects concurrent remaps.
+
 ---
 
 ## License

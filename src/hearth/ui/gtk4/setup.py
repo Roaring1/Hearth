@@ -310,21 +310,27 @@ class SetupWindow(Gtk.Window):
 
     def _set_moonlight(self, source: str, previous: str) -> None:
         error = ""
+        restart_queued = False
         try:
-            if not self._core.set_moonlight_mic(source):
+            saved, restart_queued = self._core.set_moonlight_mic(source)
+            if not saved:
                 error = "Could not save Moonlight mic source; previous setting was preserved."
         except Exception as exc:  # pragma: no cover - surfaced, not raised
             log.warning("setup: could not point moonlight at %s: %s", source, exc)
             error = f"Could not save Moonlight mic source: {exc}"
-        GLib.idle_add(self._moonlight_done, previous, error)
+        GLib.idle_add(self._moonlight_done, previous, error, restart_queued)
 
-    def _moonlight_done(self, previous: str, error: str = "") -> bool:
+    def _moonlight_done(self, previous: str, error: str = "", restart_queued: bool = True) -> bool:
         if error:
             self.ml_stream.set_active(previous == "b1_mic")
             self.ml_chat.set_active(previous == "b2_mic")
             self.ml_note.set_text(error)
-        else:
+        elif restart_queued:
             self.ml_note.set_text("Saved; routing restart requested")
+        else:
+            self.ml_note.set_text(
+                "Saved, but could not queue a routing restart. Restart the service manually."
+            )
         self._moonlight_updating = False
         self.ml_stream.set_sensitive(True)
         self.ml_chat.set_sensitive(True)

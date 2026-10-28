@@ -269,7 +269,7 @@ def systemctl_bg(*args):
     sh_bg_argv(["systemctl", "--user", *args])
 
 
-def run_steps(steps, timeout=20):
+def run_steps(steps, timeout=20) -> bool:
     """Run argv lists in order on a worker thread; floats are sleeps.
 
     Replaces the `a; b; c` and `a && b` shell strings that used to be handed
@@ -289,7 +289,12 @@ def run_steps(steps, timeout=20):
             except Exception:
                 pass
 
-    threading.Thread(target=_worker, daemon=True).start()
+    try:
+        threading.Thread(target=_worker, daemon=True).start()
+    except RuntimeError as exc:
+        logging.getLogger(__name__).warning("could not queue command sequence: %s", exc)
+        return False
+    return True
 
 
 def run_bin(script, *args):
@@ -615,11 +620,11 @@ def moonlight_mic_source():
     return "b2_mic"
 
 
-def set_moonlight_mic(src: str) -> bool:
+def set_moonlight_mic(src: str) -> tuple[bool, bool]:
     """Persist the selected Moonlight mic before requesting a service restart."""
     if src not in MOONLIGHT_MIC_OPTS:
         log.warning("refusing unknown Moonlight microphone source %r", src)
-        return False
+        return False, False
 
     lock_fd: int | None = None
     try:
@@ -633,12 +638,12 @@ def set_moonlight_mic(src: str) -> bool:
         metadata = MOONLIGHT_SVC.lstat()
         if not stat.S_ISREG(metadata.st_mode):
             log.warning("refusing to edit non-regular unit file %s", MOONLIGHT_SVC)
-            return False
+            return False, False
         text = MOONLIGHT_SVC.read_text(encoding="utf-8")
         pattern = r"^(Environment=MIC_SOURCE=).*"
         if not re.search(pattern, text, re.MULTILINE):
             log.warning("unit file %s has no Environment=MIC_SOURCE assignment", MOONLIGHT_SVC)
-            return False
+            return False, False
         updated = re.sub(pattern, lambda match: f"{match.group(1)}{src}", text, flags=re.MULTILINE)
         fd, tmp_name = tempfile.mkstemp(
             prefix=f"{MOONLIGHT_SVC.name}.tmp.", dir=MOONLIGHT_SVC.parent
@@ -656,7 +661,7 @@ def set_moonlight_mic(src: str) -> bool:
             raise
     except (OSError, UnicodeError) as exc:
         log.warning("could not persist Moonlight mic source in %s: %s", MOONLIGHT_SVC, exc)
-        return False
+        return False, False
     finally:
         if lock_fd is not None:
             try:
@@ -664,15 +669,20 @@ def set_moonlight_mic(src: str) -> bool:
             except OSError as exc:
                 log.debug("could not unlock %s: %s", MOONLIGHT_SVC, exc)
             finally:
-                os.close(lock_fd)
+                try:
+                    os.close(lock_fd)
+                except OSError as exc:
+                    log.debug("could not close lock for %s: %s", MOONLIGHT_SVC, exc)
 
-    run_steps(
+    restart_queued = run_steps(
         [
             ["systemctl", "--user", "daemon-reload"],
             ["systemctl", "--user", "restart", "roaring-moonlight-mic.service"],
         ]
     )
-    return True
+    if not restart_queued:
+        log.warning("saved Moonlight mic source, but could not queue the service restart")
+    return True, restart_queued
 
 
 def scarlett_on():

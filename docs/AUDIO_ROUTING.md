@@ -86,8 +86,10 @@ unreadable, symlinked, or lacks the expected assignment, the write fails closed
 and systemd is not reloaded or restarted.
 
 When a save fails, the Setup radio buttons revert to the previous choice and
-the error remains visible. On success, Hearth reports that the setting was
-saved and the routing restart was requested. This is not a claim that the
+the error remains visible. If the file is saved but Hearth cannot queue the
+background restart task, the new choice remains selected and the note requests
+a manual service restart. Otherwise Hearth reports that the setting was saved
+and the routing restart was requested. This is not a claim that the
 asynchronous systemd transition has finished.
 
 ## Read-only troubleshooting

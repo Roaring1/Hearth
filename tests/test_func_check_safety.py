@@ -728,7 +728,7 @@ def test_moonlight_save_failure_reverts_radio_selection(
     chat = FakeCheck(False)
     note = FakeNote()
     strip = SimpleNamespace(
-        _core=SimpleNamespace(set_moonlight_mic=lambda _source: False),
+        _core=SimpleNamespace(set_moonlight_mic=lambda _source: (False, False)),
         _moonlight_updating=True,
         ml_stream=stream,
         ml_chat=chat,
@@ -775,7 +775,7 @@ def test_moonlight_success_keeps_selection_and_reports_restart_requested(
     chat = FakeCheck(True)
     note = FakeNote()
     strip = SimpleNamespace(
-        _core=SimpleNamespace(set_moonlight_mic=lambda source: source == "b2_mic"),
+        _core=SimpleNamespace(set_moonlight_mic=lambda source: (source == "b2_mic", True)),
         _moonlight_updating=True,
         ml_stream=stream,
         ml_chat=chat,
@@ -792,6 +792,55 @@ def test_moonlight_success_keeps_selection_and_reports_restart_requested(
     assert chat.sensitive is True
     assert strip._moonlight_updating is False
     assert note.text == "Saved; routing restart requested"
+
+
+def test_moonlight_queue_failure_keeps_saved_selection_and_explains_manual_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = _load_setup()
+    monkeypatch.setattr(setup.GLib, "idle_add", lambda callback, *args: callback(*args))
+
+    class FakeCheck:
+        def __init__(self, active: bool) -> None:
+            self.active = active
+            self.sensitive = False
+
+        def set_active(self, active: bool) -> None:
+            self.active = active
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
+    class FakeNote:
+        text = ""
+
+        def set_text(self, text: str) -> None:
+            self.text = text
+
+    # The user just selected Stream; the config was saved, but the restart
+    # thread couldn't be started, so this choice must not roll back.
+    stream = FakeCheck(True)
+    chat = FakeCheck(False)
+    note = FakeNote()
+    strip = SimpleNamespace(
+        _core=SimpleNamespace(set_moonlight_mic=lambda _source: (True, False)),
+        _moonlight_updating=True,
+        ml_stream=stream,
+        ml_chat=chat,
+        ml_note=note,
+        _refresh_flow=lambda: None,
+    )
+    strip._moonlight_done = lambda *args: setup.SetupWindow._moonlight_done(strip, *args)
+
+    setup.SetupWindow._set_moonlight(strip, "b1_mic", "b2_mic")
+
+    assert stream.active is True
+    assert chat.active is False
+    assert stream.sensitive is True
+    assert chat.sensitive is True
+    assert strip._moonlight_updating is False
+    assert "Saved, but could not queue" in note.text
+    assert "manually" in note.text
 
 
 def test_layout_gestures_do_not_persist_user_preferences() -> None:
