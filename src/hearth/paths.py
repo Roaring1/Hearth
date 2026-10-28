@@ -19,6 +19,7 @@ locations still readable so an existing install keeps working.
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -92,10 +93,12 @@ def runtime_dir() -> Path:
     directory.
     """
     raw = os.environ.get("XDG_RUNTIME_DIR", "")
-    base = Path(raw) if raw and Path(raw).is_absolute() else Path(tempfile.gettempdir())
-    if not raw:
-        return base / f"{APP_NAME}-{os.getuid()}"
-    return base / APP_NAME
+    candidate = Path(raw) if raw else None
+    if candidate is not None and candidate.is_absolute():
+        return candidate / APP_NAME
+    # An invalid relative value is equivalent to an unset variable. Keep the
+    # fallback unique per UID; never collapse all users into /tmp/hearth.
+    return Path(tempfile.gettempdir()) / f"{APP_NAME}-{os.getuid()}"
 
 
 def legacy_config_dir() -> Path:
@@ -143,3 +146,11 @@ def ensure_dirs() -> None:
         path.mkdir(parents=True, exist_ok=True)
     runtime = runtime_dir()
     runtime.mkdir(parents=True, exist_ok=True, mode=0o700)
+    metadata = runtime.lstat()
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise NotADirectoryError(f"runtime path must be a real directory: {runtime}")
+    if metadata.st_uid != os.getuid():
+        raise PermissionError(f"runtime directory is not owned by this user: {runtime}")
+    # mkdir(mode=...) does not change the permissions of an existing path.
+    # Repair an overly broad mode before creating a control socket in it.
+    runtime.chmod(0o700)

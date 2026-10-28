@@ -8,6 +8,7 @@ the runtime directory being absent entirely.
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -73,6 +74,14 @@ def test_runtime_dir_falls_back_outside_home(clean_env: Path) -> None:
     assert str(os.getuid()) in runtime.name
 
 
+@pytest.mark.parametrize("bad", ["relative/path", "./here", ".."])
+def test_relative_runtime_override_uses_uid_scoped_fallback(
+    clean_env: Path, monkeypatch: pytest.MonkeyPatch, bad: str
+) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", bad)
+    assert paths.runtime_dir() == Path(tempfile.gettempdir()) / f"hearth-{os.getuid()}"
+
+
 def test_log_is_state_not_cache(clean_env: Path) -> None:
     assert paths.log_file().parent == paths.state_dir()
     assert paths.dumps_dir().parent == paths.state_dir()
@@ -87,3 +96,32 @@ def test_ensure_dirs_is_idempotent_and_private(
     for directory in (paths.config_dir(), paths.state_dir(), paths.dumps_dir()):
         assert directory.is_dir()
     assert paths.runtime_dir().stat().st_mode & 0o777 == 0o700
+
+
+def test_ensure_dirs_repairs_existing_runtime_permissions(
+    clean_env: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    runtime = paths.runtime_dir()
+    runtime.mkdir(parents=True)
+    runtime.chmod(0o755)
+
+    paths.ensure_dirs()
+
+    assert runtime.stat().st_mode & 0o777 == 0o700
+
+
+def test_ensure_dirs_refuses_a_symlink_runtime_directory(
+    clean_env: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    parent = tmp_path / "run"
+    parent.mkdir()
+    target = tmp_path / "outside"
+    target.mkdir()
+    (parent / "hearth").symlink_to(target, target_is_directory=True)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(parent))
+
+    with pytest.raises(NotADirectoryError, match="real directory"):
+        paths.ensure_dirs()
+
+    assert target.stat().st_mode & 0o777 == 0o755
