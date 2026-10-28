@@ -131,6 +131,94 @@ def test_legacy_mixer_config_concurrent_updates_do_not_lose_keys(tmp_path: Path)
     assert 'LATENCY_MSEC="24"' in text
 
 
+def test_moonlight_source_write_is_atomic_and_queues_restart(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from hearth import legacy_core as core
+
+    unit = tmp_path / "roaring-moonlight-mic.service"
+    unit.write_text(
+        "[Service]\n# preserve this note\n"
+        "Environment=MIC_SOURCE=b2_mic\nExecStart=/usr/bin/example\n",
+        encoding="utf-8",
+    )
+    unit.chmod(0o640)
+    monkeypatch.setattr(core, "MOONLIGHT_SVC", unit)
+    queued: list[list[object]] = []
+    monkeypatch.setattr(core, "run_steps", lambda steps, **_kw: queued.append(list(steps)))
+
+    assert core.set_moonlight_mic("b1_mic") is True
+
+    updated = unit.read_text(encoding="utf-8")
+    assert "Environment=MIC_SOURCE=b1_mic" in updated
+    assert "# preserve this note" in updated
+    assert "ExecStart=/usr/bin/example" in updated
+    assert unit.stat().st_mode & 0o777 == 0o640
+    assert list(tmp_path.glob("*.tmp.*")) == []
+    assert (tmp_path / ".roaring-moonlight-mic.service.lock").stat().st_mode & 0o777 == 0o600
+    assert queued == [
+        [
+            ["systemctl", "--user", "daemon-reload"],
+            ["systemctl", "--user", "restart", "roaring-moonlight-mic.service"],
+        ]
+    ]
+
+
+def test_moonlight_source_write_fails_closed_and_does_not_restart(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from hearth import legacy_core as core
+
+    missing = tmp_path / "missing.service"
+    monkeypatch.setattr(core, "MOONLIGHT_SVC", missing)
+    queued: list[object] = []
+    monkeypatch.setattr(core, "run_steps", lambda steps, **_kw: queued.append(steps))
+
+    assert core.set_moonlight_mic("b1_mic") is False
+    assert queued == []
+
+    invalid = tmp_path / "invalid.service"
+    raw = bytes([91, 83, 101, 114, 118, 105, 99, 101, 93, 10, 255, 254])
+    invalid.write_bytes(raw)
+    monkeypatch.setattr(core, "MOONLIGHT_SVC", invalid)
+    assert core.set_moonlight_mic("b1_mic") is False
+    assert invalid.read_bytes() == raw
+    assert queued == []
+
+    no_assignment = tmp_path / "no-assignment.service"
+    no_assignment.write_text("[Service]\nExecStart=/bin/true\n", encoding="utf-8")
+    monkeypatch.setattr(core, "MOONLIGHT_SVC", no_assignment)
+    assert core.set_moonlight_mic("b1_mic") is False
+    assert "ExecStart=/bin/true" in no_assignment.read_text()
+    assert queued == []
+
+    victim = tmp_path / "victim.service"
+    victim.write_text("Environment=MIC_SOURCE=b2_mic\n", encoding="utf-8")
+    linked = tmp_path / "linked.service"
+    linked.symlink_to(victim)
+    monkeypatch.setattr(core, "MOONLIGHT_SVC", linked)
+    assert core.set_moonlight_mic("b1_mic") is False
+    assert linked.is_symlink()
+    assert victim.read_text() == "Environment=MIC_SOURCE=b2_mic\n"
+    assert queued == []
+
+
+def test_moonlight_source_rejects_unknown_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from hearth import legacy_core as core
+
+    unit = tmp_path / "moonlight.service"
+    unit.write_text("Environment=MIC_SOURCE=b2_mic\n", encoding="utf-8")
+    monkeypatch.setattr(core, "MOONLIGHT_SVC", unit)
+    queued: list[object] = []
+    monkeypatch.setattr(core, "run_steps", lambda steps, **_kw: queued.append(steps))
+
+    assert core.set_moonlight_mic("$(touch /tmp/should-not-exist)") is False
+    assert unit.read_text() == "Environment=MIC_SOURCE=b2_mic\n"
+    assert queued == []
+
+
 def test_show_does_not_trust_a_stale_pid_file(monkeypatch: pytest.MonkeyPatch) -> None:
     from hearth import legacy_core as core
     from hearth import ui

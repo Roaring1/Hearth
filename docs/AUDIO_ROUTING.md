@@ -75,6 +75,21 @@ means the config was written and the restart command was successfully launched,
 not that systemd has finished the transition. Hearth refreshes the status
 after the asynchronous operation.
 
+## Moonlight microphone source
+
+The Setup panel's Moonlight Stream/Chat choice updates the
+roaring-moonlight-mic.service unit's Environment=MIC_SOURCE= assignment.
+Hearth validates the choice against the two supported bus names, takes a
+private advisory lock, preserves the unit's other lines and permissions, and
+replaces the file atomically. If the unit file is missing, malformed,
+unreadable, symlinked, or lacks the expected assignment, the write fails closed
+and systemd is not reloaded or restarted.
+
+When a save fails, the Setup radio buttons revert to the previous choice and
+the error remains visible. On success, Hearth reports that the setting was
+saved and the routing restart was requested. This is not a claim that the
+asynchronous systemd transition has finished.
+
 ## Read-only troubleshooting
 
 These commands inspect the session without changing audio routing:

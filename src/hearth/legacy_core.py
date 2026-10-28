@@ -615,19 +615,64 @@ def moonlight_mic_source():
     return "b2_mic"
 
 
-def set_moonlight_mic(src):
+def set_moonlight_mic(src: str) -> bool:
+    """Persist the selected Moonlight mic before requesting a service restart."""
+    if src not in MOONLIGHT_MIC_OPTS:
+        log.warning("refusing unknown Moonlight microphone source %r", src)
+        return False
+
+    lock_fd: int | None = None
     try:
-        t = MOONLIGHT_SVC.read_text()
-        t = re.sub(r"^(Environment=MIC_SOURCE=).*", rf"\g<1>{src}", t, flags=re.MULTILINE)
-        MOONLIGHT_SVC.write_text(t)
-    except Exception as e:
-        log.warning("could not update %s: %s", MOONLIGHT_SVC, e)
+        lock_path = MOONLIGHT_SVC.with_name(f".{MOONLIGHT_SVC.name}.lock")
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        lock_fd = os.open(lock_path, flags, 0o600)
+        os.fchmod(lock_fd, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+        metadata = MOONLIGHT_SVC.lstat()
+        if not stat.S_ISREG(metadata.st_mode):
+            log.warning("refusing to edit non-regular unit file %s", MOONLIGHT_SVC)
+            return False
+        text = MOONLIGHT_SVC.read_text(encoding="utf-8")
+        pattern = r"^(Environment=MIC_SOURCE=).*"
+        if not re.search(pattern, text, re.MULTILINE):
+            log.warning("unit file %s has no Environment=MIC_SOURCE assignment", MOONLIGHT_SVC)
+            return False
+        updated = re.sub(pattern, lambda match: f"{match.group(1)}{src}", text, flags=re.MULTILINE)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f"{MOONLIGHT_SVC.name}.tmp.", dir=MOONLIGHT_SVC.parent
+        )
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(updated)
+                stream.flush()
+                os.fsync(stream.fileno())
+            tmp.chmod(stat.S_IMODE(metadata.st_mode))
+            tmp.replace(MOONLIGHT_SVC)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+    except (OSError, UnicodeError) as exc:
+        log.warning("could not persist Moonlight mic source in %s: %s", MOONLIGHT_SVC, exc)
+        return False
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except OSError as exc:
+                log.debug("could not unlock %s: %s", MOONLIGHT_SVC, exc)
+            finally:
+                os.close(lock_fd)
+
     run_steps(
         [
             ["systemctl", "--user", "daemon-reload"],
             ["systemctl", "--user", "restart", "roaring-moonlight-mic.service"],
         ]
     )
+    return True
 
 
 def scarlett_on():

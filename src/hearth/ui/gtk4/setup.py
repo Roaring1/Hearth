@@ -99,6 +99,7 @@ class SetupWindow(Gtk.Window):
 
         self._poll_id = 0
         self._scanning = False
+        self._moonlight_updating = False
         self._units: list[units_mod.Unit] = []
         self._fault_rows: dict[str, Gtk.Widget] = {}
 
@@ -289,22 +290,44 @@ class SetupWindow(Gtk.Window):
         return both
 
     def _on_moonlight(self, button: Gtk.CheckButton, source: str) -> None:
-        if not button.get_active():
+        if not button.get_active() or self._moonlight_updating:
             return
-        self.ml_note.set_text("Restarting the Moonlight mic\u2026")
-        # daemon-reload plus a restart is a second or two of blocking work;
-        # doing it on the main loop freezes the window mid-click.
-        threading.Thread(target=self._set_moonlight, args=(source,), daemon=True).start()
-
-    def _set_moonlight(self, source: str) -> None:
+        previous = "b2_mic" if source == "b1_mic" else "b1_mic"
+        self._moonlight_updating = True
+        self.ml_stream.set_sensitive(False)
+        self.ml_chat.set_sensitive(False)
+        self.ml_note.set_text("Saving Moonlight mic source…")
+        # Unit-file I/O and the queued daemon-reload/restart work stay off GTK.
         try:
-            self._core.set_moonlight_mic(source)
-        except Exception as exc:  # pragma: no cover - a missing unit is not a crash
-            log.warning("setup: could not point moonlight at %s: %s", source, exc)
-        GLib.idle_add(self._moonlight_done)
+            threading.Thread(
+                target=self._set_moonlight,
+                args=(source, previous),
+                name="hearth-moonlight-mic-save",
+                daemon=True,
+            ).start()
+        except RuntimeError as exc:
+            self._moonlight_done(previous, f"Could not save Moonlight mic source: {exc}")
 
-    def _moonlight_done(self) -> bool:
-        self.ml_note.set_text("")
+    def _set_moonlight(self, source: str, previous: str) -> None:
+        error = ""
+        try:
+            if not self._core.set_moonlight_mic(source):
+                error = "Could not save Moonlight mic source; previous setting was preserved."
+        except Exception as exc:  # pragma: no cover - surfaced, not raised
+            log.warning("setup: could not point moonlight at %s: %s", source, exc)
+            error = f"Could not save Moonlight mic source: {exc}"
+        GLib.idle_add(self._moonlight_done, previous, error)
+
+    def _moonlight_done(self, previous: str, error: str = "") -> bool:
+        if error:
+            self.ml_stream.set_active(previous == "b1_mic")
+            self.ml_chat.set_active(previous == "b2_mic")
+            self.ml_note.set_text(error)
+        else:
+            self.ml_note.set_text("Saved; routing restart requested")
+        self._moonlight_updating = False
+        self.ml_stream.set_sensitive(True)
+        self.ml_chat.set_sensitive(True)
         self._refresh_flow()
         return False
 
