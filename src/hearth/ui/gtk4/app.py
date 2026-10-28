@@ -996,6 +996,17 @@ class Strip(Gtk.Box):
         else:
             button.remove_css_class("on")
 
+        # The cached row is intentionally kept alive, so update its name
+        # styling directly instead of relying on the next snapshot rebuilding it.
+        row = button.get_parent()
+        mark = row.get_first_child() if row is not None else None
+        name_label = mark.get_next_sibling() if mark is not None else None
+        if name_label is not None:
+            if muted:
+                name_label.add_css_class("muted")
+            else:
+                name_label.remove_css_class("muted")
+
     @staticmethod
     def _listener_signature_for(
         listeners: list[Listener],
