@@ -92,15 +92,54 @@ def test_live_socket_is_never_removed(running, sock_path):
     assert sock_path.exists()
 
 
-def test_bind_replaces_a_leftover_socket_file(sock_path):
+def test_bind_replaces_a_stale_unix_socket(sock_path):
     sock_path.parent.mkdir(parents=True, exist_ok=True)
-    sock_path.write_text("not a socket")
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale.bind(str(sock_path))
+    stale.close()  # filesystem entry remains, but no process is listening
+
     srv = server.Server(lambda _r: "ok", socket_path=sock_path)
     srv.start()
     try:
         assert client.send("show", socket_path=sock_path) == "ok"
     finally:
         srv.stop()
+
+
+def test_bind_refuses_to_replace_a_regular_file(sock_path):
+    sock_path.parent.mkdir(parents=True, exist_ok=True)
+    sock_path.write_text("keep this file")
+    srv = server.Server(lambda _r: "ok", socket_path=sock_path)
+
+    with pytest.raises(FileExistsError, match="non-socket"):
+        srv.bind()
+
+    assert sock_path.read_text() == "keep this file"
+
+
+def test_bind_does_not_unlink_a_live_server_socket(running, sock_path):
+    active, _state = running
+    original = sock_path.stat()
+    competing = server.Server(lambda _r: "second", socket_path=sock_path)
+
+    with pytest.raises(OSError, match="already has a listener"):
+        competing.bind()
+
+    current = sock_path.stat()
+    assert (current.st_dev, current.st_ino) == (original.st_dev, original.st_ino)
+    assert client.send("show", socket_path=sock_path) == "echo:show"
+    assert active.path.exists()
+
+
+def test_stop_does_not_unlink_a_replacement_path(sock_path):
+    srv = server.Server(lambda _r: "unused", socket_path=sock_path)
+    srv.bind()
+    sock_path.unlink()
+    sock_path.write_text("replacement file")
+
+    srv.stop()
+
+    assert sock_path.read_text() == "replacement file"
 
 
 def test_stop_removes_the_socket_and_joins(sock_path):
@@ -120,15 +159,38 @@ def test_encode_rejects_embedded_newline():
         protocol.encode("two\nlines")
 
 
-def test_read_line_stops_at_the_limit():
+def test_read_line_rejects_an_oversized_unterminated_frame():
     left, right = socket.socketpair()
     try:
         blob = b"x" * 9000  # no newline at all
         threading.Thread(target=lambda: (left.sendall(blob), left.close()), daemon=True).start()
-        got = protocol.read_line(right, limit=4096)
+        with pytest.raises(IpcError, match="exceeds 4096 bytes"):
+            protocol.read_line(right, limit=4096)
     finally:
         right.close()
-    assert 0 < len(got) <= 9000
+
+
+def test_read_line_limit_is_strict_even_for_non_aligned_limits():
+    left, right = socket.socketpair()
+    try:
+        threading.Thread(
+            target=lambda: (left.sendall(b"x" * 1200 + b"\n"), left.close()),
+            daemon=True,
+        ).start()
+        with pytest.raises(IpcError, match="exceeds 1000 bytes"):
+            protocol.read_line(right, limit=1000)
+    finally:
+        right.close()
+
+
+def test_read_line_rejects_a_non_positive_limit():
+    left, right = socket.socketpair()
+    try:
+        with pytest.raises(ValueError, match="limit must be positive"):
+            protocol.read_line(right, limit=0)
+    finally:
+        left.close()
+        right.close()
 
 
 def test_read_line_reassembles_chunks():

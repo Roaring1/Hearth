@@ -9,9 +9,11 @@ and shutdown must be clean rather than leaving a socket file behind.
 from __future__ import annotations
 
 import contextlib
+import errno
 import logging
 import os
 import socket
+import stat
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -36,38 +38,122 @@ class Server:
         self._sock: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stopping = threading.Event()
+        self._owns_path = False
+        self._path_identity: tuple[int, int] | None = None
 
     def bind(self) -> None:
-        """Create and bind the listening socket.
+        """Create and bind the listening socket without stealing another instance.
 
-        The socket is chmod 0600: anything that can write to it can mute the
-        machine or quit the app.
+        A path left by a crashed instance is safe to remove, but a live socket
+        belongs to another Hearth process and a regular file must never be
+        unlinked just because it occupies the expected pathname.
         """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists():
+        try:
+            existing_stat = self.path.lstat()
+        except FileNotFoundError:
+            existing_stat = None
+
+        if existing_stat is not None:
+            if not stat.S_ISSOCK(existing_stat.st_mode):
+                raise FileExistsError(
+                    errno.EEXIST,
+                    "refusing to replace a non-socket IPC path",
+                    str(self.path),
+                )
+
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connected = False
             try:
+                probe.settimeout(0.25)
+                try:
+                    probe.connect(str(self.path))
+                    connected = True
+                except OSError as exc:
+                    if exc.errno not in (errno.ECONNREFUSED, errno.ENOENT):
+                        raise OSError(
+                            f"cannot safely check existing IPC socket {self.path}: {exc}"
+                        ) from exc
+                if connected:
+                    # Let a live instance focus itself, then refuse to replace
+                    # its pathname even if it does not manage to reply.
+                    with contextlib.suppress(OSError, TimeoutError):
+                        probe.sendall(protocol.encode("show"))
+                        protocol.read_line(probe)
+            finally:
+                probe.close()
+
+            if connected:
+                raise OSError(
+                    errno.EADDRINUSE,
+                    "Hearth IPC socket already has a listener",
+                    str(self.path),
+                )
+
+            # Only unlink the exact stale socket we examined. If another
+            # process replaced the pathname during the probe, fail closed.
+            try:
+                current_stat = self.path.lstat()
+            except FileNotFoundError:
+                current_stat = None
+            if current_stat is not None:
+                same_socket = stat.S_ISSOCK(current_stat.st_mode) and (
+                    current_stat.st_dev,
+                    current_stat.st_ino,
+                ) == (existing_stat.st_dev, existing_stat.st_ino)
+                if not same_socket:
+                    raise FileExistsError(
+                        errno.EEXIST,
+                        "IPC path changed while checking for a stale socket",
+                        str(self.path),
+                    )
                 self.path.unlink()
-            except OSError as exc:
-                raise OSError(f"cannot replace socket {self.path}: {exc}") from exc
+
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.bind(str(self.path))
-        sock.listen(4)
-        self.path.chmod(0o600)
-        # Closing a listening socket from another thread does not reliably
-        # wake a blocked accept() on Linux, which left the IPC thread running
-        # after stop(). A short accept timeout makes shutdown deterministic.
-        sock.settimeout(ACCEPT_POLL)
-        self._sock = sock
+        try:
+            sock.bind(str(self.path))
+            created_stat = self.path.lstat()
+            self._owns_path = True
+            self._path_identity = (created_stat.st_dev, created_stat.st_ino)
+            sock.listen(4)
+            self.path.chmod(0o600)
+            # Closing a listening socket from another thread does not reliably
+            # wake a blocked accept() on Linux, which left the IPC thread running
+            # after stop(). A short accept timeout makes shutdown deterministic.
+            sock.settimeout(ACCEPT_POLL)
+            self._sock = sock
+        except BaseException:
+            sock.close()
+            self._remove_owned_path()
+            raise
+
+    def _remove_owned_path(self) -> None:
+        """Unlink the socket only if the pathname still names our inode."""
+        identity = self._path_identity
+        if not self._owns_path or identity is None:
+            return
+        try:
+            current = self.path.lstat()
+            if stat.S_ISSOCK(current.st_mode) and (current.st_dev, current.st_ino) == identity:
+                self.path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log.warning("could not remove owned IPC socket %s: %s", self.path, exc)
+        finally:
+            self._owns_path = False
+            self._path_identity = None
 
     def serve_forever(self) -> None:
         """Accept connections until :meth:`stop` is called."""
         if self._sock is None:
             self.bind()
-        if self._sock is None:  # pragma: no cover - bind() always sets it
+        sock = self._sock
+        if sock is None:  # pragma: no cover - bind() always sets it
             raise OSError("IPC socket was not created")
         while not self._stopping.is_set():
             try:
-                conn, _ = self._sock.accept()
+                conn, _ = sock.accept()
             except TimeoutError:
                 continue  # nothing connected; recheck the stop flag
             except OSError:
@@ -105,9 +191,7 @@ class Server:
         if self._thread is not None:
             self._thread.join(timeout=timeout)
             self._thread = None
-        with contextlib.suppress(OSError):  # pragma: no cover
-            if self.path.exists():
-                self.path.unlink()
+        self._remove_owned_path()
 
 
 def write_pid(pid_path: Path | None = None) -> Path:
