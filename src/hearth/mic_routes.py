@@ -63,6 +63,10 @@ CARLA_PORTS: tuple[tuple[str, str], ...] = (
 
 _ASSIGN = re.compile(r'^(?P<key>[A-Z0-9_]+)="?(?P<value>[^"#]*)"?\s*$')
 _TRUE = {"1", "true", "yes", "on"}
+_ROUTE_VALUES = {"none", "sm7b", "astro", "both"}
+_ROUTE_KEYS = {"B1_ROUTE", "B2_ROUTE"}
+_BOOL_KEYS = {"B1_ACTIVE", "B2_ACTIVE", "CARLA_TO_B1", "CARLA_TO_B2"}
+_WRITE_KEYS = _ROUTE_KEYS | _BOOL_KEYS
 
 
 def parse(text: str) -> dict[str, str]:
@@ -113,15 +117,25 @@ def read(path: Path | None = None) -> dict[str, str]:
 
 
 def write(updates: dict[str, str], path: Path | None = None) -> bool:
-    """Apply updates atomically and serialize concurrent read/merge/write edits.
+    """Apply validated updates atomically and serialize concurrent writers.
 
-    The daemon sources this file on a three-second timer, so a half-written
-    one is a half-configured microphone. A unique temporary file plus atomic
-    replacement avoids partial reads; an advisory lock also prevents two
-    writers updating different keys from losing each other's changes.
+    The daemon sources this file on a three-second timer, so a malformed or
+    partial update can change the live microphone graph or become shell code.
+    Only known keys and finite value choices are writable. Unique same-directory
+    temp files keep reads atomic; a private advisory lock prevents lost updates.
     """
     if not updates:
         return True
+    for key, value in updates.items():
+        valid = key in _WRITE_KEYS and isinstance(value, str)
+        if key in _ROUTE_KEYS:
+            valid = valid and value in _ROUTE_VALUES
+        elif key in _BOOL_KEYS:
+            valid = valid and value in {"true", "false"}
+        if not valid:
+            log.warning("refusing invalid microphone routing update %r=%r", key, value)
+            return False
+
     target = path or CONF_PATH
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -137,32 +151,42 @@ def write(updates: dict[str, str], path: Path | None = None) -> bool:
         os.fchmod(lock_fd, 0o600)
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         try:
+            cfg_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+            cfg_flags |= getattr(os, "O_NOFOLLOW", 0)
+            cfg_fd = -1
             try:
-                original = target.read_text(encoding="utf-8")
-            except FileNotFoundError:
-                original = ""
+                try:
+                    cfg_fd = os.open(target, cfg_flags)
+                except FileNotFoundError:
+                    original = ""
+                    original_mode = None
+                else:
+                    metadata = os.fstat(cfg_fd)
+                    if not stat.S_ISREG(metadata.st_mode):
+                        raise OSError(f"refusing to edit non-regular config: {target}")
+                    with os.fdopen(cfg_fd, "r", encoding="utf-8") as stream:
+                        cfg_fd = -1
+                        original = stream.read()
+                    original_mode = stat.S_IMODE(metadata.st_mode)
             except (OSError, UnicodeError) as exc:
-                # Do not treat an unreadable/malformed existing file as
-                # missing: doing so would erase comments and settings this
-                # module doesn't own.
-                log.warning("could not read %s; refusing to overwrite: %s", target, exc)
+                # O_NOFOLLOW rejects symlinks at open time, and invalid bytes
+                # are not treated as a missing config. Preserve the source file.
+                log.warning("could not safely read %s; refusing to overwrite: %s", target, exc)
                 return False
+            finally:
+                if cfg_fd >= 0:
+                    os.close(cfg_fd)
 
             updated = apply_edits(original, updates)
-            try:
-                original_mode = stat.S_IMODE(target.stat().st_mode)
-            except FileNotFoundError:
-                original_mode = None
-
             fd, tmp_name = tempfile.mkstemp(prefix=f"{target.name}.tmp.", dir=target.parent)
             tmp = Path(tmp_name)
             try:
+                if original_mode is not None:
+                    os.fchmod(fd, original_mode)
                 with os.fdopen(fd, "w", encoding="utf-8") as stream:
                     stream.write(updated)
                     stream.flush()
                     os.fsync(stream.fileno())
-                if original_mode is not None:
-                    tmp.chmod(original_mode)
                 tmp.replace(target)
             except BaseException:
                 tmp.unlink(missing_ok=True)
@@ -181,7 +205,10 @@ def write(updates: dict[str, str], path: Path | None = None) -> bool:
             # Closing the descriptor releases the lock as a fallback.
             log.debug("could not explicitly unlock %s: %s", target, exc)
         finally:
-            os.close(lock_fd)
+            try:
+                os.close(lock_fd)
+            except OSError as exc:
+                log.debug("could not close config lock %s: %s", target, exc)
 
 
 def tokens(route: str) -> set[str]:

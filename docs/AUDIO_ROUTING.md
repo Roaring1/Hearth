@@ -38,8 +38,11 @@ Hearth preserves unknown keys, ordering, and comments when editing this shared
 shell config. Writers serialize the full read/merge/write transaction with a
 private advisory lock, then use a unique same-directory temporary file and
 atomic replacement. That prevents simultaneous edits to different keys from
-overwriting each other. Invalid UTF-8 is treated as an unreadable config; the
-original bytes are preserved and edits fail closed. If the lock, read, or
+overwriting each other. The writer accepts only the route and boolean keys it
+owns, with fixed value choices; unknown keys and shell-unsafe values are
+refused because the config is sourced by the daemon. Symlinked/non-regular
+config paths and invalid UTF-8 are treated as unreadable; original bytes are
+preserved and edits fail closed. If the lock, read, or
 replacement cannot be completed, the edit fails closed. Hearth does not apply a
 Carla live-link change when its config update failed. If the config is saved but
 the pw-link executable cannot start or Carla is unavailable, the saved choice is

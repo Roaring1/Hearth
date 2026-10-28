@@ -148,17 +148,17 @@ def test_write_refuses_to_overwrite_an_unreadable_existing_file(
     conf = tmp_path / "roaring_mic_router.conf"
     conf.write_text(SAMPLE, encoding="utf-8")
     original = conf.read_text(encoding="utf-8")
-    read_text = Path.read_text
+    open_file = mic_routes.os.open
 
-    def unreadable(self: Path, *args, **kwargs):
-        if self == conf:
+    def unreadable(path, flags, *args, **kwargs):
+        if Path(path) == conf:
             raise PermissionError("simulated read failure")
-        return read_text(self, *args, **kwargs)
+        return open_file(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_text", unreadable)
+    monkeypatch.setattr(mic_routes.os, "open", unreadable)
 
     assert mic_routes.write({"B2_ROUTE": "none"}, conf) is False
-    assert read_text(conf, encoding="utf-8") == original
+    assert conf.read_text(encoding="utf-8") == original
 
 
 def test_write_does_not_follow_a_preexisting_temp_symlink(tmp_path: Path) -> None:
@@ -172,6 +172,44 @@ def test_write_does_not_follow_a_preexisting_temp_symlink(tmp_path: Path) -> Non
     assert mic_routes.write({"B2_ROUTE": "none"}, conf) is True
     assert victim.read_text(encoding="utf-8") == "leave this alone"
     assert mic_routes.read(conf)["B2_ROUTE"] == "none"
+
+
+def test_write_refuses_a_symlink_config_without_touching_its_target(
+    tmp_path: Path,
+) -> None:
+    victim = tmp_path / "actual.conf"
+    victim.write_text(SAMPLE, encoding="utf-8")
+    original = victim.read_text(encoding="utf-8")
+    config_link = tmp_path / "roaring_mic_router.conf"
+    config_link.symlink_to(victim)
+
+    assert mic_routes.write({"B2_ROUTE": "none"}, config_link) is False
+    assert config_link.is_symlink()
+    assert victim.read_text(encoding="utf-8") == original
+    assert list(tmp_path.glob("roaring_mic_router.conf.tmp.*")) == []
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"B1_ROUTE": "$(touch /tmp/hearth-route-injection-test)"},
+        {"B2_ROUTE": 'none" ; touch /tmp/hearth-route-injection-test; #'},
+        {"B1_ACTIVE": "$(touch /tmp/hearth-route-injection-test)"},
+        {"CARLA_TO_B2": "sometimes"},
+        {"UNOWNED_KEY": "true"},
+    ],
+)
+def test_write_rejects_unknown_keys_and_shell_unsafe_values(
+    tmp_path: Path, updates: dict[str, str]
+) -> None:
+    config = tmp_path / "roaring_mic_router.conf"
+    config.write_text(SAMPLE, encoding="utf-8")
+    original = config.read_text(encoding="utf-8")
+
+    assert mic_routes.write(updates, config) is False
+    assert config.read_text(encoding="utf-8") == original
+    assert not (tmp_path / "hearth-route-injection-test").exists()
+    assert list(tmp_path.glob("roaring_mic_router.conf.tmp.*")) == []
 
 
 def test_write_refuses_a_symlink_lock_file_without_touching_its_target(
