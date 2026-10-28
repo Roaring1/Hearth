@@ -257,6 +257,10 @@ class Strip(Gtk.Box):
         self._route_prior_sensitivity: list[tuple[Gtk.Widget, bool]] = []
         self._route_generation = 0
         self._route_popover_dirty = False
+        # Stable app rows own drag controllers and mute-button callbacks.
+        # Keep those widgets alive when only unrelated bus state changes.
+        self._listener_signature: tuple[tuple[str, bool, bool, str], ...] | None = None
+        self._rendered_listeners: list[Listener] = []
 
         # header: grip, name, minimise
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
@@ -979,8 +983,12 @@ class Strip(Gtk.Box):
             button.set_tooltip_text("Could not change app mute; check pactl/PipeWire")
             self.win.collector.refresh_now()
             return
-        # Paint immediately; the next snapshot confirms it.
+        # Paint immediately; the next snapshot confirms it. The rendered
+        # listener object is also the source of truth for row identity, so
+        # advance its signature with the optimistic UI state. If the next
+        # snapshot disagrees, the normal diff below rebuilds and reverts it.
         listener.muted = muted
+        self._listener_signature = self._listener_signature_for(self._rendered_listeners)
         _set_mute_icon(button, muted)
         button.set_tooltip_text(f"Unmute {listener.name}" if muted else f"Mute {listener.name}")
         if muted:
@@ -988,19 +996,36 @@ class Strip(Gtk.Box):
         else:
             button.remove_css_class("on")
 
+    @staticmethod
+    def _listener_signature_for(
+        listeners: list[Listener],
+    ) -> tuple[tuple[str, bool, bool, str], ...]:
+        """Visible app-row state, excluding fields that have no UI representation."""
+        return tuple(
+            (item.name, bool(item.muted), bool(item.live), item.index)
+            for item in listeners[:5]
+        )
+
     def _fill_listeners(self, listeners: list[Listener]) -> None:
+        visible = listeners[:5]
+        signature = self._listener_signature_for(visible)
+        if signature == self._listener_signature:
+            # A fresh collector snapshot creates fresh Listener objects, but
+            # rebuilding equal rows every poll destroys drag state and can
+            # interrupt a mute-button click. The rows hold the last rendered
+            # objects until their displayed state actually changes.
+            return
+
         self._clear(self.listeners)
-        for listener in listeners[:5]:
-            # Round 10 gives every app its own row: brand chip, name, and the
-            # little mute box on the right, so one app can be silenced
-            # without touching the bus everything else is riding on.
+        self._listener_signature = signature
+        self._rendered_listeners = list(visible)
+        for listener in visible:
+            # Every app has its own row: brand chip, name, and per-app mute.
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
             mark = self._mark(listener.name, 12)
             if listener.index:
-                # The whole row is the handle. A 12 px icon was a
-                # pixel-hunt: miss it and the press did nothing, which
-                # reads as a broken feature rather than a small target.
-                # Grabbing anywhere on the row drags the app to another bus.
+                # The whole row is the handle. Grabbing anywhere on the row
+                # drags the app to another bus.
                 grab = Gtk.DragSource()
                 grab.set_actions(Gdk.DragAction.MOVE)
                 grab.connect(
@@ -1008,14 +1033,12 @@ class Strip(Gtk.Box):
                     lambda *_a, idx=listener.index: Gdk.ContentProvider.new_for_value(f"app:{idx}"),
                 )
                 row.add_controller(grab)
-                row.set_tooltip_text(f"{listener.name} \u2014 drag onto another bus")
+                row.set_tooltip_text(f"{listener.name} — drag onto another bus")
             row.append(mark)
             name = Gtk.Label(label=listener.name, xalign=0.0)
             name.add_css_class("listener")
             name.set_ellipsize(3)
-            # Cap the requested width: without this a long app name
-            # like "gst-launch-1.0" makes its whole strip wider than
-            # the others and the row of strips stops lining up.
+            # Cap the requested width so long app names don't widen a strip.
             name.set_max_width_chars(10)
             name.set_width_chars(0)
             name.set_hexpand(True)
@@ -1035,9 +1058,9 @@ class Strip(Gtk.Box):
             box.connect("clicked", self._on_app_mute, listener)
             row.append(box)
             self.listeners.append(row)
-        if not listeners:
-            # A mic bus is consumed, not played: nothing is "playing"
-            # into it, and what matters is whether an app is listening.
+        if not visible:
+            # A mic bus is consumed, not played: nothing is "playing" into
+            # it, and what matters is whether an app is listening.
             word = "nothing listening" if self.channel.group == "mic" else "nothing playing"
             empty = Gtk.Label(label=word, xalign=0.0)
             empty.add_css_class("listener")
