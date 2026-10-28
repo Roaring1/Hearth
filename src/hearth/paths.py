@@ -136,14 +136,34 @@ def dumps_dir() -> Path:
     return state_dir() / "dumps"
 
 
-def ensure_dirs() -> None:
-    """Create every directory Hearth writes to.
+def ensure_private_dir(path: Path) -> Path:
+    """Create a Hearth-owned directory with owner-only access.
 
-    The runtime directory is created with 0700 because it holds a control
-    socket that can mute the machine's audio.
+    Config, state and diagnostic files can reveal details about the local rig.
+    Repair existing directories even if an older release created them under a
+    permissive umask. Intentional directory symlinks are resolved before
+    checking ownership and permissions.
+    """
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    resolved = path.resolve(strict=True)
+    metadata = resolved.stat()
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise NotADirectoryError(f"private path must be a directory: {path}")
+    if metadata.st_uid != os.getuid():
+        raise PermissionError(f"private directory is not owned by this user: {resolved}")
+    resolved.chmod(0o700)
+    return resolved
+
+
+def ensure_dirs() -> None:
+    """Create Hearth directories with private permissions.
+
+    The runtime directory holds a control socket that can mute the machine's
+    audio. Config, state, cache and dump directories can reveal local rig
+    details, so they are owner-only as well.
     """
     for path in (config_dir(), state_dir(), cache_dir(), dumps_dir()):
-        path.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(path)
     runtime = runtime_dir()
     runtime.mkdir(parents=True, exist_ok=True, mode=0o700)
     metadata = runtime.lstat()

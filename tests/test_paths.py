@@ -93,9 +93,25 @@ def test_ensure_dirs_is_idempotent_and_private(
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
     paths.ensure_dirs()
     paths.ensure_dirs()
-    for directory in (paths.config_dir(), paths.state_dir(), paths.dumps_dir()):
+    for directory in (paths.config_dir(), paths.state_dir(), paths.cache_dir(), paths.dumps_dir()):
         assert directory.is_dir()
+        assert directory.stat().st_mode & 0o777 == 0o700
     assert paths.runtime_dir().stat().st_mode & 0o777 == 0o700
+
+
+def test_ensure_dirs_repairs_existing_application_directory_permissions(
+    clean_env: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    directories = (paths.config_dir(), paths.state_dir(), paths.cache_dir(), paths.dumps_dir())
+    for directory in directories:
+        directory.mkdir(parents=True, exist_ok=True)
+        directory.chmod(0o755)
+
+    paths.ensure_dirs()
+
+    for directory in directories:
+        assert directory.stat().st_mode & 0o777 == 0o700
 
 
 def test_ensure_dirs_repairs_existing_runtime_permissions(

@@ -186,15 +186,28 @@ def test_saving_leaves_no_temporary_file_behind(tmp_path: Path) -> None:
     assert list(tmp_path.glob("*.tmp.*")) == []
 
 
-def test_saving_preserves_existing_file_permissions(tmp_path: Path) -> None:
+def test_saving_repairs_permissive_settings_file_permissions(tmp_path: Path) -> None:
     target = tmp_path / "rac_settings.json"
     settings.save(dict(settings.DEFAULTS), target)
-    target.chmod(0o600)
+    target.chmod(0o644)
 
     settings.save({**settings.DEFAULTS, "win_w": 1234}, target)
 
     assert target.stat().st_mode & 0o777 == 0o600
     assert settings.load(target)["win_w"] == 1234
+
+
+def test_saving_refuses_a_symlink_settings_target(tmp_path: Path) -> None:
+    victim = tmp_path / "victim.json"
+    victim.write_text('{"private": "keep"}', encoding="utf-8")
+    target = tmp_path / "rac_settings.json"
+    target.symlink_to(victim)
+
+    with pytest.raises(OSError, match="non-regular settings path"):
+        settings.save(dict(settings.DEFAULTS), target)
+
+    assert target.is_symlink()
+    assert victim.read_text(encoding="utf-8") == '{"private": "keep"}'
 
 
 def test_concurrent_saves_do_not_collide_or_corrupt_json(tmp_path: Path) -> None:

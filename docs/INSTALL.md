@@ -25,7 +25,7 @@ example-rac_settings.json
     Template for ~/.config/hearth/rac_settings.json, the UI preferences file
     Hearth writes itself. Safe to copy as a starting point.
 
-Runtime files
+Runtime and private data
     Hearth keeps its IPC socket and PID fallback under the private
     XDG_RUNTIME_DIR/hearth directory (or a per-UID temporary fallback when
     XDG_RUNTIME_DIR is absent/invalid). The socket and PID file are created
@@ -34,6 +34,12 @@ Runtime files
     If the IPC listener cannot start, Hearth closes its newly created socket
     and removes only that socket's inode, then continues without IPC rather
     than leaving a stale path that blocks the next launch.
+
+    Configuration, state, cache and dump directories are restricted to mode
+    0700, and preference/settings, log and status-dump files are written with
+    mode 0600. The diagnostic bundle script also uses a private umask because
+    its output includes a host/config snapshot. Existing directories are
+    tightened on startup; existing dump contents are not deleted.
 
 Not included, by design: a populated config.json. It holds host details for
 the machines on the author's LAN and would be of no use on another rig.

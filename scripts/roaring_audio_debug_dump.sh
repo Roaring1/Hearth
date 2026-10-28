@@ -4,6 +4,10 @@
 # shellcheck disable=SC2016
 set -euo pipefail
 
+# Bundles include host/config details and are meant to be shared deliberately,
+# not exposed to other local accounts by the default desktop umask.
+umask 077
+
 # 10/1/2026-2
 # Summary:
 # - Creates a timestamped debug bundle (tar.gz) on your Desktop.

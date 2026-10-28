@@ -127,26 +127,36 @@ def save(values: dict[str, Any], path: Path | None = None) -> None:
     and the guarantee this function exists for would be lost.
     """
     target = paths.settings_file() if path is None else path
-    target.parent.mkdir(parents=True, exist_ok=True)
+    paths.ensure_private_dir(target.parent)
     payload = json.dumps(values, indent=2)
 
-    # A PID-only temporary name collides when two threads save at once in the
-    # same process. mkstemp makes each write independent and private (0600).
+    # Settings must stay private even if an older version created them under
+    # a permissive umask. Refuse symlinks/non-regular paths instead of
+    # following or replacing a file outside the intended settings path.
     try:
-        original_mode = stat.S_IMODE(target.stat().st_mode)
+        existing = target.lstat()
     except FileNotFoundError:
-        original_mode = None
+        existing = None
+    if existing is not None:
+        if not stat.S_ISREG(existing.st_mode):
+            raise OSError(f"refusing to replace non-regular settings path: {target}")
+        if existing.st_uid != os.getuid():
+            raise PermissionError(f"settings file is not owned by this user: {target}")
 
+    # mkstemp makes each concurrent write independent and private.
     fd, tmp_name = tempfile.mkstemp(prefix=f"{target.name}.tmp.", dir=target.parent)
     tmp = Path(tmp_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        os.fchmod(fd, 0o600)
+        stream = os.fdopen(fd, "w", encoding="utf-8")
+        fd = -1
+        with stream:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-        if original_mode is not None:
-            tmp.chmod(original_mode)
         tmp.replace(target)  # atomic within one filesystem
     except BaseException:
+        if fd >= 0:
+            os.close(fd)
         tmp.unlink(missing_ok=True)
         raise

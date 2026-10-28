@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import hearth
-from hearth import cli, logging_setup
+from hearth import cli, logging_setup, paths
 
 
 def test_version_flag_prints_and_exits_clean(capsys: pytest.CaptureFixture[str]) -> None:
@@ -44,6 +44,27 @@ def test_logging_is_configured_once_and_only_from_here(
     root = logging.getLogger()
     assert root.level == logging.DEBUG
     assert len(root.handlers) == 1  # reconfiguring must not stack handlers
+
+
+def test_file_logging_creates_private_state_and_log(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    root = logging.getLogger()
+    previous_handlers = list(root.handlers)
+    previous_level = root.level
+    try:
+        logging_setup.configure("info", to_file=True)
+
+        assert paths.state_dir().stat().st_mode & 0o777 == 0o700
+        assert paths.log_file().stat().st_mode & 0o777 == 0o600
+    finally:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+            handler.close()
+        for handler in previous_handlers:
+            root.addHandler(handler)
+        root.setLevel(previous_level)
 
 
 def test_unknown_level_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -> None:

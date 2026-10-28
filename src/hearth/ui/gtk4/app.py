@@ -1088,6 +1088,12 @@ class MixerWindow(Gtk.ApplicationWindow):
         # Looked up lazily: the controller is often not plugged in, and
         # asking ALSA at startup would slow every launch for a lamp.
         self._led_port: str | None = None
+        # LED I/O can block for seconds if ALSA is restarting or the controller
+        # is unplugged. Coalesce desired mute states and perform all MIDI
+        # discovery/writes on one worker, never inside a GTK snapshot callback.
+        self._led_lock = threading.Lock()
+        self._led_pending: dict[str, bool] = {}
+        self._led_worker_active = False
         # Laptop audio is plugged in occasionally; when it has been
         # silent and unused for a while it should get out of the way
         # rather than hold a full strip open.
@@ -1498,27 +1504,77 @@ class MixerWindow(Gtk.ApplicationWindow):
         return False
 
     def _push_led(self, sink: str, muted: bool) -> None:
-        """Mirror one bus's mute state onto its LPD8 pad.
-
-        The port is looked up once and re-looked-up only after a failed
-        write, so an unplugged controller costs one failed ``amidi`` call
-        rather than one per snapshot.
-        """
+        """Queue the latest desired LED state without blocking GTK."""
         if leds.pad_for_sink(sink) is None:
             return
-        if self._led_port is None:
-            self._led_port = leds.find_port()
-            if self._led_port is None:
+        with self._led_lock:
+            self._led_pending[sink] = muted
+            if self._led_worker_active:
                 return
-        channel = int(
-            self.cfg.get("led_midi_channel", leds.DEFAULT_CHANNEL) or leds.DEFAULT_CHANNEL
-        )
+            self._led_worker_active = True
         try:
-            sent = leds.set_sink_mute(self._led_port, sink, muted, channel)
-        except OSError:  # pragma: no cover - the surface is not load-bearing
-            sent = False
-        if not sent:
-            self._led_port = None
+            threading.Thread(
+                target=self._drain_led_updates,
+                daemon=True,
+                name="hearth-led-writer",
+            ).start()
+        except RuntimeError as exc:
+            with self._led_lock:
+                self._led_worker_active = False
+            log.warning("could not queue LPD8 LED update: %s", exc)
+
+    def _drain_led_updates(self) -> None:
+        """Drain coalesced MIDI LED updates on a background worker."""
+        try:
+            while True:
+                with self._led_lock:
+                    if not self._led_pending:
+                        self._led_worker_active = False
+                        return
+                    updates = self._led_pending
+                    self._led_pending = {}
+
+                if self._led_port is None:
+                    try:
+                        self._led_port = leds.find_port()
+                    except Exception as exc:
+                        log.debug("could not find the LPD8 port: %s", exc)
+                        self._led_port = None
+                if self._led_port is None:
+                    # Drop this batch if no controller can be found. A later
+                    # real mute change will queue a fresh discovery attempt.
+                    continue
+
+                try:
+                    channel = int(
+                        self.cfg.get("led_midi_channel", leds.DEFAULT_CHANNEL)
+                        or leds.DEFAULT_CHANNEL
+                    )
+                except (TypeError, ValueError):
+                    channel = leds.DEFAULT_CHANNEL
+
+                for index, (sink, muted) in enumerate(updates.items()):
+                    try:
+                        sent = leds.set_sink_mute(self._led_port, sink, muted, channel)
+                    except Exception as exc:
+                        log.debug("could not update LPD8 LED for %s: %s", sink, exc)
+                        sent = False
+                    if sent:
+                        continue
+
+                    # A failed write invalidates the cached port. Re-queue
+                    # later sinks only when no newer desired value is waiting.
+                    self._led_port = None
+                    with self._led_lock:
+                        for later_sink, later_muted in list(updates.items())[index + 1 :]:
+                            self._led_pending.setdefault(later_sink, later_muted)
+                    break
+        except Exception as exc:
+            # A controller failure must never escape a daemon worker or wedge
+            # the queue permanently.
+            log.warning("LPD8 LED worker failed: %s", exc)
+            with self._led_lock:
+                self._led_worker_active = False
 
     def _device_label(self, channel: Channel, snapshot) -> str:
         """Where this bus lands. Short, real, and never a routing path."""
@@ -1942,8 +1998,38 @@ class MixerApp(Gtk.Application):
             from hearth import status
 
             try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(status.text() + "\n")
+                paths.ensure_private_dir(target.parent)
+                try:
+                    existing = target.lstat()
+                except FileNotFoundError:
+                    existing = None
+                if existing is not None:
+                    import stat
+
+                    if not stat.S_ISREG(existing.st_mode) or existing.st_uid != os.getuid():
+                        raise OSError(f"refusing to replace non-regular or foreign dump: {target}")
+
+                # Publish one complete, private snapshot rather than a
+                # world-readable partial write under the default umask.
+                import os
+                import tempfile
+
+                fd, tmp_name = tempfile.mkstemp(prefix=f"{target.name}.tmp.", dir=target.parent)
+                tmp = Path(tmp_name)
+                try:
+                    os.fchmod(fd, 0o600)
+                    stream = os.fdopen(fd, "w", encoding="utf-8")
+                    fd = -1
+                    with stream:
+                        stream.write(status.text() + "\n")
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    tmp.replace(target)
+                except BaseException:
+                    if fd >= 0:
+                        os.close(fd)
+                    tmp.unlink(missing_ok=True)
+                    raise
             except Exception as exc:  # pragma: no cover - diagnostic only
                 log.warning("dump failed: %s", exc)
 

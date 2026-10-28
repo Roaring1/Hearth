@@ -1161,6 +1161,38 @@ def test_unmute_ipc_reports_worker_thread_creation_failure(
     assert "thread limit reached" in reply
 
 
+def test_dump_writes_atomic_private_summary_snapshot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mixer = _load_mixer()
+    from hearth import paths, status
+
+    dumps = tmp_path / "dumps"
+    dumps.mkdir()
+    target = dumps / "summary.txt"
+    target.write_text("old summary\n", encoding="utf-8")
+    target.chmod(0o644)
+    monkeypatch.setattr(paths, "dumps_dir", lambda: dumps)
+    monkeypatch.setattr(status, "text", lambda: "current rig summary")
+
+    class InlineThread:
+        def __init__(self, *, target, **_kwargs) -> None:
+            self.target = target
+
+        def start(self) -> None:
+            self.target()
+
+    monkeypatch.setattr(mixer.threading, "Thread", InlineThread)
+
+    reply = mixer.MixerApp._ctl_dump(SimpleNamespace())
+
+    assert reply.endswith(str(target))
+    assert target.read_text(encoding="utf-8") == "current rig summary\n"
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert dumps.stat().st_mode & 0o777 == 0o700
+    assert list(dumps.glob("summary.txt.tmp.*")) == []
+
+
 def test_dump_ipc_does_not_claim_success_when_worker_cannot_start(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1246,3 +1278,86 @@ def test_layout_gestures_do_not_persist_user_preferences() -> None:
     window._save()
 
     assert window.save_calls == 0
+
+
+def test_led_updates_run_off_gtk_thread_and_coalesce_latest_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+    caller = threading.get_ident()
+    port_lookup_started = threading.Event()
+    allow_port_lookup_to_finish = threading.Event()
+    worker_finished = threading.Event()
+    worker_ids: list[int] = []
+    sent: list[tuple[str, bool]] = []
+
+    def find_port() -> str:
+        worker_ids.append(threading.get_ident())
+        port_lookup_started.set()
+        assert allow_port_lookup_to_finish.wait(timeout=3)
+        return "hw:1,0,0"
+
+    def set_mute(_port: str, sink: str, muted: bool, _channel: int) -> bool:
+        worker_ids.append(threading.get_ident())
+        sent.append((sink, muted))
+        return True
+
+    monkeypatch.setattr(mixer.leds, "find_port", find_port)
+    monkeypatch.setattr(mixer.leds, "set_sink_mute", set_mute)
+    window = SimpleNamespace(
+        _led_port=None,
+        _led_lock=threading.Lock(),
+        _led_pending={},
+        _led_worker_active=False,
+        cfg={},
+    )
+    real_drain = mixer.MixerWindow._drain_led_updates
+
+    def drain_and_signal() -> None:
+        try:
+            real_drain(window)
+        finally:
+            worker_finished.set()
+
+    window._drain_led_updates = drain_and_signal
+    window._push_led = lambda sink, muted: mixer.MixerWindow._push_led(window, sink, muted)
+
+    window._push_led("vm_game", True)
+    assert port_lookup_started.wait(timeout=2)
+    # The worker is blocked on port discovery. These two updates should be
+    # coalesced into the next batch, with the most recent game state winning.
+    window._push_led("vm_game", False)
+    window._push_led("vm_chat", True)
+    allow_port_lookup_to_finish.set()
+
+    assert worker_finished.wait(timeout=3)
+    assert sent == [("vm_game", True), ("vm_game", False), ("vm_chat", True)]
+    assert worker_ids and all(worker_id != caller for worker_id in worker_ids)
+    assert window._led_worker_active is False
+
+
+def test_led_queue_recovers_if_worker_thread_cannot_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+
+    class ThreadThatCannotStart:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("thread limit reached")
+
+    monkeypatch.setattr(mixer.threading, "Thread", ThreadThatCannotStart)
+    window = SimpleNamespace(
+        _led_port=None,
+        _led_lock=threading.Lock(),
+        _led_pending={},
+        _led_worker_active=False,
+        cfg={},
+    )
+
+    mixer.MixerWindow._push_led(window, "vm_game", True)
+
+    assert window._led_worker_active is False
+    assert window._led_pending == {"vm_game": True}
