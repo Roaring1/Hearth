@@ -1311,6 +1311,7 @@ def test_listener_rows_keep_widget_identity_for_unchanged_snapshots(
     )
     strip._listener_signature_for = lambda items: mixer.Strip._listener_signature_for(items)
     strip._clear = lambda box: mixer.Strip._clear(strip, box)
+    strip._mark = lambda name, size: mixer.Strip._mark(strip, name, size)
 
     mixer.Strip._fill_listeners(strip, [initial])
     original_row = strip.listeners.children[0]
@@ -1346,6 +1347,23 @@ def test_app_mute_optimistic_signature_is_reconciled_if_snapshot_disagrees(
 
         def append(self, child) -> None:
             self.children.append(child)
+            child.parent = self
+
+        def get_parent(self):
+            return getattr(self, "parent", None)
+
+        def get_first_child(self):
+            return self.children[0] if self.children else None
+
+        def get_next_sibling(self):
+            parent = self.get_parent()
+            if parent is None:
+                return None
+            try:
+                index = parent.children.index(self)
+            except ValueError:
+                return None
+            return parent.children[index + 1] if index + 1 < len(parent.children) else None
 
         def add_css_class(self, name: str) -> None:
             self.classes.add(name)
@@ -1410,12 +1428,15 @@ def test_app_mute_optimistic_signature_is_reconciled_if_snapshot_disagrees(
     )
     strip._listener_signature_for = lambda items: mixer.Strip._listener_signature_for(items)
     strip._clear = lambda box: mixer.Strip._clear(strip, box)
+    strip._mark = lambda name, size: mixer.Strip._mark(strip, name, size)
     mixer.Strip._fill_listeners(strip, [listener])
     original_row = strip.listeners.children[0]
 
     button = FakeWidget()
+    name_label = strip.listeners.children[0].children[1]
     mixer.Strip._on_app_mute(strip, button, listener)
 
+    assert "muted" in name_label.classes
     assert listener.muted is True
     assert strip._listener_signature == mixer.Strip._listener_signature_for(
         strip._rendered_listeners
@@ -1427,6 +1448,7 @@ def test_app_mute_optimistic_signature_is_reconciled_if_snapshot_disagrees(
     mixer.Strip._fill_listeners(strip, [old_snapshot])
 
     assert len(cleared) == 2
+    assert "muted" not in strip.listeners.children[0].children[1].classes
     assert strip.listeners.children[0] is not original_row
     assert strip._rendered_listeners[0].muted is False
 
