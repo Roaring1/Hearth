@@ -612,7 +612,22 @@ class Strip(Gtk.Box):
 
     def _on_carla_in(self, check: Gtk.CheckButton) -> None:
         """Turn Carla's processed output into this bus on or off."""
-        mic_routes.set_carla(self.channel.sink, check.get_active())
+        if self._routing:
+            return
+        wanted = check.get_active()
+        if not mic_routes.set_carla(self.channel.sink, wanted):
+            # Keep the widget honest if its authoritative config could not be
+            # saved. Block the toggled signal while restoring the saved value.
+            self._routing = True
+            try:
+                check.set_active(not wanted)
+                check.set_tooltip_text(
+                    "Could not save microphone routing; the previous setting is unchanged"
+                )
+            finally:
+                self._routing = False
+            return
+        check.set_tooltip_text("2i2 → Carla → this bus")
         GLib.timeout_add(400, self._route_settled)
 
     def _on_mic_in(self, check: Gtk.CheckButton, source: str) -> None:
@@ -623,10 +638,22 @@ class Strip(Gtk.Box):
         here looked like it worked and was undone three seconds later.
         Anything else is a plain loopback, which nothing else touches.
         """
+        if self._routing:
+            return
         wanted = check.get_active()
         if source in mic_routes.RAW_TOKEN:
             conf = mic_routes.read()
-            mic_routes.write(mic_routes.raw_edits(conf, self.channel.sink, source, wanted))
+            if not mic_routes.write(mic_routes.raw_edits(conf, self.channel.sink, source, wanted)):
+                self._routing = True
+                try:
+                    check.set_active(not wanted)
+                    check.set_tooltip_text(
+                        "Could not save microphone routing; the previous setting is unchanged"
+                    )
+                finally:
+                    self._routing = False
+                return
+            check.set_tooltip_text(None)
             GLib.timeout_add_seconds(4, self._route_settled)
             return
         if wanted:

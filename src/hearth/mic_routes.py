@@ -247,8 +247,13 @@ def set_carla(bus: str, on: bool, *, path: Path | None = None) -> bool:
     if key is None:
         return False
     stored = write({key: "true" if on else "false"}, path)
+    if not stored:
+        # The router daemon reads this same file every three seconds. If the
+        # choice was not persisted, applying it live would only be temporary
+        # and would fight the daemon's authoritative configuration.
+        return False
     link_carla(bus, on)
-    return stored
+    return True
 
 
 def link_carla(bus: str, on: bool, *, timeout: float = 5.0) -> bool:

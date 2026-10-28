@@ -219,6 +219,39 @@ def test_flow_marks_the_bus_the_laptop_is_listening_to() -> None:
     assert "laptop" not in lines[0]
 
 
+def test_carla_live_link_is_not_changed_when_config_save_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(mic_routes, "write", lambda *_args, **_kwargs: False)
+    calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(mic_routes, "link_carla", lambda bus, on: calls.append((bus, on)) or True)
+
+    assert mic_routes.set_carla("mic_b1", True) is False
+    assert calls == []
+
+
+def test_carla_config_is_saved_before_applying_the_live_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: list[str] = []
+
+    def save(updates, path=None):
+        assert updates == {"CARLA_TO_B2": "false"}
+        order.append("save")
+        return True
+
+    def link(bus, on):
+        assert (bus, on) == ("mic_b2", False)
+        order.append("link")
+        return True
+
+    monkeypatch.setattr(mic_routes, "write", save)
+    monkeypatch.setattr(mic_routes, "link_carla", link)
+
+    assert mic_routes.set_carla("mic_b2", False) is True
+    assert order == ["save", "link"]
+
+
 def test_a_host_called_laptop_is_not_printed_twice() -> None:
     values = mic_routes.parse(SAMPLE)
     lines = mic_routes.flow_lines(values, moonlight_source="b2_mic", laptop_host="laptop")
