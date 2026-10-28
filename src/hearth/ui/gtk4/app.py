@@ -995,7 +995,9 @@ class Strip(Gtk.Box):
         # A snapshot arrives every 250-500 ms. Recreating these rows on each
         # poll is unnecessary GTK churn and can disturb pointer/keyboard focus.
         # The displayed list is capped at five, so cache only what is visible.
-        signature = tuple((listener.index, listener.name, listener.muted) for listener in listeners[:5])
+        signature = tuple(
+            (listener.index, listener.name, listener.muted) for listener in listeners[:5]
+        )
         if getattr(self, "_listener_signature", None) == signature:
             return
         self._listener_signature = signature
