@@ -1310,6 +1310,7 @@ def test_listener_rows_keep_widget_identity_for_unchanged_snapshots(
         _on_app_mute=lambda *_args: None,
     )
     strip._listener_signature_for = lambda items: mixer.Strip._listener_signature_for(items)
+    strip._clear = lambda box: mixer.Strip._clear(strip, box)
 
     mixer.Strip._fill_listeners(strip, [initial])
     original_row = strip.listeners.children[0]
@@ -1408,6 +1409,7 @@ def test_app_mute_optimistic_signature_is_reconciled_if_snapshot_disagrees(
         win=SimpleNamespace(collector=SimpleNamespace(refresh_now=lambda: None)),
     )
     strip._listener_signature_for = lambda items: mixer.Strip._listener_signature_for(items)
+    strip._clear = lambda box: mixer.Strip._clear(strip, box)
     mixer.Strip._fill_listeners(strip, [listener])
     original_row = strip.listeners.children[0]
 
