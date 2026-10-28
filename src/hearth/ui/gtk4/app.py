@@ -34,7 +34,7 @@ gi.require_version("Gdk", "4.0")
 
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402 - must follow require_version
 
-from hearth import collector as collector_mod  # noqa: E402
+from hearth import APP_ID, collector as collector_mod  # noqa: E402
 from hearth import control  # noqa: E402
 from hearth import ipc as ipc_mod  # noqa: E402
 from hearth import leds  # noqa: E402
@@ -53,7 +53,6 @@ log = logging.getLogger(__name__)
 #: wildly between icon packs; these do not.
 ART_DIR = Path(__file__).resolve().parents[4] / "assets" / "art"
 
-APP_ID = "co.roaring.Hearth"
 
 #: Meter height, expanded and compact. Everything else in a strip is fixed, so
 #: this single number is what "show apps" actually changes.

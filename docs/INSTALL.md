@@ -14,7 +14,7 @@ io.github.roaring1.Hearth.desktop
 io.github.roaring1.Hearth.png
     App icon. Install to
     ~/.local/share/icons/hicolor/256x256/apps/io.github.roaring1.Hearth.png so the theme name
-    Icon=hearth in the desktop entry resolves.
+    Icon=io.github.roaring1.Hearth in the desktop entry resolves.
 
 example-config.json
     Template for ~/.config/hearth/config.json -- the machine-specific values

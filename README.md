@@ -1,6 +1,6 @@
 # Hearth
 
-A GTK3 control panel for a PipeWire audio rig on Linux: virtual mixer buses,
+A GTK4 control panel for a PipeWire audio rig on Linux: virtual mixer buses,
 mic routing, per-app volume, live VU metering, and health/control for the
 systemd user services that hold the whole thing together.
 
@@ -27,46 +27,42 @@ Wayland**. Nothing is Nobara-specific; any PipeWire desktop should work.
 - **Mixer strip** — per-bus fader (0–150%), mute, live stereo VU meters, and
   the list of applications feeding each bus with per-app volume and
   move-to-another-bus.
-- **Services panel** — systemd user unit health for every audio daemon, with
-  per-service restart/stop, plus soft and hard restart of the whole stack.
-- **Hardware panel** — Astro A50 target toggle, monitor-speaker toggle, room
-  correction toggle, Carla instance count with start/stop/dedup.
-- **Mic routing** — per-bus source assignment, monitor loopback toggles, and
-  the Moonlight mic source selector.
-- **LPD8 auto-reconnect** — a watcher restarts the `lpd8-mixer` service when
-  the controller is unplugged and plugged back in.
+- **Setup window** — shows routing faults and their relevant fixes, with an
+  expandable unit list plus headset target/latency, mic-path and Moonlight
+  source settings, and LPD8 status/reconnect controls.
+- **Mic routing** — choose what feeds each mic bus; Setup shows the configured
+  signal path and switches Moonlight between the Stream and Chat sources.
+- **LPD8 Controls** — inspect and remap all eight pads and knobs; live control
+  state is reflected from the mixer snapshot. Hotplug recovery is handled by
+  the rig’s companion watcher, when installed.
 - **Single instance + IPC** — a second launch focuses the running window
   instead of starting a rival process.
 - **Status report** — `hearth --status` prints a plain-language report on the
   whole rig: what is wrong, how to fix it, and one line each for the voice
   effects, screen-share audio, microphone and control surfaces. Needs no
   display, so it works over SSH.
-- **Debug dump** — `SIGUSR1` or `hearth --dump` writes a tracemalloc
-  snapshot, thread list, and memory figures to the state directory
-  (`hearth --paths` prints the exact location).
+- **Status dump** — `hearth --dump` asks the running mixer to write a
+  plain-language rig status summary to the state directory (`hearth --paths`
+  prints the exact location).
 
 ---
 
 ## Requirements
 
 - Python 3.11+
-- GTK3 with PyGObject
-- `pycairo` — VU meter gradients (falls back to solid blocks without it)
-- `libappindicator` / StatusNotifier support — tray icon, optional
-- `pactl` and `parec` from PipeWire's PulseAudio compatibility tools
+- GTK4 with PyGObject (`gi.repository.Gtk` 4.0)
+- Cairo bindings for GTK drawing (`python3-cairo` / `python-cairo`)
+- `pactl`, `parec` and `pw-link` from PipeWire's PulseAudio compatibility tools
 
 ```bash
 # Fedora / Nobara
-sudo dnf install python3-gobject gtk3 python3-cairo \
-                 libappindicator-gtk3 pipewire-utils pulseaudio-utils
+sudo dnf install python3-gobject gtk4 python3-cairo pipewire-utils pulseaudio-utils
 
 # Arch
-sudo pacman -S python-gobject gtk3 python-cairo \
-               libappindicator-gtk3 libpulse
+sudo pacman -S python-gobject gtk4 python-cairo pipewire libpulse
 
 # Debian / Ubuntu
-sudo apt install python3-gi gir1.2-gtk-3.0 python3-cairo \
-                 gir1.2-ayatanaappindicator3-0.1 pulseaudio-utils
+sudo apt install python3-gi gir1.2-gtk-4.0 python3-cairo pipewire-bin pulseaudio-utils
 ```
 
 ---
@@ -77,8 +73,9 @@ sudo apt install python3-gi gir1.2-gtk-3.0 python3-cairo \
 git clone https://github.com/Roaring1/Hearth.git
 cd Hearth
 
-# recommended: an isolated install that puts `hearth` on PATH
-pipx install .
+# PyGObject comes from the distro, not pip. Expose those system packages
+# to pipx so the isolated app can import GTK4.
+pipx install --system-site-packages .
 
 # or run straight from the checkout, without installing
 python3 hearth.py
@@ -124,8 +121,7 @@ hearth                # launch, or focus the existing instance
 hearth --status       # plain-language report on the whole rig
 hearth --show         # bring the window to the front
 hearth --unmute       # unmute every bus, headless (panic button)
-hearth --dump         # write a debug snapshot
-hearth --vu-dump      # log per-source RMS/peak to a gzipped CSV
+hearth --dump         # write the running rig's status summary
 hearth --paths        # print every location Hearth resolves
 hearth --quit         # quit the running instance
 hearth --version      # print version
@@ -144,16 +140,13 @@ Microphone      No microphone recordings yet - start the recorder to check your 
 Controls        LPD8 pad controller connected - knobs and pads are live
 ```
 
-**Keybinds:** `T` Astro target · `S` monitor speakers · `U` unmute all ·
-`M` collapse mixer · `F5` soft restart · `Ctrl+R` hard restart ·
-`Ctrl+D` debug dump · `Ctrl+L` SSH to laptop · `Ctrl+,` settings ·
-`Esc` / `Ctrl+Q` hide to tray.
+**Keybinds:** `Ctrl+,` opens Setup · `Ctrl+L` opens LPD8 Controls.
 
 ---
 
 ## Architecture
 
-A GTK3 window on top of a toolkit-free core. One rule shapes the whole
+A GTK4 window on top of a toolkit-free core. One rule shapes the whole
 tree: **only `hearth.ui` may import `gi`**, enforced by a lint rule rather
 than by convention. Everything else is testable with no display, no sound
 card and no PipeWire daemon running.
@@ -183,10 +176,8 @@ The threading model is the load-bearing part:
 - **Main thread** — GTK event loop, UI only.
 - **Collector thread** — polls `pactl` and `systemctl` every 0.25–2 s
   (faster while the window is visible) and pushes one snapshot per tick.
-- **Reporter thread** — composes the whole-rig report every few seconds,
-  and delivers it *only when the answer changes*. It is separate from the
-  collector because it costs roughly ten times as much per tick and
-  describes things that cannot change ten times a second.
+- **Status report** — `hearth --status` gathers the broader rig diagnosis on
+  demand, rather than making the fast mixer poll run every health probe.
 - **PeakPoller thread** — one long-lived `parec` per monitor source, read
   non-blocking via `select`, RMS computed per chunk. One persistent stream
   instead of reopening one per sample, which PipeWire's Pulse compatibility
