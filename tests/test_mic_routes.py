@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 
@@ -173,22 +174,50 @@ def test_write_does_not_follow_a_preexisting_temp_symlink(tmp_path: Path) -> Non
     assert mic_routes.read(conf)["B2_ROUTE"] == "none"
 
 
-def test_concurrent_mic_route_writes_use_independent_atomic_temp_files(
+def test_write_refuses_a_symlink_lock_file_without_touching_its_target(
     tmp_path: Path,
 ) -> None:
     conf = tmp_path / "roaring_mic_router.conf"
     conf.write_text(SAMPLE, encoding="utf-8")
-    values = ["none", "sm7b", "astro", "both"] * 10
+    original = conf.read_text(encoding="utf-8")
+    victim = tmp_path / "outside.txt"
+    victim.write_text("leave this alone", encoding="utf-8")
+    (tmp_path / ".roaring_mic_router.conf.lock").symlink_to(victim)
 
-    def write_route(route: str) -> bool:
-        return mic_routes.write({"B1_ROUTE": route}, conf)
+    assert mic_routes.write({"B2_ROUTE": "none"}, conf) is False
+    assert conf.read_text(encoding="utf-8") == original
+    assert victim.read_text(encoding="utf-8") == "leave this alone"
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        results = list(pool.map(write_route, values))
+
+def test_concurrent_mic_route_writes_use_independent_atomic_temp_files(
+    tmp_path: Path,
+) -> None:
+    conf = tmp_path / "roaring_mic_router.conf"
+    # Make the shared read/merge/write window large enough for the two writers
+    # to overlap reliably without depending on scheduling sleeps.
+    conf.write_text(SAMPLE + "# padding\n" * 20_000, encoding="utf-8")
+    start = Barrier(3)
+
+    def write_one(updates: dict[str, str]) -> bool:
+        start.wait()
+        return mic_routes.write(updates, conf)
+
+    updates = [
+        {"CARLA_TO_B1": "false"},
+        {"CARLA_TO_B2": "true"},
+    ]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(write_one, item) for item in updates]
+        start.wait()
+        results = [future.result() for future in futures]
 
     assert all(results)
-    assert mic_routes.read(conf)["B1_ROUTE"] in {"none", "sm7b", "astro", "both"}
+    loaded = mic_routes.read(conf)
+    assert loaded["CARLA_TO_B1"] == "false"
+    assert loaded["CARLA_TO_B2"] == "true"
+    assert "B1_ROUTE" in loaded and "B2_ROUTE" in loaded
     assert list(tmp_path.glob("*.tmp.*")) == []
+    assert (tmp_path / ".roaring_mic_router.conf.lock").stat().st_mode & 0o777 == 0o600
 
 
 def test_writing_creates_the_file_when_it_is_missing(tmp_path: Path) -> None:

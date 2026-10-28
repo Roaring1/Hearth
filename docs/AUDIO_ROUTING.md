@@ -35,9 +35,11 @@ and `B1_ACTIVE` / `B2_ACTIVE` gates are authoritative for the raw sources it
 manages. Carla's `CARLA_TO_B1` / `CARLA_TO_B2` selections live in the same file.
 
 Hearth preserves unknown keys, ordering, and comments when editing this shared
-shell config. Writes use a unique same-directory temporary file and atomic
-replacement. If an existing file cannot be read or the replacement cannot be
-written, the edit fails closed. Hearth does not apply a Carla live-link change
+shell config. Writers serialize the full read/merge/write transaction with a
+private advisory lock, then use a unique same-directory temporary file and
+atomic replacement. That prevents simultaneous edits to different keys from
+overwriting each other. If the lock, read, or replacement cannot be completed,
+the edit fails closed. Hearth does not apply a Carla live-link change
 when its config update failed, and the relevant checkbox returns to its previous
 state with an explanatory tooltip. A saved route may take the router daemon up
 to one polling interval to converge; the UI schedules a refresh after that

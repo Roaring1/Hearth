@@ -28,6 +28,7 @@ write is atomic.
 
 from __future__ import annotations
 
+import fcntl
 import logging
 import os
 import re
@@ -110,51 +111,74 @@ def read(path: Path | None = None) -> dict[str, str]:
 
 
 def write(updates: dict[str, str], path: Path | None = None) -> bool:
-    """Apply updates atomically; fail closed if an existing file cannot be read.
+    """Apply updates atomically and serialize concurrent read/merge/write edits.
 
     The daemon sources this file on a three-second timer, so a half-written
-    one is a half-configured microphone. A unique same-directory temporary
-    file plus rename preserves atomicity and avoids concurrent-writer clashes.
+    one is a half-configured microphone. A unique temporary file plus atomic
+    replacement avoids partial reads; an advisory lock also prevents two
+    writers updating different keys from losing each other's changes.
     """
-    target = path or CONF_PATH
-    try:
-        original = target.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        original = ""
-    except OSError as exc:
-        # Do not treat an unreadable existing file as a missing file: doing so
-        # would erase its comments and every setting this module does not own.
-        log.warning("could not read %s; refusing to overwrite: %s", target, exc)
-        return False
-
-    updated = apply_edits(original, updates)
     if not updates:
         return True
-
+    target = path or CONF_PATH
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            original_mode = stat.S_IMODE(target.stat().st_mode)
-        except FileNotFoundError:
-            original_mode = None
-
-        fd, tmp_name = tempfile.mkstemp(prefix=f"{target.name}.tmp.", dir=target.parent)
-        tmp = Path(tmp_name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                stream.write(updated)
-                stream.flush()
-                os.fsync(stream.fileno())
-            if original_mode is not None:
-                tmp.chmod(original_mode)
-            tmp.replace(target)
-        except BaseException:
-            tmp.unlink(missing_ok=True)
-            raise
+        lock_path = target.with_name(f".{target.name}.lock")
+        lock_flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+        lock_flags |= getattr(os, "O_NOFOLLOW", 0)
+        lock_fd = os.open(lock_path, lock_flags, 0o600)
     except OSError as exc:
-        log.warning("could not write %s: %s", target, exc)
+        log.warning("could not lock %s; refusing to update: %s", target, exc)
         return False
-    return True
+
+    try:
+        os.fchmod(lock_fd, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            try:
+                original = target.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                original = ""
+            except OSError as exc:
+                # Do not treat an unreadable existing file as missing: doing
+                # so would erase comments and settings this module doesn't own.
+                log.warning("could not read %s; refusing to overwrite: %s", target, exc)
+                return False
+
+            updated = apply_edits(original, updates)
+            try:
+                original_mode = stat.S_IMODE(target.stat().st_mode)
+            except FileNotFoundError:
+                original_mode = None
+
+            fd, tmp_name = tempfile.mkstemp(prefix=f"{target.name}.tmp.", dir=target.parent)
+            tmp = Path(tmp_name)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    stream.write(updated)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                if original_mode is not None:
+                    tmp.chmod(original_mode)
+                tmp.replace(target)
+            except BaseException:
+                tmp.unlink(missing_ok=True)
+                raise
+        except OSError as exc:
+            log.warning("could not write %s: %s", target, exc)
+            return False
+        return True
+    except OSError as exc:
+        log.warning("could not lock or update %s: %s", target, exc)
+        return False
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except OSError as exc:
+            # Closing the descriptor releases the lock as a fallback.
+            log.debug("could not explicitly unlock %s: %s", target, exc)
+        finally:
+            os.close(lock_fd)
 
 
 def tokens(route: str) -> set[str]:
