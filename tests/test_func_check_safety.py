@@ -843,6 +843,69 @@ def test_moonlight_queue_failure_keeps_saved_selection_and_explains_manual_resta
     assert "manually" in note.text
 
 
+def test_setup_scan_can_retry_after_worker_thread_creation_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    setup = _load_setup()
+
+    class ThreadThatCannotStart:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("thread limit reached")
+
+    monkeypatch.setattr(setup.threading, "Thread", ThreadThatCannotStart)
+    window = SimpleNamespace(_scanning=False, _scan=lambda: None)
+
+    assert setup.SetupWindow._refresh_once(window) is False
+    assert window._scanning is False
+
+
+def test_unmute_ipc_reports_worker_thread_creation_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+
+    class ThreadThatCannotStart:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("thread limit reached")
+
+    monkeypatch.setattr(mixer.threading, "Thread", ThreadThatCannotStart)
+
+    reply = mixer.MixerApp._ctl_unmute(SimpleNamespace())
+
+    assert reply.startswith("could not start unmute operation")
+    assert "thread limit reached" in reply
+
+
+def test_dump_ipc_does_not_claim_success_when_worker_cannot_start(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mixer = _load_mixer()
+    from hearth import paths
+
+    monkeypatch.setattr(paths, "dumps_dir", lambda: tmp_path / "dumps")
+
+    class ThreadThatCannotStart:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("thread limit reached")
+
+    monkeypatch.setattr(mixer.threading, "Thread", ThreadThatCannotStart)
+
+    reply = mixer.MixerApp._ctl_dump(SimpleNamespace())
+
+    assert reply.startswith("dump failed to start")
+    assert "thread limit reached" in reply
+    assert not (tmp_path / "dumps").exists()
+
+
 def test_layout_gestures_do_not_persist_user_preferences() -> None:
     module = _load_func_check()
 

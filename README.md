@@ -137,7 +137,7 @@ thing worth pasting into a bug report:
 ```text
 Everything is working
 
-Services        All 17 audio services are running
+Services        All 18 monitored services are healthy
 Voice effects   Voice effects on for Stream
 Screen share    Ready to share Game, Music when you start a screen share
 Microphone      No microphone recordings yet - start the recorder to check your mic

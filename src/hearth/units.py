@@ -260,9 +260,12 @@ def summary(units: list[Unit] | None = None) -> str:
     ]
     bad = [unit for unit in judged if unit.healthy is False]
     if not judged:
-        return "No audio services found"
+        return "No monitored services found"
     if not bad:
-        return f"All {len(judged)} audio services are running"
+        # The inventory intentionally includes healthy timers, sockets and
+        # support/control units, not just long-running audio daemons. "Healthy"
+        # describes all those unit kinds without claiming each one is running.
+        return f"All {len(judged)} monitored services are healthy"
     if len(bad) == 1:
         return bad[0].status_text
     return f"{bad[0].status_text} (+{len(bad) - 1} more)"

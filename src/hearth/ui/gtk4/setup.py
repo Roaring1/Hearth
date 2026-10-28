@@ -481,7 +481,13 @@ class SetupWindow(Gtk.Window):
         if self._scanning:
             return False
         self._scanning = True
-        threading.Thread(target=self._scan, daemon=True).start()
+        try:
+            threading.Thread(target=self._scan, daemon=True, name="hearth-setup-scan").start()
+        except RuntimeError as exc:
+            # If Python cannot create the worker, don't wedge Setup in the
+            # in-progress state forever. The next normal poll can retry.
+            self._scanning = False
+            log.warning("setup: could not queue unit scan: %s", exc)
         return False
 
     def _scan(self) -> None:

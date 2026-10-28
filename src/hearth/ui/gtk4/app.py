@@ -1851,7 +1851,11 @@ class MixerApp(Gtk.Application):
                 if not pactl.set_mute(channel.sink, False):
                     log.warning("unmute %s: pactl could not be started", channel.sink)
 
-        threading.Thread(target=work, daemon=True, name="hearth-unmute").start()
+        try:
+            threading.Thread(target=work, daemon=True, name="hearth-unmute").start()
+        except RuntimeError as exc:
+            log.warning("could not queue unmute operation: %s", exc)
+            return f"could not start unmute operation: {exc}"
         return "ok"
 
     def _ctl_sinks(self) -> str:
@@ -1895,7 +1899,11 @@ class MixerApp(Gtk.Application):
             except Exception as exc:  # pragma: no cover - diagnostic only
                 log.warning("dump failed: %s", exc)
 
-        threading.Thread(target=work, daemon=True, name="hearth-dump").start()
+        try:
+            threading.Thread(target=work, daemon=True, name="hearth-dump").start()
+        except RuntimeError as exc:
+            log.warning("could not queue diagnostic dump: %s", exc)
+            return f"dump failed to start: {exc}"
         return f"dumping -> {target}"
 
 
