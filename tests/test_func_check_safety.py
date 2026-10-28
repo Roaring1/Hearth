@@ -75,34 +75,27 @@ def test_audio_restore_uses_original_channel_volumes_and_mute(monkeypatch) -> No
     ]
 
 
-def test_settings_restore_reinstates_exact_original_bytes_and_mode(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_live_audio_mutation_is_refused_without_complete_snapshot() -> None:
     module = _load_func_check()
-    monkeypatch.setattr(module.subprocess, "run", _fake_pactl([]))
-    target = module.paths.settings_file()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    original = b'{\n  "mixer_minimised": ["vm_music"]\n}\n'
-    target.write_bytes(original)
-    target.chmod(0o640)
-    app = module.FuncApp()
 
-    target.write_bytes(b'{"mixer_minimised": []}\n')
-    app.restore_settings_state()
-
-    assert target.read_bytes() == original
-    assert target.stat().st_mode & 0o777 == 0o640
+    assert module.can_restore_audio_state([50, 75], "yes")
+    assert module.can_restore_audio_state([50], "no")
+    assert not module.can_restore_audio_state([], "yes")
+    assert not module.can_restore_audio_state([50], "unknown")
 
 
-def test_settings_restore_removes_a_file_created_by_the_test(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+def test_layout_gestures_do_not_persist_user_preferences() -> None:
     module = _load_func_check()
-    monkeypatch.setattr(module.subprocess, "run", _fake_pactl([]))
-    target = module.paths.settings_file()
-    app = module.FuncApp()
-    parent_existed = app._settings_parent_existed
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text('{"created_by_functional_test": true}\n')
-    app.restore_settings_state()
+    class DummyWindow:
+        def __init__(self) -> None:
+            self.save_calls = 0
 
-    assert not target.exists()
-    if not parent_existed:
-        assert not target.parent.exists()
+        def _save(self) -> None:
+            self.save_calls += 1
+
+    window = DummyWindow()
+    module.disable_settings_persistence(window)
+    window._save()
+
+    assert window.save_calls == 0

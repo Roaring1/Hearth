@@ -8,12 +8,8 @@ the same gesture callbacks the pointer would fire keeps the test honest and
 still ends at the real audio graph.
 """
 
-import os
-import stat
 import subprocess
 import sys
-import tempfile
-from contextlib import suppress
 from pathlib import Path
 
 import gi
@@ -24,7 +20,6 @@ from gi.repository import Gdk, GLib, Gtk
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from hearth import paths
 from hearth.ui.gtk4 import app as mixer
 from hearth.ui.gtk4 import style as style_mod
 
@@ -79,6 +74,16 @@ def muted(sink: str = "vm_game") -> str:
     return result.stdout.strip().split()[-1] if result.stdout.strip() else "?"
 
 
+def can_restore_audio_state(levels: list[int], mute: str) -> bool:
+    """True only when cleanup can put every original volume and mute back."""
+    return bool(levels) and mute in ("yes", "no")
+
+
+def disable_settings_persistence(window) -> None:
+    """Keep the functional check's temporary layout interactions in memory."""
+    window._save = lambda: None
+
+
 class FuncApp(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="co.roaring.HearthFunc2")
@@ -89,24 +94,6 @@ class FuncApp(Gtk.Application):
         # the machine louder or unmuted than it was before the test started.
         self._original_volumes = volumes()
         self._original_mute = muted()
-        # minimise()/restore() persist their settings immediately. Snapshot
-        # the file byte-for-byte as well as the sink state, so the test does
-        # not unminimise channels the user had folded away or create a new
-        # preferences file when none existed before the run.
-        self._settings_path = paths.settings_file()
-        self._settings_parent_existed = self._settings_path.parent.exists()
-        try:
-            self._settings_existed = self._settings_path.is_file()
-            self._settings_bytes = (
-                self._settings_path.read_bytes() if self._settings_existed else None
-            )
-            self._settings_mode = (
-                stat.S_IMODE(self._settings_path.stat().st_mode)
-                if self._settings_existed
-                else 0o600
-            )
-        except OSError as exc:
-            raise RuntimeError(f"cannot safely snapshot Hearth settings: {exc}") from exc
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
@@ -120,6 +107,9 @@ class FuncApp(Gtk.Application):
 
     def do_activate(self):
         self.win = mixer.MixerWindow(self)
+        # This check exercises layout gestures, not persistence. In particular,
+        # minimise()/restore() would otherwise overwrite the user's rail state.
+        disable_settings_persistence(self.win)
         self.win.present()
         GLib.timeout_add(2500, self.run_checks)
 
@@ -132,7 +122,7 @@ class FuncApp(Gtk.Application):
 
         # Refuse to modify the live sink unless its original state was read,
         # otherwise cleanup could only guess at the user's prior settings.
-        if not self._original_volumes or self._original_mute not in ("yes", "no"):
+        if not can_restore_audio_state(self._original_volumes, self._original_mute):
             check(
                 "original audio state can be restored",
                 False,
@@ -257,34 +247,6 @@ class FuncApp(Gtk.Application):
                 if message not in FAILURES:
                     FAILURES.append(message)
 
-    def restore_settings_state(self) -> None:
-        """Restore the exact settings file state captured before the test."""
-        target = self._settings_path
-        temporary: Path | None = None
-        try:
-            if not self._settings_existed:
-                target.unlink(missing_ok=True)
-                if not self._settings_parent_existed:
-                    with suppress(OSError):
-                        target.parent.rmdir()  # another config file may occupy the directory
-                return
-
-            target.parent.mkdir(parents=True, exist_ok=True)
-            fd, name = tempfile.mkstemp(prefix=f".{target.name}.func-check-", dir=target.parent)
-            temporary = Path(name)
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(self._settings_bytes)
-            temporary.chmod(self._settings_mode)
-            temporary.replace(target)
-        except OSError as exc:
-            message = f"could not restore original Hearth settings: {exc}"
-            print(f"FAIL: {message}")
-            if message not in FAILURES:
-                FAILURES.append(message)
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
-
     def finish(self, *_a):
         try:
             if self.win is not None:
@@ -302,10 +264,7 @@ def main() -> int:
         # Also restore on exceptions, Ctrl+C, or an ordinary window close.
         # Invalid snapshots (e.g. vm_game absent) are skipped rather than
         # applying a guessed default to a sink that may have appeared later.
-        try:
-            app.restore_audio_state()
-        finally:
-            app.restore_settings_state()
+        app.restore_audio_state()
 
     print("FAILURES:", ", ".join(FAILURES) if FAILURES else "none")
     return 1 if FAILURES else 0
