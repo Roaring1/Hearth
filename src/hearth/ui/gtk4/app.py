@@ -992,6 +992,13 @@ class Strip(Gtk.Box):
             button.remove_css_class("on")
 
     def _fill_listeners(self, listeners: list[Listener]) -> None:
+        # A snapshot arrives every 250-500 ms. Recreating these rows on each
+        # poll is unnecessary GTK churn and can disturb pointer/keyboard focus.
+        # The displayed list is capped at five, so cache only what is visible.
+        signature = tuple((listener.index, listener.name, listener.muted) for listener in listeners[:5])
+        if getattr(self, "_listener_signature", None) == signature:
+            return
+        self._listener_signature = signature
         self._clear(self.listeners)
         for listener in listeners[:5]:
             # Round 10 gives every app its own row: brand chip, name, and the
