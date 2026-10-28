@@ -65,19 +65,132 @@ def _fake_pactl(calls: list[list[str]]):
 
 def test_listener_rows_are_not_rebuilt_for_identical_snapshots() -> None:
     mixer = _load_mixer()
-    listeners = [SimpleNamespace(index="42", name="Firefox", muted=False)]
+    listeners = [SimpleNamespace(index="42", name="Firefox", muted=False, volume=63)]
     signature = (("42", "Firefox", False),)
     listener_box = object()
     cleared = []
+    synced = []
     strip = SimpleNamespace(
         _listener_signature=signature,
         listeners=listener_box,
         _clear=lambda box: cleared.append(box),
+        _sync_listener_volumes=lambda current: synced.append(current),
     )
 
     mixer.Strip._fill_listeners(strip, listeners)
 
     assert cleared == []
+    assert synced == [listeners]
+
+
+def test_per_app_volume_callback_targets_stream_not_bus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+    calls: list[tuple[str, int]] = []
+
+    monkeypatch.setattr(
+        mixer.pactl,
+        "set_stream_volume",
+        lambda index, percent: calls.append((index, percent)) or True,
+    )
+
+    def forbidden_bus_volume(*_args, **_kwargs):
+        raise AssertionError("per-app control must not change the whole bus volume")
+
+    monkeypatch.setattr(mixer.pactl, "set_volume", forbidden_bus_volume)
+
+    class FakeScale:
+        def __init__(self) -> None:
+            self.value = 73
+            self.tooltip = ""
+
+        def get_value(self) -> int:
+            return self.value
+
+        def set_tooltip_text(self, text: str) -> None:
+            self.tooltip = text
+
+    class FakeLabel:
+        text = ""
+
+        def set_text(self, text: str) -> None:
+            self.text = text
+
+    class FakeCollector:
+        refreshes = 0
+
+        def refresh_now(self) -> None:
+            self.refreshes += 1
+
+    scale = FakeScale()
+    label = FakeLabel()
+    collector = FakeCollector()
+    strip = SimpleNamespace(
+        _listener_volume_held={},
+        _listener_volume_controls={"42": (scale, label, 1)},
+        win=SimpleNamespace(collector=collector),
+    )
+    listener = SimpleNamespace(index="42", name="Firefox")
+
+    mixer.Strip._on_app_volume(strip, scale, listener)
+
+    assert calls == [("42", 73)]
+    assert label.text == "73%"
+    assert scale.tooltip == "Firefox: 73%"
+    assert strip._listener_volume_held["42"] > 0
+    assert collector.refreshes == 0
+
+
+def test_listener_volume_snapshot_sync_respects_drag_hold_and_blocks_signal() -> None:
+    mixer = _load_mixer()
+
+    class FakeScale:
+        def __init__(self, value: int) -> None:
+            self.value = value
+            self.blocked = False
+            self.tooltip = ""
+
+        def get_value(self) -> int:
+            return self.value
+
+        def set_value(self, value: int) -> None:
+            self.value = value
+
+        def handler_block(self, _handler: int) -> None:
+            self.blocked = True
+
+        def handler_unblock(self, _handler: int) -> None:
+            self.blocked = False
+
+        def set_tooltip_text(self, text: str) -> None:
+            self.tooltip = text
+
+    class FakeLabel:
+        text = ""
+
+        def set_text(self, text: str) -> None:
+            self.text = text
+
+    scale, label = FakeScale(40), FakeLabel()
+    strip = SimpleNamespace(
+        _listener_volume_controls={"42": (scale, label, 4)},
+        _listener_volume_held={},
+    )
+    listener = SimpleNamespace(index="42", name="Firefox", volume=72)
+
+    mixer.Strip._sync_listener_volumes(strip, [listener])
+
+    assert scale.value == 72
+    assert scale.blocked is False
+    assert label.text == "72%"
+    assert scale.tooltip == "Firefox: 72%"
+
+    scale.value = 88
+    strip._listener_volume_held["42"] = 10**12
+    mixer.Strip._sync_listener_volumes(strip, [listener])
+    assert scale.value == 88
+    assert label.text == "72%"
 
 
 def test_volume_snapshot_keeps_all_channel_levels(monkeypatch) -> None:  # type: ignore[no-untyped-def]
