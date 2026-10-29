@@ -167,6 +167,10 @@ window.hearth {{
 .strip.ghost {{
   background: transparent;
   border: 1px dashed {pal["button"]};
+  opacity: 0.78;
+}}
+.strip.ghost .value, .strip.ghost .device, .strip.ghost .listener {{
+  color: {pal["fg-dim"]};
 }}
 .strip-name {{
   font-size: 10px;

@@ -83,6 +83,7 @@ ignore = [
 "tests/*" = ["S101"]              # asserts are the point of a test
 "tests/conftest.py" = ["S101", "TID251"]  # probes for gi to decide whether to skip GUI tests
 "tests/test_gui_smoke.py" = ["TID251"]  # deliberately imports GTK in the GUI-only smoke test
+"tests/test_gui_visual.py" = ["TID251"]  # deliberately renders real GTK windows in an isolated visual test
 # The functional check drives the real GTK widgets against the live audio
 # graph, so it has to import gi like the UI it exercises. It is a manual
 # check, not part of the test suite, and stays out of src/ for that reason.

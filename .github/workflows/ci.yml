@@ -68,15 +68,28 @@ jobs:
       - name: Install GTK4 introspection and a virtual display
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3-venv python3-gi python3-gi-cairo gir1.2-gtk-4.0 xvfb
+          sudo apt-get install -y python3-venv python3-gi python3-gi-cairo python3-pil gir1.2-gtk-4.0 xvfb
       - name: Create a test environment that can see distro PyGObject
         run: |
           /usr/bin/python3 -m venv --system-site-packages .venv-gui
           .venv-gui/bin/python -m pip install 'pytest>=8.0'
-      - name: Import the actual GTK4 application module under Xvfb
+      - name: Render production GTK4 windows and assert visual states
+        env:
+          HEARTH_UI_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/gui
         run: |
+          mkdir -p "$HEARTH_UI_ARTIFACT_DIR"
+          # Use a real X11 root at a stable size. Tests run from a scratch
+          # directory so the legacy hearth.py shim cannot shadow src/hearth.
           cd "$(mktemp -d)"
-          PYTHONPATH="${GITHUB_WORKSPACE}/src" xvfb-run -a "${GITHUB_WORKSPACE}/.venv-gui/bin/python" -m pytest -q --rootdir "${GITHUB_WORKSPACE}" -c "${GITHUB_WORKSPACE}/pyproject.toml" "${GITHUB_WORKSPACE}/tests" -m gui
+          PYTHONPATH="${GITHUB_WORKSPACE}/src" xvfb-run -a -s "-screen 0 1600x1200x24" "${GITHUB_WORKSPACE}/.venv-gui/bin/python" -m pytest -q --rootdir "${GITHUB_WORKSPACE}" -c "${GITHUB_WORKSPACE}/pyproject.toml" "${GITHUB_WORKSPACE}/tests" -m gui
+      - name: Upload GTK visual audit screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hearth-gtk-visual-audit
+          path: artifacts/gui/
+          if-no-files-found: warn
+          retention-days: 14
 
   package:
     name: Install smoke test
@@ -90,3 +103,16 @@ jobs:
       # Proves the built artifact is usable, not just the working tree.
       - run: pip install .
       - run: hearth --version
+      - name: Verify bundled action SVGs survive wheel installation
+        run: |
+          # Avoid the compatibility shim at the repository root shadowing the installed package.
+          cd "$(mktemp -d)"
+          python - <<'PY'
+          from importlib.resources import files
+
+          assets = files("hearth.ui.gtk4").joinpath("art")
+          expected = {"collapse.svg", "refresh.svg", "save.svg", "sliders.svg"}
+          missing = sorted(name for name in expected if not assets.joinpath(name).is_file())
+          assert not missing, f"Installed wheel is missing SVG action icons: {missing}"
+          print(f"Verified {len(expected)} installed action SVGs")
+          PY

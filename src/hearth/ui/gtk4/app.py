@@ -48,7 +48,7 @@ from hearth import services as services_mod  # noqa: E402
 from hearth import settings as settings_mod  # noqa: E402
 from hearth.audio import pactl  # noqa: E402
 
-from hearth.ui.gtk4 import icons as icons_mod  # noqa: E402
+from hearth.ui.gtk4 import action_icons, icons as icons_mod  # noqa: E402
 from hearth.ui.gtk4 import style as style_mod  # noqa: E402
 from hearth.ui.gtk4.widgets import Fader, Meter, Scale, Sliver, parse_rgb, rounded  # noqa: E402
 
@@ -278,9 +278,12 @@ class Strip(Gtk.Box):
         name.set_hexpand(True)
         name.set_tooltip_text(channel.name)
         header.append(name)
-        minimise = Gtk.Button(label="\u2013")
+        minimise = Gtk.Button()
         minimise.add_css_class("minbox")
+        minimise.set_child(action_icons.image("collapse", 12))
+        action_icons.accessible_label(minimise, f"Minimise {channel.name} to the rail")
         minimise.set_tooltip_text(f"Minimise {channel.name} to the rail")
+        self.minimise_button = minimise
         minimise.connect("clicked", lambda _b: window.minimise(channel.sink))
         header.append(minimise)
         # Double clicking a bus header collapses it, the same way a
@@ -504,30 +507,42 @@ class Strip(Gtk.Box):
         self.listeners.set_visible(expanded)
 
     def apply(self, state: ChannelState) -> None:
-        dead = not state.present
+        # The first collector snapshot is not the same as a confirmed missing
+        # device. Keep the strip in a quiet skeleton state until that snapshot
+        # arrives; only then render the real unavailable/working state.
+        loading = not state.seen
+        dead = state.seen and not state.present
         self.set_css_state(dead)
-        self.meter.set_state(muted=state.muted, dead=dead)
-        self.set_muted_look(state.muted and not dead)
-        self.fader.set_dead(dead)
-        if not dead and time.monotonic() > self._held_until:
+        if loading:
+            self.add_css_class("ghost")
+        else:
+            self.remove_css_class("ghost")
+        self.meter.set_state(muted=state.muted, dead=dead or loading)
+        self.set_muted_look(state.muted and not dead and not loading)
+        self.fader.set_dead(dead or loading)
+        if not dead and not loading and time.monotonic() > self._held_until:
             self.fader.set_value(state.volume)
             self.value.set_text(f"{state.volume}")
-        if dead:
+        elif loading:
+            self.value.set_text("\u2026")
+        else:
             self.value.set_text("--")
         self.mute.handler_block(self._mute_handler)
-        self.mute.set_active(state.muted and not dead)
-        self.mute.set_label("MUTED" if (state.muted and not dead) else "MUTE")
-        self.mute.set_sensitive(not dead)
+        self.mute.set_active(state.muted and not dead and not loading)
+        self.mute.set_label("MUTED" if (state.muted and not dead and not loading) else "MUTE")
+        self.mute.set_sensitive(not dead and not loading)
         self.mute.handler_unblock(self._mute_handler)
 
         self.device.remove_css_class("missing")
-        if dead:
+        if loading:
+            self.device.set_text("checking\u2026")
+        elif dead:
             self.device.add_css_class("missing")
             self.device.set_text("no device")
         else:
             self.device.set_text(state.device or "\u2014")
 
-        self._fill_listeners(state.listeners)
+        self._fill_listeners(state.listeners, loading=loading)
 
     def set_muted_look(self, muted: bool) -> None:
         """Tint the whole strip while its bus is muted.
@@ -555,18 +570,43 @@ class Strip(Gtk.Box):
 
     def _mark(self, app: str, size: int) -> Gtk.Widget:
         """The installed icon for an app, falling back to a letter chip."""
-        image = icons_mod.icon_image(app, size)
+        image = icons_mod.icon_image(app, size, allow_index_scan=False)
         if image is not None:
             image.set_valign(Gtk.Align.CENTER)
             return image
+
+        # Never freeze GTK while looking through every installed icon theme.
+        # Show a real, styled fallback immediately; replace it on the main loop
+        # if the background file index finds a genuine icon for this app.
         chip = Gtk.Label(label=app[:1].upper() or "?")
         chip.add_css_class("mark")
         chip.set_valign(Gtk.Align.CENTER)
         chip.set_tooltip_text(app)
+        chip.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
         brand = app_class(app)
         if brand:
             chip.add_css_class(brand)
-        return chip
+        holder = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        holder.set_valign(Gtk.Align.CENTER)
+        holder.set_size_request(size + 8, size)
+        holder.append(chip)
+
+        def install_icon() -> bool:
+            # A listener row may have been replaced while the index was built.
+            if holder.get_root() is None:
+                return False
+            resolved = icons_mod.icon_image(app, size, allow_index_scan=False)
+            if resolved is None:
+                return False
+            previous = holder.get_first_child()
+            if previous is not None:
+                holder.remove(previous)
+            resolved.set_valign(Gtk.Align.CENTER)
+            holder.append(resolved)
+            return False
+
+        icons_mod.warm_indexes(install_icon)
+        return holder
 
     def _fill_outputs(self) -> None:
         """Build routing controls from the latest background snapshot.
@@ -1038,15 +1078,27 @@ class Strip(Gtk.Box):
             value_label.set_text(f"{percent}%")
             scale.set_tooltip_text(f"{listener.name}: {percent}%")
 
-    def _fill_listeners(self, listeners: list[Listener]) -> None:
+    def _fill_listeners(self, listeners: list[Listener], *, loading: bool = False) -> None:
         # A snapshot arrives every 250-500 ms. Recreating these rows on each
         # poll is unnecessary GTK churn and can disturb pointer/keyboard focus.
         # The displayed list is capped at five, so cache only what is visible.
-        signature = tuple(
-            (listener.index, listener.name, listener.muted) for listener in listeners[:5]
-        )
+        if loading:
+            signature = (("__loading__", "Loading apps\u2026", False),)
+        else:
+            signature = tuple(
+                (listener.index, listener.name, listener.muted) for listener in listeners[:5]
+            )
         if getattr(self, "_listener_signature", None) == signature:
             self._sync_listener_volumes(listeners[:5])
+            return
+        if loading:
+            self._listener_signature = signature
+            self._listener_volume_controls = {}
+            self._clear(self.listeners)
+            placeholder = Gtk.Label(label="Loading apps\u2026", xalign=0.0)
+            placeholder.add_css_class("listener")
+            placeholder.set_can_target(False)
+            self.listeners.append(placeholder)
             return
         now = time.monotonic()
         held_values = {

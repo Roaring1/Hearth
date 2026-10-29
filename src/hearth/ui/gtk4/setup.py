@@ -39,6 +39,7 @@ from hearth import lpd8map  # noqa: E402
 from hearth import mic_routes  # noqa: E402
 from hearth import services as services_mod  # noqa: E402
 from hearth import units as units_mod  # noqa: E402
+from hearth.ui.gtk4 import action_icons  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -142,7 +143,8 @@ class SetupWindow(Gtk.Window):
         self.faults = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         box.append(self.faults)
 
-        self.reset_failed = Gtk.Button(label="Clear the failed state")
+        self.reset_failed = Gtk.Button()
+        action_icons.button(self.reset_failed, "refresh", "Clear the failed state")
         self.reset_failed.add_css_class("setup-act")
         self.reset_failed.set_halign(Gtk.Align.START)
         self.reset_failed.set_tooltip_text(
@@ -212,7 +214,8 @@ class SetupWindow(Gtk.Window):
         lat_row.append(Gtk.Label(label="ms"))
         box.append(lat_row)
 
-        self.save_devices = Gtk.Button(label="Save")
+        self.save_devices = Gtk.Button()
+        self.save_devices_label = action_icons.button(self.save_devices, "save", "Save")
         self.save_devices.set_tooltip_text("Write the config and restart routing")
         self.save_devices.add_css_class("setup-act")
         self.save_devices.set_halign(Gtk.Align.START)
@@ -235,7 +238,9 @@ class SetupWindow(Gtk.Window):
         self.astro_chat.set_sensitive(False)
         self.astro_game.set_sensitive(False)
         self.latency.set_sensitive(False)
-        self.save_devices.set_label("Saving…")
+        action_icons.set_label(
+            self.save_devices, getattr(self, "save_devices_label", None), "Saving…"
+        )
         self.save_devices.set_tooltip_text(
             "Writing mixer configuration and requesting routing restart"
         )
@@ -274,19 +279,25 @@ class SetupWindow(Gtk.Window):
         self.astro_game.set_sensitive(True)
         self.latency.set_sensitive(True)
         if not saved:
-            self.save_devices.set_label("Save failed")
+            action_icons.set_label(
+                self.save_devices, getattr(self, "save_devices_label", None), "Save failed"
+            )
             self.save_devices.set_tooltip_text(
                 error or "Could not save mixer configuration; the previous file was preserved"
             )
         elif not restart_started:
-            self.save_devices.set_label("Saved*")
+            action_icons.set_label(
+                self.save_devices, getattr(self, "save_devices_label", None), "Saved*"
+            )
             self.save_devices.set_tooltip_text(
                 error
                 or "Configuration was saved, but routing could not be restarted. "
                 "Restart the routing service manually to apply it."
             )
         else:
-            self.save_devices.set_label("Saved")
+            action_icons.set_label(
+                self.save_devices, getattr(self, "save_devices_label", None), "Saved"
+            )
             self.save_devices.set_tooltip_text(
                 "Configuration was saved; routing restart was requested"
             )
@@ -294,7 +305,7 @@ class SetupWindow(Gtk.Window):
         return False
 
     def _devices_settled(self) -> bool:
-        self.save_devices.set_label("Save")
+        action_icons.set_label(self.save_devices, getattr(self, "save_devices_label", None), "Save")
         self.save_devices.set_tooltip_text("Write the config and restart routing")
         return False
 
@@ -401,26 +412,28 @@ class SetupWindow(Gtk.Window):
         self.lpd8_state = Gtk.Label(label="\u2026", xalign=0.0)
         self.lpd8_state.set_hexpand(True)
         self.lpd8_state.set_tooltip_text(
-            "Pad lamps only follow the mixer while the LPD8 is in NOTE "
-            "TOGGLE mode. In CC mode the device owns its lights and ignores "
-            "what Hearth sends."
+            "This classic LPD8 sends MIDI notes but does not accept incoming "
+            "notes for pad-light feedback, so its physical lamps cannot mirror "
+            "Hearth's mixer mute state."
         )
         row.append(self.lpd8_state)
-        reconnect = Gtk.Button(label="Reconnect")
-        reconnect.add_css_class("setup-act")
-        reconnect.set_tooltip_text(
+        self.reconnect_lpd8 = Gtk.Button()
+        action_icons.button(self.reconnect_lpd8, "refresh", "Reconnect")
+        self.reconnect_lpd8.add_css_class("setup-act")
+        self.reconnect_lpd8.set_tooltip_text(
             "Restart lpd8-mixer. Plugging the pad back in restarts it on its "
             "own; this is for when it did not."
         )
-        reconnect.connect("clicked", self._on_restart, LPD8_UNIT)
-        row.append(reconnect)
-        remap = Gtk.Button(label="Remap\u2026")
-        remap.add_css_class("setup-act")
-        remap.set_tooltip_text(
+        self.reconnect_lpd8.connect("clicked", self._on_restart, LPD8_UNIT)
+        row.append(self.reconnect_lpd8)
+        self.remap_lpd8 = Gtk.Button()
+        action_icons.button(self.remap_lpd8, "sliders", "Remap\u2026")
+        self.remap_lpd8.add_css_class("setup-act")
+        self.remap_lpd8.set_tooltip_text(
             "Open the LPD8 window: which knob moves which bus, and what each pad does."
         )
-        remap.connect("clicked", self._on_remap)
-        row.append(remap)
+        self.remap_lpd8.connect("clicked", self._on_remap)
+        row.append(self.remap_lpd8)
         box.append(row)
 
         # The map is read from the running script rather than printed from a
