@@ -606,3 +606,23 @@ row movement are checked in the safety test and real GTK production-window test.
 - Hosted [CI run #150](https://github.com/Roaring1/Hearth/actions/runs/40974139781)
   passed all six jobs on code commit `437cf17`, including lint/types, Python
   3.11–3.13 tests, GTK visual capture, and installed-package smoke.
+
+
+## CLI unmute launch-status reporting — 2026-10-29
+
+- The legacy argv background launcher now returns whether the subprocess could
+  start. `unmute_all()` aggregates launch failures rather than silently
+  discarding them, and `hearth --unmute` returns an error if any required
+  unmute/volume command could not be launched.
+- CLI success output now says `unmute requests started; state not yet verified`
+  rather than `unmuted all sinks`. This is an intentional distinction: the
+  legacy CLI remains fire-and-forget and does not claim that PipeWire has
+  applied the changes before a subsequent state refresh. Help text says so too.
+- Regression tests cover spawn failure, aggregation across sink requests,
+  truthful success wording, and the nonzero error path.
+- The full local gate passes **506 tests**; Ruff, formatting, mypy (34 source
+  files), legacy compilation, desktop entry/AppStream metadata and ShellCheck
+  pass. AppStream's existing uppercase-ID pedantic notice is non-fatal.
+- Hosted [CI #151](https://github.com/Roaring1/Hearth/actions/runs/40974425768)
+  passed all six jobs on the prior handoff-only head `41150d6`. Verify the
+  hosted run for the CLI unmute commit before considering the pre-merge gate complete.

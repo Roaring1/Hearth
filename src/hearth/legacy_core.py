@@ -246,7 +246,7 @@ def save_settings(s):
 
 
 def sh_bg_argv(argv):
-    """Fire-and-forget an argv list. No shell, so no quoting hazards."""
+    """Start an argv command without a shell; report whether spawn succeeded."""
     try:
         subprocess.Popen(
             [str(a) for a in argv],
@@ -256,12 +256,13 @@ def sh_bg_argv(argv):
             start_new_session=True,
         )
     except Exception:
-        pass
+        return False
+    return True
 
 
 def pactl_bg(*args):
-    """Fire-and-forget pactl call."""
-    sh_bg_argv(["pactl", *args])
+    """Start a fire-and-forget pactl call and report whether it could launch."""
+    return sh_bg_argv(["pactl", *args])
 
 
 def systemctl_bg(*args):
@@ -738,19 +739,27 @@ def monitor_sink():
     return SCARLETT
 
 
-def unmute_all():
+def unmute_all() -> bool:
+    """Launch unmute requests; return False if any requested command cannot start.
+
+    This is deliberately not a claim that PipeWire has applied the changes:
+    the commands are fire-and-forget, and the next status refresh is the source
+    of truth for actual mute and volume state.
+    """
     monitor_sink()  # refresh if PipeWire came up after we did
+    started = True
     for s in UNMUTE_SINKS:
-        pactl_bg("set-sink-mute", s, "0")
+        started = pactl_bg("set-sink-mute", s, "0") and started
     # Don't stomp on deliberate volume settings. Only rescue the headset if
     # it is sitting at (near) zero, which is the case this shortcut exists
     # for -- "I hear nothing, fix it".
     for s in (ASTRO_CHAT, ASTRO_GAME):
         try:
             if pactl_vol(s) < UNMUTE_RESCUE_BELOW_PCT:
-                pactl_bg("set-sink-volume", s, "100%")
+                started = pactl_bg("set-sink-volume", s, "100%") and started
         except Exception:
             pass
+    return started
 
 
 def force_default_sink(sink="vm_game"):

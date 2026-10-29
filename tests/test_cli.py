@@ -409,3 +409,63 @@ def test_show_does_not_trust_a_stale_pid_file(monkeypatch: pytest.MonkeyPatch) -
     args = cli.build_parser().parse_args(["--show"])
     assert cli._dispatch(args) == 37
     assert launched == [True]
+
+
+def test_background_argv_helper_reports_spawn_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hearth import legacy_core as core
+
+    def fail_spawn(*_args, **_kwargs):
+        raise FileNotFoundError("pactl unavailable")
+
+    monkeypatch.setattr(core.subprocess, "Popen", fail_spawn)
+
+    assert core.sh_bg_argv(["pactl", "set-sink-mute", "sink-a", "0"]) is False
+
+
+def test_unmute_all_reports_when_any_command_cannot_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hearth import legacy_core as core
+
+    monkeypatch.setattr(core, "monitor_sink", lambda: None)
+    monkeypatch.setattr(core, "UNMUTE_SINKS", ["sink-a", "sink-b"])
+    monkeypatch.setattr(core, "pactl_vol", lambda _sink: 100)
+    attempted: list[tuple[str, ...]] = []
+
+    def fake_pactl_bg(*args: str) -> bool:
+        attempted.append(args)
+        return args[1] != "sink-b"
+
+    monkeypatch.setattr(core, "pactl_bg", fake_pactl_bg)
+
+    assert core.unmute_all() is False
+    assert attempted == [
+        ("set-sink-mute", "sink-a", "0"),
+        ("set-sink-mute", "sink-b", "0"),
+    ]
+
+
+def test_unmute_cli_describes_a_request_not_verified_audio_state(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from hearth import legacy_core as core
+
+    monkeypatch.setattr(logging_setup, "configure", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(core, "unmute_all", lambda: True)
+
+    assert cli.main(["--unmute"]) == cli.EXIT_OK
+    assert capsys.readouterr().out == "unmute requests started; state not yet verified\n"
+
+
+def test_unmute_cli_returns_error_if_a_command_cannot_start(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from hearth import legacy_core as core
+
+    monkeypatch.setattr(logging_setup, "configure", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(core, "unmute_all", lambda: False)
+
+    assert cli.main(["--unmute"]) == cli.EXIT_ERROR
+    assert capsys.readouterr().out == "could not start one or more unmute commands\n"

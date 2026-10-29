@@ -79,7 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--unmute",
         action="store_true",
-        help="Unmute every bus and exit. Needs no display.",
+        help="Request an unmute of every bus and exit; state is not synchronously verified.",
     )
     parser.add_argument(
         "--dump",
@@ -114,8 +114,10 @@ def _dispatch(args: argparse.Namespace) -> int:
     from hearth import legacy_core as core
 
     if args.unmute:
-        core.unmute_all()
-        print("unmuted all sinks")
+        if not core.unmute_all():
+            print("could not start one or more unmute commands")
+            return EXIT_ERROR
+        print("unmute requests started; state not yet verified")
         return EXIT_OK
 
     if args.quit:
