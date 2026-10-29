@@ -365,12 +365,19 @@ def test_production_windows_render_and_capture(
     assert not window.strips["laptop_audio"].mute.get_sensitive()
     capture("mixer-missing-device")
 
-    # The repair banner is another meaningful GUI state. Set fixture text
-    # directly; never click Restart or invoke the real systemd path.
-    window.banner_text.set_text("Audio routing needs attention")
-    window.banner_units = ("roaring-vm-sinks.service",)
-    window.banner.set_visible(True)
+    # The repair banner is another meaningful GUI state. Mark Laptop as a
+    # previously-present bus that has disappeared, then let production logic
+    # choose the corresponding service and accessible name. Never click Restart.
+    previous_ever_present = set(window.ever_present)
+    window.ever_present.add("laptop_audio")
+    window._update_banner()
+    assert window.banner_units == ("roaring-laptop-audio.service",)
+    assert "Restart roaring-laptop-audio.service" in accessible_labels[id(window.banner_button)]
+    assert window.banner_button.get_tooltip_text() == "Restart roaring-laptop-audio.service"
     capture("mixer-fault-banner")
+    window.states["laptop_audio"].present = True
+    window.ever_present = previous_ever_present
+    window._update_banner()
 
     window.set_visible(False)
     accessible_names: list[tuple[Gtk.Widget, str]] = []
@@ -421,6 +428,9 @@ def test_production_windows_render_and_capture(
     # accessible name identifies the exact unit it will restart.
     failed_unit = setup_mod.units_mod.Unit("roaring-vm-share.service", "daemon", "failed", "failed")
     setup_window._apply([failed_unit])
+    assert setup_window.verdict.get_accessible_role() == Gtk.AccessibleRole.STATUS
+    assert setup_window.verdict.get_text() == "1 thing is wrong"
+    assert setup_window.verdict.get_visible()
     failed_row = setup_window._fault_rows[failed_unit.name]
     restart_button = failed_row.get_last_child()
     assert isinstance(restart_button, Gtk.Button)

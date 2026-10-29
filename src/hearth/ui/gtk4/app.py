@@ -1416,6 +1416,7 @@ class MixerWindow(Gtk.ApplicationWindow):
         # carries the one command that would fix it.
         self.banner_units: tuple[str, ...] = ()
         self.banner_button = Gtk.Button(label="RESTART")
+        action_icons.accessible_label(self.banner_button, "Restart affected audio services")
         self.banner_button.add_css_class("banner-restart")
         self.banner_button.connect("clicked", self._on_restart)
         self.banner.append(self.banner_button)
@@ -2051,8 +2052,14 @@ class MixerWindow(Gtk.ApplicationWindow):
                 if unit and unit not in units:
                     units.append(unit)
             self.banner_units = tuple(units)
+            restart_name = (
+                "Restart " + ", ".join(self.banner_units)
+                if self.banner_units
+                else "Restart affected audio services"
+            )
+            action_icons.accessible_label(self.banner_button, restart_name)
             self.banner_button.set_visible(bool(units))
-            self.banner_button.set_tooltip_text("Restart " + ", ".join(units) if units else "")
+            self.banner_button.set_tooltip_text(restart_name if units else "")
         else:
             # The banner hides, but the button underneath stayed armed with
             # the units from the last fault. Disarm it when the graph is well.

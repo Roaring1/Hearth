@@ -396,3 +396,27 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 - The real Setup-window GTK test injects a synthetic failed unit after capturing
   the normal Setup screenshot and asserts the emitted accessible name and
   tooltip, without connecting to systemd or clicking Restart.
+
+
+## Mixer fault-banner Restart label — 2026-10-29
+
+- The main repair-banner Restart action now names the exact service unit(s)
+  derived from the missing-bus state, e.g. `Restart roaring-laptop-audio.service`,
+  instead of only announcing the generic visible `RESTART` caption. Its tooltip
+  stays synchronized; when no targets exist the hidden button is disarmed and
+  carries the neutral name `Restart affected audio services`.
+- The real GTK visual test simulates a previously present Laptop bus disappearing,
+  checks that production banner logic picks the laptop service and exposes that
+  accessible label, captures the banner, then restores fixture state. It never
+  clicks Restart or invokes systemd.
+
+
+## Setup health verdict semantics — 2026-10-29
+
+- The dynamically updated Setup health verdict is now exposed with GTK's
+  `STATUS` role. Its existing text and visibility behavior stays unchanged,
+  but assistive technology can distinguish a service-health message from
+  regular settings descriptions.
+- The production GTK test injects a synthetic failed unit and checks the status
+  role, `1 thing is wrong` text/visibility, and the unit-specific Restart label.
+  It never activates Restart or connects to the real systemd service manager.

@@ -268,3 +268,19 @@ Every dynamically generated service restart button has a contextual accessible
 name and tooltip identifying the exact systemd unit, while retaining its compact
 visible `Restart` caption. The production-window regression injects a synthetic
 failed unit and verifies the label without invoking the restart handler.
+
+
+## Mixer fault-banner Restart name — 2026-10-29
+
+The banner's `RESTART` button names the actual unit(s) it will restart based on
+which previously available buses disappeared. The tooltip is kept in sync, and
+the hidden no-target state gets a neutral name. The production GTK test checks a
+synthetic Laptop disappearance without invoking the restart handler.
+
+
+## Setup health feedback — 2026-10-29
+
+The Setup verdict label now exposes GTK's semantic `STATUS` role while keeping
+its existing compact text/visibility behavior. The production-window regression
+checks the status role and one synthetic failed-unit message together with that
+unit's accessible Restart name. No real service is restarted by the test.
