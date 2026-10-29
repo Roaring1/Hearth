@@ -294,13 +294,16 @@ fi
 
 
 # ── Windows laptop state (via SSH) ──────────────────────────────────────────
-WIN_IP="${WIN_IP:-192.168.50.132}"
-WIN_USER="${WIN_USER:-roari}"
-WIN_KEY="$HOME/.ssh/roaring_win"
+WIN_IP="${WIN_IP:-}"
+WIN_USER="${WIN_USER:-}"
+WIN_KEY="${WIN_KEY:-$HOME/.ssh/roaring_win}"
 WIN_OUT="$OUTDIR/09_windows_state.txt"
 
 log "collecting Windows state via SSH..."
-if ssh -i "$WIN_KEY" -o BatchMode=yes -o ConnectTimeout=5 "$WIN_USER@$WIN_IP" hostname >/dev/null 2>&1; then
+if [[ -z "$WIN_IP" || -z "$WIN_USER" ]]; then
+  echo "### Windows state skipped; set WIN_IP and WIN_USER to opt in" > "$WIN_OUT"
+  log "Windows state skipped (set WIN_IP and WIN_USER to opt in)"
+elif ssh -i "$WIN_KEY" -o BatchMode=yes -o ConnectTimeout=5 "$WIN_USER@$WIN_IP" hostname >/dev/null 2>&1; then
   {
     echo "### Windows state collected at $(date --iso-8601=seconds)"
     echo "### target: $WIN_USER@$WIN_IP"
@@ -338,7 +341,7 @@ if ssh -i "$WIN_KEY" -o BatchMode=yes -o ConnectTimeout=5 "$WIN_USER@$WIN_IP" ho
     echo ""
     echo "--- RoaringMic AppDir ---"
     ssh -i "$WIN_KEY" -o BatchMode=yes "$WIN_USER@$WIN_IP" \
-      "powershell -NoProfile -NonInteractive -Command \"dir C:\Users\roari\AppData\Local\RoaringMic | Select Name, LastWriteTime, Length | Format-Table -Auto\""
+      "powershell -NoProfile -NonInteractive -Command \"Get-ChildItem (Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'RoaringMic') | Select Name, LastWriteTime, Length | Format-Table -Auto\""
 
     echo ""
     echo "--- Firewall SSH rule ---"

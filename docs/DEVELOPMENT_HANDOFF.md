@@ -586,3 +586,21 @@ row movement are checked in the safety test and real GTK production-window test.
   verifies file logging is disabled while the content, permissions, and link
   count remain unchanged. The full local gate passes **499 tests**, with Ruff,
   formatting, mypy (34 source files), compile, metadata checks and ShellCheck green.
+
+
+## Debug-bundle privacy and remote collection opt-in — 2026-10-29
+
+- The debug-bundle script no longer embeds a Windows laptop IP address or
+  account name. Windows collection is skipped by default and runs only when
+  both `WIN_IP` and `WIN_USER` are explicitly supplied; `WIN_KEY` is
+  configurable, defaulting to `~/.ssh/roaring_win`.
+- The RoaringMic AppData query now resolves the remote user's LocalApplicationData
+  directory rather than naming a fixed Windows profile path.
+- A mocked-SSH regression checks the actual command argument vector and quote
+  boundaries without connecting to a host. No physical or remote command was
+  executed during this audit.
+- The complete local gate passes **502 tests**; Ruff, formatting, mypy (34
+  source files), legacy compilation, desktop/AppStream metadata checks and
+  ShellCheck pass. AppStream retains its previously known non-fatal uppercase-ID
+  pedantic notice. Hosted CI #149 is green on the pre-change PR head; this
+  debug-bundle change will receive its own hosted run after it is pushed.
