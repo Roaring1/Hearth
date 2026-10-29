@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Barrier
+from types import SimpleNamespace
 
 import pytest
 
@@ -95,6 +98,42 @@ def test_lpd8_edit_ignores_a_preexisting_fixed_temp_symlink(script, tmp_path):
     assert lpd8map.read_map(script)["CC_VM_MUSIC"] == 1
     assert script.stat().st_mode & 0o777 == original_mode
     assert list(tmp_path.glob("lpd8_mixer.sh.tmp.*")) == []
+
+
+def test_lpd8_edit_refuses_a_hard_linked_lock_without_chmodding_its_target(script, tmp_path):
+    original_script = script.read_text(encoding="utf-8")
+    victim = tmp_path / "unrelated.txt"
+    victim.write_text("keep this file", encoding="utf-8")
+    original_mode = victim.stat().st_mode & 0o777
+    lock_path = script.with_name(f".{script.name}.lock")
+    os.link(victim, lock_path)
+
+    with pytest.raises(OSError, match="hard-linked"):
+        lpd8map.set_knob("CC_VM_MUSIC", 2, script)
+
+    assert script.read_text(encoding="utf-8") == original_script
+    assert victim.read_text(encoding="utf-8") == "keep this file"
+    assert victim.stat().st_mode & 0o777 == original_mode
+    assert victim.stat().st_nlink == 2
+
+
+def test_lpd8_edit_refuses_a_script_owned_by_another_user(script, monkeypatch):
+    original = script.read_text(encoding="utf-8")
+    real_lstat = Path.lstat
+
+    def report_foreign_owner(path):
+        metadata = real_lstat(path)
+        if path == script:
+            return SimpleNamespace(
+                st_mode=metadata.st_mode,
+                st_uid=metadata.st_uid + 1,
+            )
+        return metadata
+
+    monkeypatch.setattr(Path, "lstat", report_foreign_owner)
+    with pytest.raises(PermissionError, match="not owned by this user"):
+        lpd8map.set_knob("CC_VM_MUSIC", 2, script)
+    assert script.read_text(encoding="utf-8") == original
 
 
 def test_lpd8_edit_refuses_a_symlink_lock_file(script, tmp_path):

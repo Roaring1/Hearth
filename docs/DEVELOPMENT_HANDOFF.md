@@ -544,3 +544,18 @@ row movement are checked in the safety test and real GTK production-window test.
   their target files, and the persistent lock is mode `0600`. The focused IPC
   suite passes **39 tests**; the full local gate passes **490 tests**, with
   Ruff, formatting, mypy (34 source files), metadata checks and ShellCheck green.
+
+
+## LPD8 script/lock ownership hardening — 2026-10-29
+
+- The LPD8 remapper validates the opened lock inode before changing its mode:
+  it must be a regular file owned by the current user with a single hard link.
+  This prevents a hard-linked lock path from changing permissions on an
+  unrelated file before the edit is rejected.
+- The target LPD8 script must also be a regular file owned by the current user
+  before the atomic replacement proceeds. Regression tests prove a hard-linked
+  lock leaves the unrelated target's contents/mode untouched and a simulated
+  foreign-owned script remains unchanged.
+- The focused LPD8 map suite passes **14 tests**; the full local gate passes
+  **492 tests**, with Ruff, formatting, mypy (34 source files), metadata checks
+  and ShellCheck green.

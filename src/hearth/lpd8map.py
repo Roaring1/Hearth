@@ -124,11 +124,20 @@ def _edit(path: Path, transform: Callable[[str], str | None]) -> bool:
     flags |= getattr(os, "O_NOFOLLOW", 0)
     lock_fd = os.open(lock_path, flags, 0o600)
     try:
+        lock_metadata = os.fstat(lock_fd)
+        if not stat.S_ISREG(lock_metadata.st_mode):
+            raise OSError(f"refusing non-regular LPD8 lock file: {lock_path}")
+        if lock_metadata.st_uid != os.getuid():
+            raise PermissionError(f"LPD8 lock file is not owned by this user: {lock_path}")
+        if lock_metadata.st_nlink != 1:
+            raise OSError(f"refusing hard-linked LPD8 lock file: {lock_path}")
         os.fchmod(lock_fd, 0o600)
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         metadata = path.lstat()
         if not stat.S_ISREG(metadata.st_mode):
             raise OSError(f"refusing to edit non-regular LPD8 script: {path}")
+        if metadata.st_uid != os.getuid():
+            raise PermissionError(f"LPD8 script is not owned by this user: {path}")
         text = path.read_text(encoding="utf-8")
         updated = transform(text)
         if updated is None or updated == text:
