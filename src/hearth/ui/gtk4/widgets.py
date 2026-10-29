@@ -106,6 +106,17 @@ class Meter(Gtk.DrawingArea):
         self._peak_at = 0.0
         self._muted = False
         self._dead = False
+        self._accessible_percent = 0
+        self.set_accessible_role(Gtk.AccessibleRole.METER)
+        self.update_property(
+            [
+                Gtk.AccessibleProperty.VALUE_MIN,
+                Gtk.AccessibleProperty.VALUE_MAX,
+                Gtk.AccessibleProperty.VALUE_NOW,
+                Gtk.AccessibleProperty.VALUE_TEXT,
+            ],
+            [0.0, 100.0, 0.0, "0%"],
+        )
         self.set_content_width(width)
         self.set_content_height(height)
         self.set_draw_func(self._draw)
@@ -125,6 +136,16 @@ class Meter(Gtk.DrawingArea):
         self._shown += (target - self._shown) * 0.35
         if self._shown < 0.002:
             self._shown = 0.0
+        # A live meter changes every frame; round its accessible value to 5%
+        # increments so screen readers get useful level changes without a
+        # burst of announcements at the animation rate.
+        accessible_percent = max(0, min(100, int(round(self._shown * 20) * 5)))
+        if accessible_percent != self._accessible_percent:
+            self._accessible_percent = accessible_percent
+            self.update_property(
+                [Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT],
+                [float(accessible_percent), f"{accessible_percent}%"],
+            )
         now = time.monotonic()
         if self._shown >= self._peak:
             self._peak = self._shown

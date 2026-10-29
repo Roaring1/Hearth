@@ -304,6 +304,7 @@ class Strip(Gtk.Box):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
         row.set_halign(Gtk.Align.CENTER)
         self.meter = Meter(self.pal, height=window.meter_h)
+        action_icons.accessible_label(self.meter, f"{channel.name} audio level")
         self.fader = Fader(self.pal, height=window.meter_h)
         action_icons.accessible_label(self.fader, f"{channel.name} volume")
         self.fader.connect("moved", self._on_moved)

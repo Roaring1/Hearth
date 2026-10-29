@@ -34,9 +34,11 @@ def test_production_windows_render_and_capture(
     # GTK property writes, so the test checks named controls rather than a
     # tooltip or neighboring visible text.
     accessible_labels: dict[int, list[str]] = {}
+    accessible_updates: dict[int, list[tuple[tuple[object, ...], tuple[object, ...]]]] = {}
     original_update_property = Gtk.Accessible.update_property
 
     def record_accessible_label(widget, properties, values):
+        accessible_updates.setdefault(id(widget), []).append((tuple(properties), tuple(values)))
         if Gtk.AccessibleProperty.LABEL in properties:
             accessible_labels.setdefault(id(widget), []).append(str(values[0]))
         return original_update_property(widget, properties, values)
@@ -212,6 +214,23 @@ def test_production_windows_render_and_capture(
     game_strip = window.strips["vm_game"]
     chat_strip = window.strips["vm_chat"]
     game_out = game_strip.out_button
+    game_meter = game_strip.meter
+    assert game_meter.get_accessible_role() == Gtk.AccessibleRole.METER
+    assert "Game audio level" in accessible_labels[id(game_meter)]
+    assert any(
+        Gtk.AccessibleProperty.VALUE_MIN in properties
+        and Gtk.AccessibleProperty.VALUE_MAX in properties
+        and values == (0.0, 100.0, 0.0, "0%")
+        for properties, values in accessible_updates[id(game_meter)]
+    )
+    game_meter.set_state(muted=False, dead=False)
+    game_meter.feed(1.0)
+    game_meter.tick()
+    assert any(
+        properties == (Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT)
+        and values == (35.0, "35%")
+        for properties, values in accessible_updates[id(game_meter)]
+    )
     mic_in = window.strips["mic_b1"].in_button
     assert game_out is not None and mic_in is not None
     game_out_name = f"Choose where {game_strip.channel.name} is sent"
