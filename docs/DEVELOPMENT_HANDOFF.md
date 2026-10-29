@@ -316,3 +316,14 @@ No dump or log contents were published to GitHub. Machine-specific configuration
   updates and asserts the Game OUT and microphone IN controls receive the
   channel-specific names. This supplements, rather than replaces, live
   AT-SPI/screen-reader verification.
+
+
+## Per-channel mute action names — 2026-10-29
+
+- Main mixer `MUTE` toggles now expose state-aware names such as `Mute Game`
+  and `Unmute Chat`, even though the compact visible caption remains `MUTE`/
+  `MUTED`. The accessible name follows initial state, every collector snapshot,
+  successful toggles, and the rollback when a mute command cannot start.
+- Regression checks verify the real GTK property updates on a working Game
+  bus and muted Chat bus, plus the failure rollback path in the callback safety
+  test. The full gate and hosted CI are required before this change is complete.

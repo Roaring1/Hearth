@@ -350,6 +350,7 @@ class Strip(Gtk.Box):
         self.mute = Gtk.ToggleButton(label="MUTE")
         self.mute.add_css_class("mute")
         self.mute.set_hexpand(True)
+        action_icons.accessible_label(self.mute, f"Mute {channel.name}")
         self._mute_handler = self.mute.connect("toggled", self._on_mute)
         brow.append(self.mute)
         self.append(brow)
@@ -518,12 +519,16 @@ class Strip(Gtk.Box):
             try:
                 button.set_active(not active)
                 button.set_label("MUTED" if not active else "MUTE")
+                action = "Unmute" if not active else "Mute"
+                action_icons.accessible_label(button, f"{action} {self.channel.name}")
                 button.set_tooltip_text("Could not change mute; check pactl/PipeWire")
             finally:
                 self.mute.handler_unblock(self._mute_handler)
             self.win.collector.refresh_now()
             return
         button.set_label("MUTED" if active else "MUTE")
+        action = "Unmute" if active else "Mute"
+        action_icons.accessible_label(button, f"{action} {self.channel.name}")
         button.set_tooltip_text(None)
 
     # -- state -----------------------------------------------------------
@@ -578,8 +583,11 @@ class Strip(Gtk.Box):
         else:
             self.value.set_text("--")
         self.mute.handler_block(self._mute_handler)
-        self.mute.set_active(state.muted and not dead and not loading)
-        self.mute.set_label("MUTED" if (state.muted and not dead and not loading) else "MUTE")
+        active = state.muted and not dead and not loading
+        self.mute.set_active(active)
+        self.mute.set_label("MUTED" if active else "MUTE")
+        action = "Unmute" if active else "Mute"
+        action_icons.accessible_label(self.mute, f"{action} {self.channel.name}")
         self.mute.set_sensitive(not dead and not loading)
         self.mute.handler_unblock(self._mute_handler)
 

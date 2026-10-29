@@ -1235,6 +1235,9 @@ def test_mute_callback_reverts_optimistic_toggle_when_pactl_cannot_start(
         def set_tooltip_text(self, tooltip: str | None) -> None:
             self.tooltip = tooltip
 
+        def update_property(self, _properties, values) -> None:
+            self.accessible_label = values[0]
+
         def handler_block(self, _handler) -> None:
             pass
 
@@ -1246,7 +1249,7 @@ def test_mute_callback_reverts_optimistic_toggle_when_pactl_cannot_start(
     strip = SimpleNamespace(
         mute=button,
         _mute_handler=1,
-        channel=SimpleNamespace(sink="vm_game"),
+        channel=SimpleNamespace(sink="vm_game", name="Game"),
         win=SimpleNamespace(collector=SimpleNamespace(refresh_now=lambda: refreshes.append(True))),
     )
 
@@ -1254,6 +1257,7 @@ def test_mute_callback_reverts_optimistic_toggle_when_pactl_cannot_start(
 
     assert button.active is False
     assert button.label == "MUTE"
+    assert button.accessible_label == "Mute Game"
     assert "Could not change mute" in button.tooltip
     assert refreshes == [True]
 

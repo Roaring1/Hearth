@@ -206,13 +206,16 @@ def test_production_windows_render_and_capture(
     window = application.window
     assert window is not None and window.get_mapped()
 
-    game_out = window.strips["vm_game"].out_button
+    game_strip = window.strips["vm_game"]
+    chat_strip = window.strips["vm_chat"]
+    game_out = game_strip.out_button
     mic_in = window.strips["mic_b1"].in_button
     assert game_out is not None and mic_in is not None
-    game_out_name = f"Choose where {window.strips['vm_game'].channel.name} is sent"
+    game_out_name = f"Choose where {game_strip.channel.name} is sent"
     mic_in_name = f"Choose what feeds {window.strips['mic_b1'].channel.name}"
     assert game_out_name in accessible_labels[id(game_out)]
     assert mic_in_name in accessible_labels[id(mic_in)]
+    assert f"Mute {game_strip.channel.name}" in accessible_labels[id(game_strip.mute)]
 
     # Initial state before any collector snapshot: strips are skeletons,
     # their controls are disabled, and the device text says it is checking.
@@ -271,6 +274,7 @@ def test_production_windows_render_and_capture(
     window._sources_present = {"sm7b_mono", "astro_mic_48k"}
     window.apply_states()
     pump(0.45)
+    assert f"Unmute {chat_strip.channel.name}" in accessible_labels[id(chat_strip.mute)]
     assert "ghost" not in window.strips["vm_game"].get_css_classes()
     assert window.strips["vm_game"].mute.get_sensitive()
     assert window.strips["vm_game"].value.get_text() == "76"

@@ -214,3 +214,11 @@ The compact `OUT`/`IN` menu buttons have explicit contextual accessible labels
 that name the route direction and channel. Tooltips carry the same phrase; a
 production-window regression checks the GTK LABEL property on both a playback
 bus output selector and a microphone input selector.
+
+
+## Main bus mute names — 2026-10-29
+
+Each channel's toggle keeps its visual `MUTE`/`MUTED` caption but names the
+actual action and channel for assistive technology (`Mute Game`, `Unmute Chat`).
+The name is synchronized from the verified snapshot and updated on user action;
+command-failure rollback restores the matching action name too.
