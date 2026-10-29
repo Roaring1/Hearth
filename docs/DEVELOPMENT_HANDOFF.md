@@ -633,11 +633,14 @@ row movement are checked in the safety test and real GTK production-window test.
 
 ## Deferred companion-tool UI integration — 2026-10-29
 
-- `src/hearth/tools.py` defines a registry for companion scripts and its
-  module docstring says the UI renders installed tools, with confirmation for
-  disruptive commands. A search of production `src/hearth/ui` modules found
-  no imports or callers of that registry; only unit tests exercise the data
-  model. The current GTK4 app does not expose those companion-script buttons.
-- Treat this as a separate product-scope follow-up unless the PR was explicitly
-  intended to ship a GUI launcher for those scripts. Do not infer UI access or
+- `src/hearth/tools.py` defines a metadata registry for companion scripts.
+  A search of production `src/hearth/ui` modules found no imports or callers of
+  that registry; only unit tests exercise the data model. The current GTK4 app
+  does not expose those companion-script buttons. Commit `1ac6a48` corrects
+  the module docstring to say this explicitly and notes that a future launcher
+  must enforce confirmation.
+- Treat the GUI launcher as a separate product-scope follow-up unless this PR
+  was explicitly intended to ship that capability. Do not infer UI access or
   confirmation behavior from the registry's unit tests alone.
+- The docstring correction is covered by green [CI #155](https://github.com/Roaring1/Hearth/actions/runs/40975663405),
+  which passed all six jobs on `1ac6a48`.
