@@ -624,5 +624,9 @@ row movement are checked in the safety test and real GTK production-window test.
   files), legacy compilation, desktop entry/AppStream metadata and ShellCheck
   pass. AppStream's existing uppercase-ID pedantic notice is non-fatal.
 - Hosted [CI #151](https://github.com/Roaring1/Hearth/actions/runs/40974425768)
-  passed all six jobs on the prior handoff-only head `41150d6`. Verify the
-  hosted run for the CLI unmute commit before considering the pre-merge gate complete.
+  passed all six jobs on handoff-only head `41150d6`. Hosted [CI #152]
+  (https://github.com/Roaring1/Hearth/actions/runs/40974946525) also passed
+  all six jobs on code commit `3464157`: lint/types, Python 3.11–3.13 tests,
+  GTK visual capture and installed-package smoke. The GTK job uploaded ten
+  production screenshots in [artifact 12941902287]
+  (https://github.com/Roaring1/Hearth/actions/runs/40974946525/artifacts/12941902287).
