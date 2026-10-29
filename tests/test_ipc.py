@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import os
 import socket
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -231,6 +233,106 @@ def test_concurrent_starts_of_a_stale_socket_leave_one_live_listener(sock_path):
     assert sock_path.exists()
     assert client.send("show", socket_path=sock_path) in {"listener-0", "listener-1"}
     successful[0].stop()
+
+
+def test_separate_process_starts_of_a_stale_socket_leave_one_live_listener(sock_path):
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale.bind(str(sock_path))
+    stale.close()
+
+    gate = sock_path.parent / "start-together"
+    release = sock_path.parent / "release-listener"
+    child_code = r"""
+import sys
+import time
+from pathlib import Path
+from hearth.ipc.server import Server
+
+socket_path, index, gate_name, ready_name, result_name, release_name = sys.argv[1:]
+socket_path = Path(socket_path)
+gate = Path(gate_name)
+ready = Path(ready_name)
+result = Path(result_name)
+release = Path(release_name)
+ready.touch()
+deadline = time.monotonic() + 12.0
+while not gate.exists() and time.monotonic() < deadline:
+    time.sleep(0.005)
+if not gate.exists():
+    raise SystemExit("parent did not release startup gate")
+server = Server(lambda _request: f"listener-{index}", socket_path=socket_path)
+try:
+    server.start()
+except OSError as exc:
+    outcome = f"failed:{exc}"
+else:
+    outcome = f"started:listener-{index}"
+temporary = result.with_suffix(".tmp")
+temporary.write_text(outcome, encoding="utf-8")
+temporary.replace(result)
+if outcome.startswith("started:"):
+    while not release.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    server.stop()
+"""
+    env = os.environ.copy()
+    source_root = str(Path(__file__).resolve().parents[1] / "src")
+    env["PYTHONPATH"] = os.pathsep.join(
+        item for item in (source_root, env.get("PYTHONPATH", "")) if item
+    )
+    processes: list[subprocess.Popen[bytes]] = []
+    try:
+        for index in range(2):
+            processes.append(
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        child_code,
+                        str(sock_path),
+                        str(index),
+                        str(gate),
+                        str(sock_path.parent / f"ready-{index}"),
+                        str(sock_path.parent / f"result-{index}"),
+                        str(release),
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=env,
+                )
+            )
+
+        ready_paths = [sock_path.parent / f"ready-{index}" for index in range(2)]
+        deadline = time.monotonic() + 5.0
+        while not all(path.exists() for path in ready_paths) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert all(path.exists() for path in ready_paths), (
+            "both child processes must reach the gate"
+        )
+        gate.touch()
+
+        result_paths = [sock_path.parent / f"result-{index}" for index in range(2)]
+        deadline = time.monotonic() + 5.0
+        while not all(path.exists() for path in result_paths) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert all(path.exists() for path in result_paths), "both child starts must finish"
+        outcomes = [path.read_text(encoding="utf-8") for path in result_paths]
+        started = [value for value in outcomes if value.startswith("started:")]
+        failed = [value for value in outcomes if value.startswith("failed:")]
+        assert len(started) == 1
+        assert len(failed) == 1
+        assert "already has a listener" in failed[0]
+        assert sock_path.exists()
+        assert client.send("show", socket_path=sock_path) == started[0].split(":", 1)[1]
+    finally:
+        release.touch()
+        for process in processes:
+            try:
+                process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                process.wait(timeout=2.0)
 
 
 def test_stale_cleanup_refuses_a_symlinked_lock_file(sock_path):
