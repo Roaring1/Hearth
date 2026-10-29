@@ -1142,6 +1142,9 @@ def test_route_job_runs_off_caller_thread_and_disables_controls_until_reconcile(
     monkeypatch.setattr(mixer.GLib, "idle_add", queue_idle)
     check = FakeCheck(True)
     input_check = FakeCheck(True)
+    # The raw source is already unavailable before this unrelated route job;
+    # finishing the job must not blindly re-enable it.
+    input_check.sensitive = False
     carla_check = FakeCheck(True)
     strip = SimpleNamespace(
         _routing=False,
@@ -1181,7 +1184,7 @@ def test_route_job_runs_off_caller_thread_and_disables_controls_until_reconcile(
 
     assert strip._route_busy is False
     assert check.sensitive is True
-    assert input_check.sensitive is True
+    assert input_check.sensitive is False
     assert carla_check.sensitive is True
     assert check.active is True
 

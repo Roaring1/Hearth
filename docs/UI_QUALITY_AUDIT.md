@@ -341,6 +341,7 @@ updates during unavailability, and recovery without talking to PipeWire.
 
 A route mutation now disables every currently rendered output selector, raw
 microphone input selector and Carla input toggle, then restores each control's
-prior sensitivity. An input popover opened during a job also renders Carla
+prior sensitivity, including preserving an input already disabled because its
+source is unavailable. An input popover opened during a job also renders Carla
 insensitive with a busy tooltip. Tests cover both controls already present when
 the worker starts and controls created while the worker is already running.

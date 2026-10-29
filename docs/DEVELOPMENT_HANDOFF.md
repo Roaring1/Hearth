@@ -499,5 +499,6 @@ row movement are checked in the safety test and real GTK production-window test.
   disabled Carla toggle with a clear `Another route change is still running`
   tooltip, matching their raw source checkboxes.
 - Regression coverage extends the worker-thread route job test to assert OUT,
-  raw IN and Carla checks all disable and recover, and adds a popover test for
-  controls first opened while a route is already busy.
+  raw IN and Carla checks all disable and recover. It also verifies an input
+  that was already disabled because its source is unavailable remains disabled
+  afterward, and adds a popover test for controls first opened while busy.
