@@ -279,3 +279,29 @@ No dump or log contents were published to GitHub. Machine-specific configuration
   accessible name alongside the changing app-mute button label. Local full-gate
   and hosted CI checks are required after this focused change; no audio backend
   or systemd operation is involved.
+
+
+## Setup latency accessible name — 2026-10-29
+
+- The headset latency spin button now exposes `Routing latency in milliseconds`
+  through the same GTK accessible-name helper used for volume scales and action
+  controls. The production Setup-window test records the actual widget/name
+  helper call and asserts the spin button's GTK role, so this isn't only a source
+  grep or tooltip check.
+- Local target/full gate and hosted CI should be rechecked after this isolated
+  UI-only change. The latency range, selected value, save worker and restart
+  behavior are unchanged; no audio graph or systemd unit is touched by the tests.
+
+
+## LPD8 control accessible names — 2026-10-29
+
+- Hardware-shaped pad and knob buttons now expose explicit accessible labels
+  containing their physical number plus their current assignment (or `unassigned`).
+  `show_job()` refreshes the label whenever the map changes, so the name cannot
+  become stale after remapping. Visible layout and click/right-click behavior
+  are unchanged.
+- Added an Xvfb regression capturing the accessible LABEL property for initial,
+  assigned and cleared pad/knob states. The test uses actual GTK buttons and
+  intercepts the property update call, not the unreliable isolated AT-SPI probe.
+- This is the next focused accessibility slice beyond `cff5bac`; run the targeted
+  test and full gate before push, then validate the new hosted CI artifact.

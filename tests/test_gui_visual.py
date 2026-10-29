@@ -292,7 +292,20 @@ def test_production_windows_render_and_capture(
     capture("mixer-fault-banner")
 
     window.set_visible(False)
+    accessible_names: list[tuple[Gtk.Widget, str]] = []
+    original_accessible_label = setup_mod.action_icons.accessible_label
+
+    def track_accessible_label(widget: Gtk.Widget, label: str) -> None:
+        original_accessible_label(widget, label)
+        accessible_names.append((widget, label))
+
+    monkeypatch.setattr(setup_mod.action_icons, "accessible_label", track_accessible_label)
     setup_window = setup_mod.SetupWindow(window)
+    assert any(
+        widget is setup_window.latency and label == "Routing latency in milliseconds"
+        for widget, label in accessible_names
+    )
+    assert setup_window.latency.get_accessible_role() == Gtk.AccessibleRole.SPIN_BUTTON
     setup_window.flow.set_text("SM7B → Carla → Mic B1\nMic B1 → voice apps\nMic B2 → spare input")
     setup_window.lpd8_state.set_text("Controller status is checked when Setup opens")
     setup_window.lpd8_map.set_text("K5 · Music    K6 · Chat    K7 · Game    K8 · Microphone")
@@ -494,6 +507,47 @@ def test_custom_fader_supports_keyboard_and_exposes_slider_role() -> None:
     assert fader.value == VMAX
     fader.set_dead(False)
     assert fader.get_sensitive()
+
+
+@pytest.mark.gui
+def test_lpd8_pad_and_knob_accessible_names_track_assignment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hardware-shaped buttons expose their number and current assignment."""
+    import gi
+
+    gi.require_version("Gtk", "4.0")
+    from gi.repository import Gtk
+
+    from hearth.ui.gtk4 import remap as remap_mod
+
+    observed: list[tuple[Gtk.Accessible, str]] = []
+    update_property = Gtk.Accessible.update_property
+
+    def record_property(widget, properties, values):
+        if Gtk.AccessibleProperty.LABEL in properties:
+            observed.append((widget, str(values[0])))
+        return update_property(widget, properties, values)
+
+    monkeypatch.setattr(Gtk.Accessible, "update_property", record_property)
+    pad = remap_mod._Pad(3, lambda _control: None)
+    knob = remap_mod._Knob(5, remap_mod.style_mod.palette(), lambda _control: None)
+    assert pad.get_accessible_role() == Gtk.AccessibleRole.BUTTON
+    assert knob.get_accessible_role() == Gtk.AccessibleRole.BUTTON
+    assert (pad, "LPD8 pad 3; unassigned") in observed
+    assert (knob, "LPD8 knob 5; unassigned") in observed
+
+    pad.show_job("Mute Game", "Pad 3 toggles the Game bus")
+    knob.show_job("Game volume", "Knob 5 adjusts Game volume")
+    assert (pad, "LPD8 pad 3: Mute Game") in observed
+    assert (knob, "LPD8 knob 5: Game volume") in observed
+
+    # Empty assignments must also be announced clearly, not left with stale
+    # names from the previous controller map.
+    pad.show_job("", "Pad 3 does nothing yet")
+    knob.show_job("", "Knob 5 moves nothing yet")
+    assert (pad, "LPD8 pad 3; unassigned") in observed
+    assert (knob, "LPD8 knob 5; unassigned") in observed
 
 
 @pytest.mark.gui

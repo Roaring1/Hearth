@@ -188,3 +188,21 @@ Each application volume scale receives an explicit accessible label such as
 shared GTK helper now correctly accepts `Gtk.Widget` instead of only buttons;
 regression coverage checks this name at row construction. This does not change
 the slider's range, gesture handling, volume target or write-coalescing path.
+
+
+## Setup latency control name — 2026-10-29
+
+The numeric latency spin button explicitly announces `Routing latency in
+milliseconds`. The real GTK Setup-window visual test verifies that the label
+helper is called for the actual spin button and that its native spin-button role
+is preserved. This is an accessible-name change only; the value/range/save
+behavior remains unchanged.
+
+
+## LPD8 pad/knob names — 2026-10-29
+
+Each physical-layout pad and knob is a native button with an explicit accessible
+name such as `LPD8 pad 3: Mute Game` or `LPD8 knob 5: Game volume`. Unassigned
+controls announce that they are unassigned, and map refresh updates the label.
+The GUI regression observes GTK's LABEL property updates while constructing and
+remapping actual GTK controls; it does not claim live screen-reader verification.

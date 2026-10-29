@@ -206,6 +206,7 @@ class SetupWindow(Gtk.Window):
         lat_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         lat_row.append(Gtk.Label(label="Latency", xalign=0.0))
         self.latency = Gtk.SpinButton.new_with_range(1, 200, 1)
+        action_icons.accessible_label(self.latency, "Routing latency in milliseconds")
         try:
             self.latency.set_value(int(conf.get("LATENCY_MSEC", "12")))
         except ValueError:
