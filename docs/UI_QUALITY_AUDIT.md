@@ -162,3 +162,20 @@ screen reader presents it optimally.
   verification items. Xvfb establishes the widget type/role, focusability and
   visible focus state, but does not establish the user's desktop screen-reader
   announcements or theme-specific behavior.
+
+
+## Keyboard strip reordering — 2026-10-29
+
+- The grip for reordering strips is focusable, has the accessible group label
+  `Reorder {channel}; press Left or Right to move`, and preserves its original
+  pointer drag-source behavior. Left/Right moves one visible strip within its
+  own group through the existing reorder/save path; focus returns to the new
+  grip after the strip tree rebuilds. Movement past a group edge is a no-op.
+- Test coverage includes role/focusability, order and persistence calls,
+  group-edge handling, focus restoration, and a production-window Xvfb test
+  that reorders Game right and back left and confirms focus survives both
+  real GTK rebuilds. The nine-image visual suite also captures a focused reorder
+  grip and asserts a visible pixel change from its unfocused reference.
+- The local full gate passes with **476 tests**. Hosted CI is being checked for
+  the most recent real-window focus regression; live Plasma/AT-SPI verification
+  is still a separate manual item.

@@ -391,6 +391,26 @@ def test_production_windows_render_and_capture(
         "setup.png",
         "lpd8-controls.png",
     }
+
+    # Exercise keyboard reordering against the real production window, not only
+    # a fake object: reorder rebuilds every strip, so focus must land on the
+    # newly created grip and survive another arrow press.
+    original_order = list(window.order)
+    original_grip = window.strips["vm_game"].reorder_handle
+    assert window.strips["vm_game"]._on_grip_key_pressed(
+        None, app_mod.Gdk.KEY_Right, 0, app_mod.Gdk.ModifierType(0)
+    )
+    assert window.order.index("vm_game") == original_order.index("vm_game") + 1
+    pump(0.05)
+    assert window.strips["vm_game"].reorder_handle is not original_grip
+    assert window.strips["vm_game"].reorder_handle.has_focus()
+    assert window.strips["vm_game"]._on_grip_key_pressed(
+        None, app_mod.Gdk.KEY_Left, 0, app_mod.Gdk.ModifierType(0)
+    )
+    assert window.order == original_order
+    pump(0.05)
+    assert window.strips["vm_game"].reorder_handle.has_focus()
+
     setup_window.set_visible(False)
     remap_window.set_visible(False)
     window.set_visible(False)

@@ -254,3 +254,16 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 - This is a new follow-up beyond commit `5216dfb`; rerun `./scripts/check.sh`,
   then verify the hosted CI run and nine-image screenshot artifact before calling
   the work complete. No audio or systemd operations are involved.
+
+
+## Real-window strip-reorder regression — 2026-10-29
+
+- Extended the actual production GTK screenshot test to invoke Left/Right on
+  `vm_game`'s current reorder grip, check the real `MixerWindow.order`, and verify
+  that a rebuild creates a new grip and returns GTK focus to it. A second arrow
+  restores the original order and keeps focus, all with the collector/backend
+  startup and settings save stubbed by the screenshot harness.
+- This complements the fake-window regression: one covers bounds/persistence
+  calls cheaply, while the production test now proves focus survives the real
+  strip rebuild. The full `./scripts/check.sh` gate passes with **476 tests**;
+  the next hosted CI run must validate this last test-only follow-up.
