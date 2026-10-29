@@ -159,6 +159,7 @@ def test_app_mute_cache_reconciles_a_stale_backend_snapshot(
         _listener_volume_held={},
         _on_app_volume=lambda *_args: None,
         _on_app_mute=lambda *_args: None,
+        _on_listener_name_key_pressed=lambda *_args: False,
     )
     strip._clear = lambda box: mixer.Strip._clear(strip, box)
     strip._mark = lambda name, size: mixer.Strip._mark(strip, name, size)
@@ -1317,10 +1318,59 @@ def test_app_move_surfaces_pactl_launch_failure(
         def set_tooltip_text(self, tooltip: str | None) -> None:
             self.tooltip = tooltip
 
+        def _move_app_to(self, listener_index: str, *, restore_focus: bool = False) -> bool:
+            return mixer.Strip._move_app_to(self, listener_index, restore_focus=restore_focus)
+
     strip = FakeStrip()
 
     assert mixer.Strip._on_drop(strip, None, "app:42", 0.0, 0.0) is False
     assert "Could not move this app" in strip.tooltip
+
+
+def test_keyboard_app_move_targets_adjacent_visible_bus_and_preserves_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+    Gdk = mixer.Gdk
+
+    class FakeTarget:
+        def __init__(self, sink: str) -> None:
+            self.channel = SimpleNamespace(sink=sink)
+            self.moves: list[tuple[str, bool]] = []
+
+        def _move_app_to(self, index: str, *, restore_focus: bool = False) -> bool:
+            self.moves.append((index, restore_focus))
+            return True
+
+    game = FakeTarget("vm_game")
+    chat = FakeTarget("vm_chat")
+    music = FakeTarget("vm_music")
+    window = SimpleNamespace(
+        order=["vm_game", "vm_chat", "vm_music", "laptop_audio"],
+        strips={"vm_game": game, "vm_chat": chat, "vm_music": music},
+        _pending_listener_focus=None,
+    )
+    source = SimpleNamespace(channel=game.channel, win=window)
+
+    assert mixer.Strip._on_listener_name_key_pressed(
+        source, None, Gdk.KEY_Right, 0, Gdk.ModifierType(0), "42"
+    )
+    assert chat.moves == [("42", True)]
+    assert not mixer.Strip._on_listener_name_key_pressed(
+        source, None, Gdk.KEY_Escape, 0, Gdk.ModifierType(0), "42"
+    )
+    assert mixer.Strip._on_listener_name_key_pressed(
+        source, None, Gdk.KEY_Left, 0, Gdk.ModifierType(0), "42"
+    )
+    assert chat.moves == [("42", True)]
+    assert not mixer.Strip._on_listener_name_key_pressed(
+        SimpleNamespace(channel=SimpleNamespace(sink="laptop_audio"), win=window),
+        None,
+        Gdk.KEY_Right,
+        0,
+        Gdk.ModifierType(0),
+        "42",
+    )
 
 
 def test_setup_save_queues_file_write_outside_gtk_callback(

@@ -305,6 +305,13 @@ def test_production_windows_render_and_capture(
     assert "ghost" not in window.strips["vm_game"].get_css_classes()
     assert window.strips["vm_game"].mute.get_sensitive()
     assert window.strips["vm_game"].value.get_text() == "76"
+    firefox_move_handle = window.strips["vm_game"]._listener_move_controls["fixture-101"]
+    assert firefox_move_handle.get_focusable()
+    assert firefox_move_handle.get_accessible_role() == Gtk.AccessibleRole.GROUP
+    assert (
+        "Move Firefox between mixer buses; press Left or Right to move"
+        in accessible_labels[id(firefox_move_handle)]
+    )
     assert window.strips["vm_game"].listeners.get_first_child() is not None
     firefox_row = window.strips["vm_game"].listeners.get_first_child()
     assert firefox_row is not None
@@ -314,6 +321,28 @@ def test_production_windows_render_and_capture(
     assert icon_calls.get("Firefox", 0) >= 2  # fallback then real icon
     ready_path = capture("mixer-ready")
     ready_frame = Image.open(ready_path).convert("RGB")
+
+    # The app-row move handle must also have a visible keyboard focus cue.
+    # Xvfb occasionally rejects the widget-level focus request while the
+    # window manager has not restored the top-level as active. Re-present the
+    # same test window and direct its GTK focus to this focusable handle; do
+    # not waive the important assertion that the handle actually has focus.
+    focused = firefox_move_handle.grab_focus()
+    if not focused and not firefox_move_handle.has_focus():
+        window.present()
+        window.set_focus(firefox_move_handle)
+    pump(0.02)
+    assert firefox_move_handle.has_focus(), (
+        "app move handle did not retain GTK focus after a direct request: "
+        f"focusable={firefox_move_handle.get_focusable()}, "
+        f"visible={firefox_move_handle.get_visible()}, "
+        f"mapped={firefox_move_handle.get_mapped()}, "
+        f"sensitive={firefox_move_handle.get_sensitive()}, "
+        f"can_target={firefox_move_handle.get_can_target()}"
+    )
+    app_move_focus_path = capture("mixer-app-move-focus", settle=0.0)
+    assert_focus_changes_pixels(ready_frame, app_move_focus_path, "application move row")
+    window.set_focus(None)
 
     # Capture a real keyboard-focus state as visual evidence, not just a
     # focusable-property assertion. Clear focus again so later states remain
@@ -452,6 +481,7 @@ def test_production_windows_render_and_capture(
     assert {path.name for path in captures} == {
         "mixer-loading.png",
         "mixer-ready.png",
+        "mixer-app-move-focus.png",
         "mixer-fader-focus.png",
         "mixer-rail-focus.png",
         "mixer-reorder-grip-focus.png",
@@ -479,6 +509,42 @@ def test_production_windows_render_and_capture(
     assert window.order == original_order
     pump(0.05)
     assert window.strips["vm_game"].reorder_handle.has_focus()
+
+    # Keyboard movement of an app stream uses the same pactl move path as a
+    # pointer drop, then restores focus after a real source/destination row
+    # rebuild from the next synthetic collector snapshot.
+    moved_streams: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        app_mod.pactl,
+        "move_sink_input",
+        lambda index, sink: moved_streams.append((index, sink)) or True,
+    )
+    monkeypatch.setattr(GLib, "timeout_add", lambda *_args: 1)
+    game_state = window.states["vm_game"]
+    chat_state = window.states["vm_chat"]
+    assert window.strips["vm_game"]._on_listener_name_key_pressed(
+        None, app_mod.Gdk.KEY_Right, 0, app_mod.Gdk.ModifierType(0), "fixture-101"
+    )
+    assert moved_streams == [("fixture-101", "vm_chat")]
+    assert window._pending_listener_focus == "fixture-101"
+    assert window._pending_listener_focus_sink == "vm_chat"
+    # A stale snapshot can still show Firefox in Game; don't consume the focus
+    # request until the stream actually appears on the requested Chat bus.
+    assert not window._restore_listener_focus("fixture-101")
+    assert window._pending_listener_focus == "fixture-101"
+    assert window._pending_listener_focus_sink == "vm_chat"
+    game_state.listeners = [item for item in game_state.listeners if item.index != "fixture-101"]
+    chat_state.listeners.append(
+        app_mod.Listener("Firefox", muted=False, index="fixture-101", volume=72)
+    )
+    window.apply_states()
+    pending = window._pending_listener_focus
+    assert pending == "fixture-101"
+    assert not window._restore_listener_focus(pending)
+    assert window._pending_listener_focus is None
+    assert window._pending_listener_focus_sink is None
+    pump(0.02)
+    assert window.strips["vm_chat"]._listener_move_controls["fixture-101"].has_focus()
 
     setup_window.set_visible(False)
     remap_window.set_visible(False)

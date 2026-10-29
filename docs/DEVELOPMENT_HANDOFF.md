@@ -156,9 +156,9 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 - Before the first verified collector snapshot, mixer strips now show a dim ghost state (`checking…` / `Loading apps…`) and disable actions until a snapshot is known. Confirmed missing devices still use `no device` and fault styling, not the loading style.
 - Added four original, hand-authored SVG action glyphs (`collapse`, `refresh`, `save`, `sliders`) and used icon-plus-visible-label buttons for Setup's save/reconnect/remap actions. Decorative SVG/app glyphs are marked presentation-only; minimize controls carry explicit accessible names. No AI image generation or third-party SVG assets were used.
 - Cold profiling on this desktop measured `icons._file_index()` at 2.58 seconds and `_entry_index()` at 180 ms. The UI now returns an immediate letter fallback and builds the indexes on a daemon worker, updating the widget via the GTK main loop once an actual icon is found. A separate GUI regression test ensures a cold lookup does not synchronously populate either index.
-- CI's GTK job now runs production GTK4 windows under a fixed 1600x1200 Xvfb display, captures nine screenshots (loading, ready, focused fader, focused reorder grip, missing device, fault banner, Setup, LPD8 Controls and focused minimized rail), and uploads `hearth-gtk-visual-audit` for 14 days. The package job checks all four SVGs after installation. `tests/test_gui_visual.py` exercises deterministic fixtures only; it does not touch PipeWire, systemd, the physical LPD8 or real user settings.
+- CI's GTK job now runs production GTK4 windows under a fixed 1600x1200 Xvfb display, captures ten screenshots (loading, ready, focused app-move handle, focused fader, focused reorder grip, missing device, fault banner, Setup, LPD8 Controls and focused minimized rail), and uploads `hearth-gtk-visual-audit` for 14 days. The package job checks all four SVGs after installation. `tests/test_gui_visual.py` exercises deterministic fixtures only; it does not touch PipeWire, systemd, the physical LPD8 or real user settings.
 - Final local validation after these changes: `./scripts/check.sh` passed with **471 tests**, Ruff, formatting, mypy (33 source files), legacy compile, desktop entry/AppStream metadata and ShellCheck. The GTK-only capture pass separately reported **48 passed**. The remaining AppStream output is the existing pedantic uppercase application-ID warning. GTK's bundled PyGObject currently emits external deprecation warnings in its asyncio integration; no test fails on those warnings.
-- Visual scope is intentionally a first slice, not a claim of full visual regression: screenshots are uploaded for human review but no approved pixel-diff baselines have been committed. Live Plasma/DPI/theme checks, keyboard focus/navigation, popover/menu flows and real unplug/replug remain outstanding. See `docs/UI_QUALITY_AUDIT.md`.
+- Visual scope is intentionally a first slice, not a claim of full visual regression: screenshots are uploaded for human review but no approved golden baselines have been committed. Live Plasma/DPI/theme checks, real keyboard tab traversal, popover/menu flows and real unplug/replug remain outstanding. See `docs/UI_QUALITY_AUDIT.md`.
 
 
 ## Latest checkpoint — mute reconciliation and accessible faders (2026-10-29)
@@ -350,3 +350,38 @@ No dump or log contents were published to GitHub. Machine-specific configuration
   restart an assignment.
 - Targeted GTK, full local gate and hosted CI should be checked for this follow-up.
   No hardware script, audio graph or systemd unit is touched.
+
+
+## Keyboard movement for per-app mixer rows — 2026-10-29
+
+- Each app row is now focusable, role GROUP, and labeled with its movement
+  action; the visible app name remains the pointer drag source. Left/Right moves
+  the app to the adjacent visible mixer strip,
+  using the same `_move_app_to()` function as pointer drop; movement beyond an
+  edge is handled as a no-op and unrelated keys pass through.
+- After a successful keyboard move, the next collector snapshot rebuilds the
+  source/destination rows and restores focus to that app's row on the intended
+  destination bus. A stale snapshot cannot clear the pending focus request while
+  the stream is still present only on its old bus.
+  Regression coverage checks key routing/bounds and the real production GTK test
+  performs a synthetic Firefox move from Game to Chat and verifies post-rebuild
+  focus without making a real `pactl` call.
+- The visual capture suite now includes `mixer-app-move-focus.png` and asserts
+  that the focused app row changes rendered pixels compared with the ready
+  frame. The local full gate passes with **478 tests**; hosted CI on the pushed
+  head is the remaining automated verification.
+
+
+## Accessible live audio meter — 2026-10-29
+
+- Each channel meter now exposes GTK's read-only `METER` role, a channel-specific
+  accessible name such as `Game audio level`, and a numeric range from 0 to 100.
+  Its current displayed level updates in 5-percentage-point increments instead
+  of every animation frame, reducing unnecessary screen-reader announcements.
+- The production-window GTK regression checks the actual meter role/name, its
+  min/max/current initial values and a deterministic live update to `35%` after
+  feeding a full-scale test level and advancing one smoothing tick. No audio
+  input device or user session is contacted by this test.
+- The targeted GTK test and full `./scripts/check.sh` pass with **478 tests**;
+  verify hosted CI after the combined accessibility changes are pushed. This
+  metadata change does not alter meter drawing, the collector or fader write path.

@@ -262,6 +262,7 @@ class Strip(Gtk.Box):
         self._route_generation = 0
         self._route_popover_dirty = False
         self._listener_volume_controls: dict[str, tuple[Gtk.Scale, Gtk.Label, int]] = {}
+        self._listener_move_controls: dict[str, Gtk.Widget] = {}
         self._listener_volume_held: dict[str, float] = {}
 
         # header: grip, name, minimise
@@ -486,15 +487,48 @@ class Strip(Gtk.Box):
     def _on_drop(self, _t: Gtk.DropTarget, value: str, _x: float, _y: float) -> bool:
         payload = str(value)
         if payload.startswith("app:"):
-            # An application landed on this strip: move its stream here
-            # rather than reordering anything.
-            if not pactl.move_sink_input(payload[4:], self.channel.sink):
-                self.set_tooltip_text("Could not move this app; check pactl/PipeWire")
-                return False
-            self.set_tooltip_text(None)
-            GLib.timeout_add(400, self._route_settled)
-            return True
+            # Pointer drag and keyboard movement share the same stream-move path.
+            return self._move_app_to(payload[4:])
         self.win.reorder(payload, self.channel.sink)
+        return True
+
+    def _move_app_to(self, listener_index: str, *, restore_focus: bool = False) -> bool:
+        """Move one application stream onto this bus, preserving drag behavior."""
+        if not pactl.move_sink_input(listener_index, self.channel.sink):
+            self.set_tooltip_text("Could not move this app; check pactl/PipeWire")
+            return False
+        self.set_tooltip_text(None)
+        if restore_focus:
+            # The next verified snapshot rebuilds the source and destination
+            # rows. Keep both identities so a stale snapshot can't restore focus
+            # to the stream's old row and prematurely clear this request.
+            self.win._pending_listener_focus = listener_index
+            self.win._pending_listener_focus_sink = self.channel.sink
+        GLib.timeout_add(400, self._route_settled)
+        return True
+
+    def _on_listener_name_key_pressed(
+        self,
+        _controller: Gtk.EventControllerKey,
+        keyval: int,
+        _keycode: int,
+        _state: Gdk.ModifierType,
+        listener_index: str,
+    ) -> bool:
+        """Move a focused app row left/right across visible mixer buses."""
+        if keyval not in (Gdk.KEY_Left, Gdk.KEY_Right):
+            return False
+        visible = [sink for sink in self.win.order if sink in self.win.strips]
+        try:
+            position = visible.index(self.channel.sink)
+        except ValueError:
+            return False
+        destination = position + (-1 if keyval == Gdk.KEY_Left else 1)
+        if not 0 <= destination < len(visible):
+            return True
+        target = self.win.strips.get(visible[destination])
+        if target is not None:
+            target._move_app_to(listener_index, restore_focus=True)
         return True
 
     # -- user input ------------------------------------------------------
@@ -1181,6 +1215,7 @@ class Strip(Gtk.Box):
         if loading:
             self._listener_signature = signature
             self._listener_volume_controls = {}
+            self._listener_move_controls = {}
             self._clear(self.listeners)
             placeholder = Gtk.Label(label="Loading apps\u2026", xalign=0.0)
             placeholder.add_css_class("listener")
@@ -1195,6 +1230,7 @@ class Strip(Gtk.Box):
         }
         self._listener_signature = signature
         self._listener_volume_controls = {}
+        self._listener_move_controls = {}
         self._clear(self.listeners)
         for listener in listeners[:5]:
             # Round 10 gives every app its own row: brand chip, name, and the
@@ -1227,8 +1263,25 @@ class Strip(Gtk.Box):
             name.set_hexpand(True)
             name.set_tooltip_text(listener.name)
             if listener.index:
+                # The visible app name remains the drag source. The containing
+                # row is the keyboard move handle, so focus has a real GTK
+                # focus target and the accessible group contains the app label,
+                # volume slider and mute action together.
                 name.add_controller(app_drag)
                 name.set_tooltip_text(f"{listener.name} — drag to another bus")
+                row.set_focusable(True)
+                row.set_accessible_role(Gtk.AccessibleRole.GROUP)
+                action_name = (
+                    f"Move {listener.name} between mixer buses; press Left or Right to move"
+                )
+                action_icons.accessible_label(row, action_name)
+                row.set_tooltip_text(
+                    f"{listener.name} — drag its name to another bus, or focus this row and press Left/Right"
+                )
+                move_keys = Gtk.EventControllerKey()
+                move_keys.connect("key-pressed", self._on_listener_name_key_pressed, listener.index)
+                row.add_controller(move_keys)
+                self._listener_move_controls[listener.index] = row
             if listener.muted:
                 name.add_css_class("muted")
             row.append(name)
@@ -1315,6 +1368,8 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.states: dict[str, ChannelState] = {c.sink: ChannelState() for c in CHANNELS}
         self.strips: dict[str, Strip] = {}
         self.slivers: dict[str, Sliver] = {}
+        self._pending_listener_focus: str | None = None
+        self._pending_listener_focus_sink: str | None = None
         self.group_tags: dict[str, Gtk.Label] = {}
         # Looked up lazily: the controller is often not plugged in, and
         # asking ALSA at startup would slow every launch for a lamp.
@@ -1747,8 +1802,25 @@ class MixerWindow(Gtk.ApplicationWindow):
         if self._track_absent():
             self.rebuild()
         self.apply_states()
+        if self._pending_listener_focus is not None:
+            # Keep the request pending if this snapshot arrives before PipeWire
+            # reports the stream on its destination; a later verified snapshot
+            # will retry without stealing focus from a different control.
+            GLib.idle_add(self._restore_listener_focus, self._pending_listener_focus)
         self._update_banner()
         self._feed_remap()
+        return False
+
+    def _restore_listener_focus(self, listener_index: str) -> bool:
+        """Focus the moved app only after it appears on its verified destination bus."""
+        sink = self._pending_listener_focus_sink
+        strip = self.strips.get(sink) if sink is not None else None
+        name = strip._listener_move_controls.get(listener_index) if strip is not None else None
+        if name is not None:
+            name.grab_focus()
+            if self._pending_listener_focus == listener_index:
+                self._pending_listener_focus = None
+                self._pending_listener_focus_sink = None
         return False
 
     def queue_volume(

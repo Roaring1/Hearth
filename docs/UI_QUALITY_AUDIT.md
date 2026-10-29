@@ -29,17 +29,18 @@ mixer state.
 `SetupWindow`, and `RemapWindow` under Xvfb. It does **not** connect to live
 PipeWire, invoke systemd, access the installed LPD8 script, or mutate user
 settings. Backends and state are replaced with deterministic fixtures while
-the real GTK widgets and production styles render. It captures nine named PNGs:
+the real GTK widgets and production styles render. It captures ten named PNGs:
 
 1. `mixer-loading.png`
 2. `mixer-ready.png`
-3. `mixer-fader-focus.png`
-4. `mixer-missing-device.png`
-5. `mixer-fault-banner.png`
-6. `setup.png`
-7. `lpd8-controls.png`
-8. `mixer-rail-focus.png`
-9. `mixer-reorder-grip-focus.png`
+3. `mixer-app-move-focus.png`
+4. `mixer-fader-focus.png`
+5. `mixer-missing-device.png`
+6. `mixer-fault-banner.png`
+7. `setup.png`
+8. `lpd8-controls.png`
+9. `mixer-rail-focus.png`
+10. `mixer-reorder-grip-focus.png`
 
 The test checks meaningful widget state (including loading controls disabled,
 ready controls enabled, missing-device state, and all eight pads/knobs), then
@@ -238,3 +239,24 @@ The one reused LPD8 assignment dropdown explicitly announces which hardware
 control it edits (`Choose assignment for LPD8 pad N` or `... knob N`) each time
 the menu model is refreshed. A production-window GTK regression checks Pad 3 and
 Knob 5 without selecting an option or triggering a map write/restart.
+
+
+## Keyboard movement of app streams — 2026-10-29
+
+App rows can now be focused and operated with Left/Right to move the stream to
+an adjacent visible bus; the visible app name remains the pointer drag source.
+The accessible group label explains the action. Keyboard and pointer moves share
+the same move method; focus restoration is keyed to both the stream ID and the
+intended destination, so a stale snapshot on the old bus cannot clear it. The
+regression uses a synthetic stream and mocks the move command, so it does not
+mutate the live audio graph.
+
+
+## Accessible live audio meter — 2026-10-29
+
+The Cairo meter now reports a read-only GTK `METER` role, a per-channel name
+(e.g. `Game audio level`), a 0–100 numeric range and a percentage text/current
+value. The value is quantized to 5% increments to avoid emitting accessibility
+updates at the full animation rate. A production-window regression exercises
+one deterministic level update without starting PipeWire or touching the host
+audio graph.
