@@ -191,7 +191,10 @@ def test_production_windows_render_and_capture(
         )
         difference = ImageChops.difference(before, after)
         assert difference.getbbox() is not None, f"{name} focus caused no visible pixel change"
-        changed_pixels = sum(1 for pixel in difference.getdata() if max(pixel) >= 20)
+        rgb = difference.tobytes()
+        changed_pixels = sum(
+            1 for offset in range(0, len(rgb), 3) if max(rgb[offset : offset + 3]) >= 20
+        )
         assert changed_pixels >= 20, (
             f"{name} focus cue is not visibly rendered ({changed_pixels} changed pixels)"
         )
@@ -216,6 +219,11 @@ def test_production_windows_render_and_capture(
     assert game_out_name in accessible_labels[id(game_out)]
     assert mic_in_name in accessible_labels[id(mic_in)]
     assert f"Mute {game_strip.channel.name}" in accessible_labels[id(game_strip.mute)]
+    assert game_strip.bind_button is not None
+    bind_name = (
+        f"Open LPD8 remapping for {game_strip.channel.name} (knob {game_strip.channel.bind})"
+    )
+    assert bind_name in accessible_labels[id(game_strip.bind_button)]
 
     # Initial state before any collector snapshot: strips are skeletons,
     # their controls are disabled, and the device text says it is checking.

@@ -327,3 +327,12 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 - Regression checks verify the real GTK property updates on a working Game
   bus and muted Chat bus, plus the failure rollback path in the callback safety
   test. The full gate and hosted CI are required before this change is complete.
+
+
+## Mixer knob-remap chip accessible name — 2026-10-29
+
+- Each compact `K5`/`K7` binding chip now announces its action and destination,
+  such as `Open LPD8 remapping for Game (knob K7)`, rather than only the short
+  printed token. Its existing tooltip, visible chip and click handler are intact.
+- The real GTK production-window test captures and asserts the chip's explicit
+  accessible LABEL property alongside the route and mute control names.

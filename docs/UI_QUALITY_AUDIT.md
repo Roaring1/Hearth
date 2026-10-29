@@ -222,3 +222,11 @@ Each channel's toggle keeps its visual `MUTE`/`MUTED` caption but names the
 actual action and channel for assistive technology (`Mute Game`, `Unmute Chat`).
 The name is synchronized from the verified snapshot and updated on user action;
 command-failure rollback restores the matching action name too.
+
+
+## Mixer knob-remap chip names — 2026-10-29
+
+The short binding chip in a bus strip remains visually compact (for example,
+`K7`) but exposes a contextual accessible name that identifies opening LPD8
+remapping for the channel controlled by that knob. The production GTK test
+checks the explicit label property.

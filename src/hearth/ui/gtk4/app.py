@@ -330,6 +330,8 @@ class Strip(Gtk.Box):
             chip = Gtk.Button(label=channel.bind)
             chip.add_css_class("bind")
             chip.set_valign(Gtk.Align.CENTER)
+            accessible_name = f"Open LPD8 remapping for {channel.name} (knob {channel.bind})"
+            action_icons.accessible_label(chip, accessible_name)
             chip.set_tooltip_text(self._bind_tip())
             chip.connect("clicked", lambda _b: self.win.open_remap())
             self.bind_button = chip
