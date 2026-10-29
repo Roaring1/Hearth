@@ -1261,6 +1261,22 @@ def test_mute_callback_reverts_optimistic_toggle_when_pactl_cannot_start(
     assert "Could not change mute" in button.tooltip
     assert refreshes == [True]
 
+    # A command that succeeds updates the accessible action along with the
+    # visible MUTE/MUTED caption, including the subsequent unmute action.
+    monkeypatch.setattr(mixer.pactl, "set_mute", lambda *_args: True)
+    button.active = True
+    mixer.Strip._on_mute(strip, button)
+    assert button.active is True
+    assert button.label == "MUTED"
+    assert button.accessible_label == "Unmute Game"
+
+    button.active = False
+    mixer.Strip._on_mute(strip, button)
+    assert button.active is False
+    assert button.label == "MUTE"
+    assert button.accessible_label == "Mute Game"
+    assert refreshes == [True]
+
 
 def test_app_mute_does_not_paint_success_when_pactl_cannot_start(
     monkeypatch: pytest.MonkeyPatch,
