@@ -145,12 +145,15 @@ screen reader presents it optimally.
   custom-drawn child. They expose the button role and `Restore {channel}` name,
   and rely on GTK's built-in button action for pointer, Enter/Space and
   assistive-technology activation instead of simulating those behaviors on a
-  `DrawingArea`.
+  `DrawingArea`. The sliver now has a neutral border plus an explicit focus
+  border/outline; the focus screenshot restores the normal device/banner state
+  so this cue is not mistaken for a missing-device warning.
 - Xvfb regression coverage checks that the sliver is a native button, is
   focusable, has a decorative child and routes its `clicked` signal. The test
-  does not synthesize key events; keyboard and assistive-technology activation
-  are delegated to GTK's native button implementation. The test remains
-  isolated from the host desktop and audio graph.
+  verifies that both focused-control captures differ visibly from their
+  unfocused reference state; it does not synthesize key events, because keyboard
+  and assistive-technology activation are delegated to GTK's native button
+  implementation. The test remains isolated from the host desktop and audio graph.
 - Local `./scripts/check.sh` passes with **475 tests** and the complete lint,
   format, mypy, metadata and ShellCheck gates. The previous accessible-fader
   commit (`4e834c4`) passed hosted CI run [#111](https://github.com/Roaring1/Hearth/actions/runs/40951877992).

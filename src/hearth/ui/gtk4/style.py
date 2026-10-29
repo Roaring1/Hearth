@@ -124,13 +124,18 @@ button.sliver {{
   background: transparent;
   background-image: none;
   box-shadow: none;
-  border: none;
+  border: 1px solid {pal["win-alt"]};
   border-radius: 3px;
   padding: 0;
   min-width: 0;
   min-height: 0;
 }}
 button.sliver:hover {{ background: transparent; background-image: none; box-shadow: none; }}
+.hearth button.sliver:focus, .hearth button.sliver:focus-visible {{
+  border-color: {pal["button"]};
+  outline: 1px solid {pal["button"]};
+  outline-offset: -2px;
+}}
 
 /* ---- routing popover --------------------------------------------- */
 .outbtn {{

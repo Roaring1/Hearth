@@ -216,3 +216,23 @@ No dump or log contents were published to GitHub. Machine-specific configuration
   including actual GTK window capture under Xvfb. The isolated AT-SPI tree probe
   did not complete reliably, so do not claim screen-reader name/action verification;
   live Plasma/AT-SPI is still outstanding. This change is pending its own hosted CI.
+
+
+## Final rail-focus visual polish — 2026-10-29
+
+- Artifact review found that the focused rail sliver did not have a sufficiently
+  clear focus cue and the screenshot still carried the preceding fault/missing
+  device styles. Added an explicit neutral border and focus border/outline to
+  `button.sliver:focus`, and changed the screenshot setup to restore Laptop's
+  present state and hide the fault banner before capturing the focused Music
+  rail control.
+- The screenshot regression now compares focused vs unfocused rendered frames
+  and fails if the focused fader or rail button produces no visible pixel change.
+  It waits for the existing window-size easing to settle before taking the
+  rail reference image. The test suppresses only external `gi.*` DeprecationWarnings
+  during its deterministic GTK main-loop pump so real project warnings remain
+  visible.
+- This changes only the compact rail presentation and deterministic Xvfb
+  screenshot fixtures; no audio backend or systemd action is involved. The local
+  targeted visual test passes; rerun the full gate and hosted CI before considering
+  the focus artifact complete.

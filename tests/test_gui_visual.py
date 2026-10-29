@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import time
+import warnings
 from pathlib import Path
 
 import pytest
@@ -123,17 +124,22 @@ def test_production_windows_render_and_capture(
     output.mkdir(parents=True, exist_ok=True)
 
     def pump(seconds: float = 0.35) -> None:
-        context = GLib.MainContext.default()
-        deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline:
-            while context.pending():
-                context.iteration(False)
-            time.sleep(0.005)
+        # The distro's PyGObject asyncio adapter emits one DeprecationWarning
+        # per main-loop turn on this Python version. Suppress only warnings
+        # originating in the external gi package during deterministic pumping;
+        # keep application/test warnings visible.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=DeprecationWarning, module=r"gi\.")
+            context = GLib.MainContext.default()
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline:
+                while context.pending():
+                    context.iteration(False)
+                time.sleep(0.005)
 
     captures: list[Path] = []
 
-    def capture(name: str, *, settle: float = 0.35) -> Path:
-        pump(settle)
+    def rendered_frame(name: str) -> Image.Image:
         desktop = ImageGrab.grab().convert("RGB")
         # Xvfb has no window manager, so GTK places each window at the root
         # origin and leaves the rest of the 1600x1200 desktop black. Trim that
@@ -143,7 +149,7 @@ def test_production_windows_render_and_capture(
         assert bbox is not None, f"{name} screenshot is completely black"
         left, top, right, bottom = bbox
         pad = 8
-        image = desktop.crop(
+        return desktop.crop(
             (
                 max(0, left - pad),
                 max(0, top - pad),
@@ -151,6 +157,10 @@ def test_production_windows_render_and_capture(
                 min(desktop.height, bottom + pad),
             )
         )
+
+    def capture(name: str, *, settle: float = 0.35) -> Path:
+        pump(settle)
+        image = rendered_frame(name)
         target = output / f"{name}.png"
         image.save(target, format="PNG", optimize=True)
         assert image.width >= 280 and image.height >= 100, (
@@ -160,6 +170,18 @@ def test_production_windows_render_and_capture(
         assert sum(ImageStat.Stat(image).stddev) > 8, f"{name} screenshot lacks visual content"
         captures.append(target)
         return target
+
+    def assert_focus_changes_pixels(before: Image.Image, after_path: Path, name: str) -> None:
+        after = Image.open(after_path).convert("RGB")
+        assert before.size == after.size, (
+            f"{name} focus capture changed layout size: {before.size} -> {after.size}"
+        )
+        difference = ImageChops.difference(before, after)
+        assert difference.getbbox() is not None, f"{name} focus caused no visible pixel change"
+        changed_pixels = sum(1 for pixel in difference.getdata() if max(pixel) >= 20)
+        assert changed_pixels >= 20, (
+            f"{name} focus cue is not visibly rendered ({changed_pixels} changed pixels)"
+        )
 
     application = app_mod.MixerApp()
     # Use the production app identity but do not claim its D-Bus name; this
@@ -238,7 +260,8 @@ def test_production_windows_render_and_capture(
     assert firefox_icon_holder is not None
     assert isinstance(firefox_icon_holder.get_first_child(), Gtk.Image)
     assert icon_calls.get("Firefox", 0) >= 2  # fallback then real icon
-    capture("mixer-ready")
+    ready_path = capture("mixer-ready")
+    ready_frame = Image.open(ready_path).convert("RGB")
 
     # Capture a real keyboard-focus state as visual evidence, not just a
     # focusable-property assertion. Clear focus again so later states remain
@@ -247,7 +270,8 @@ def test_production_windows_render_and_capture(
     assert focused_fader.grab_focus()
     pump(0.02)
     assert focused_fader.has_focus()
-    capture("mixer-fader-focus", settle=0.0)
+    fader_focus_path = capture("mixer-fader-focus", settle=0.0)
+    assert_focus_changes_pixels(ready_frame, fader_focus_path, "volume fader")
     window.set_focus(None)
 
     # A confirmed missing endpoint is different from loading: it must stop
@@ -310,18 +334,33 @@ def test_production_windows_render_and_capture(
 
     # The minimized rail uses a custom-drawn control too. Include a focused
     # example in the artifact so the visual reviewer can inspect its focus ring.
+    # Restore a normal device/banner state first, so the focus evidence is not
+    # confused with the previous missing-device/fault styling captures.
+    window.states["laptop_audio"].present = True
+    window.apply_states()
+    window.banner_units = ()
+    window.banner_text.set_text("")
+    window.banner.set_visible(False)
     setup_window.set_visible(False)
     remap_window.set_visible(False)
     window.present()
     pump(0.05)
     window.minimise("vm_music")
-    pump(0.05)
+    # Let the window's existing size-ease animation finish before the reference
+    # frame, otherwise a later frame can resize by a few pixels and mask a focus
+    # ring comparison.
+    pump(0.4)
     focused_sliver = window.slivers["vm_music"]
     assert focused_sliver.get_accessible_role() == Gtk.AccessibleRole.BUTTON
+    # Establish a same-layout comparison frame with no focused rail item.
+    window.set_focus(None)
+    pump(0.05)
+    unfocused_rail = rendered_frame("mixer-rail-unfocused-reference")
     assert focused_sliver.grab_focus()
     pump(0.02)
     assert focused_sliver.has_focus()
-    capture("mixer-rail-focus", settle=0.0)
+    rail_focus_path = capture("mixer-rail-focus", settle=0.0)
+    assert_focus_changes_pixels(unfocused_rail, rail_focus_path, "minimized rail")
 
     # Stable evidence: the artifacts are all raster screenshots from the Xvfb
     # root window and contain the expected sample of production GUI states.
