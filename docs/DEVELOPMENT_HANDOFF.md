@@ -452,3 +452,15 @@ row movement are checked in the safety test and real GTK production-window test.
 - The real GTK/Xvfb regression verifies the status role and exact Laptop-missing
   message after production logic shows the banner. It only uses synthetic
   channel state and never invokes the restart handler.
+
+
+## Meter accessible value follows muted/unavailable state — 2026-10-29
+
+- A visible meter is dark immediately when muted or the channel/device is
+  unavailable. Its accessible value now immediately becomes `0%` and remains
+  there while the hidden visual smoothing buffer decays, rather than announcing
+  a stale prior level for several frames. The drawing/peak smoothing itself is
+  unchanged; when active, the accessible value continues in 5% increments.
+- The production GTK regression verifies `35%` from a deterministic active
+  level, immediate `0%` on mute, stable `0%` across the next tick, and continued
+  `0%` when the channel transitions to unavailable. No audio device is read.

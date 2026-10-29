@@ -309,3 +309,12 @@ When a previously available bus disappears, the visible repair-banner message
 uses the GTK `STATUS` role. Production GTK coverage confirms the role and
 message after the visibility transition, because GTK may recalculate a standard
 label's role when its parent changes from hidden to visible.
+
+
+## Meter mute/unavailable accessibility truthfulness — 2026-10-29
+
+The accessible meter value now matches its visible dark state immediately: when
+muted or unavailable it announces `0%` and does not report the private smoothed
+level until it becomes active again. The production-window test checks active
+35%, mute reset, persistence across ticks, and unavailable-state zero. This
+changes accessible metadata only; the meter drawing and smoothing remain intact.

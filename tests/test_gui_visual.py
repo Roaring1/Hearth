@@ -226,11 +226,28 @@ def test_production_windows_render_and_capture(
     game_meter.set_state(muted=False, dead=False)
     game_meter.feed(1.0)
     game_meter.tick()
+    meter_value_property = (
+        Gtk.AccessibleProperty.VALUE_NOW,
+        Gtk.AccessibleProperty.VALUE_TEXT,
+    )
     assert any(
-        properties == (Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT)
-        and values == (35.0, "35%")
+        properties == meter_value_property and values == (35.0, "35%")
         for properties, values in accessible_updates[id(game_meter)]
     )
+
+    # The visible meter goes dark immediately on mute/device loss, so its
+    # accessibility value must also become 0% immediately and stay there even
+    # while the private visual smoothing buffer decays over subsequent ticks.
+    game_meter.set_state(muted=True, dead=False)
+    assert accessible_updates[id(game_meter)][-1] == (meter_value_property, (0.0, "0%"))
+    game_meter.feed(1.0)
+    game_meter.tick()
+    assert accessible_updates[id(game_meter)][-1] == (meter_value_property, (0.0, "0%"))
+    game_meter.set_state(muted=False, dead=True)
+    game_meter.feed(1.0)
+    game_meter.tick()
+    assert accessible_updates[id(game_meter)][-1] == (meter_value_property, (0.0, "0%"))
+
     mic_in = window.strips["mic_b1"].in_button
     assert game_out is not None and mic_in is not None
     game_out_name = f"Choose where {game_strip.channel.name} is sent"

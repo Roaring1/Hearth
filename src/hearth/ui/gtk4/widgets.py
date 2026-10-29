@@ -124,6 +124,15 @@ class Meter(Gtk.DrawingArea):
     def set_state(self, *, muted: bool, dead: bool) -> None:
         if (muted, dead) != (self._muted, self._dead):
             self._muted, self._dead = muted, dead
+            # The drawing goes dark immediately when muted or unavailable.
+            # Keep its accessible value truthful instead of announcing the
+            # old smoothed level while the hidden visual buffer decays.
+            if (muted or dead) and self._accessible_percent != 0:
+                self._accessible_percent = 0
+                self.update_property(
+                    [Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT],
+                    [0.0, "0%"],
+                )
             self.queue_draw()
 
     def feed(self, level: float) -> None:
@@ -139,7 +148,9 @@ class Meter(Gtk.DrawingArea):
         # A live meter changes every frame; round its accessible value to 5%
         # increments so screen readers get useful level changes without a
         # burst of announcements at the animation rate.
-        accessible_percent = max(0, min(100, int(round(self._shown * 20) * 5)))
+        accessible_percent = (
+            0 if self._muted or self._dead else max(0, min(100, int(round(self._shown * 20) * 5)))
+        )
         if accessible_percent != self._accessible_percent:
             self._accessible_percent = accessible_percent
             self.update_property(
@@ -358,6 +369,10 @@ class Scale(Gtk.DrawingArea):
     def __init__(self, palette: dict[str, str], height: int) -> None:
         super().__init__()
         self._pal = palette
+        # The tick labels are a purely visual ruler for the adjacent semantic
+        # Meter widget; exposing this Cairo drawing area as another generic
+        # object would add an unlabeled, non-interactive stop to the AT tree.
+        self.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
         self.set_content_width(self.WIDTH)
         self.set_content_height(height)
         self.set_draw_func(self._draw)
