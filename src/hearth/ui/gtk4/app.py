@@ -518,6 +518,12 @@ class Strip(Gtk.Box):
         """Move a focused app row left/right across visible mixer buses."""
         if keyval not in (Gdk.KEY_Left, Gdk.KEY_Right):
             return False
+        # The key controller bubbles from the focused row. If a child slider
+        # owns focus, its arrow keys must adjust volume rather than moving the
+        # app to another bus. Only the row itself authorizes this action.
+        move_control = self._listener_move_controls.get(listener_index)
+        if move_control is None or not move_control.has_focus():
+            return False
         visible = [sink for sink in self.win.order if sink in self.win.strips]
         try:
             position = visible.index(self.channel.sink)
@@ -1409,6 +1415,7 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.banner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.banner.add_css_class("banner")
         self.banner_text = Gtk.Label(label="", xalign=0.0)
+        self.banner_text.set_accessible_role(Gtk.AccessibleRole.STATUS)
         self.banner_text.add_css_class("banner-text")
         self.banner_text.set_hexpand(True)
         self.banner.append(self.banner_text)
@@ -2070,6 +2077,12 @@ class MixerWindow(Gtk.ApplicationWindow):
             self.banner_button.set_visible(False)
             self.banner_button.set_sensitive(True)
         self.banner.set_visible(bool(missing))
+        if missing:
+            # The banner starts hidden and GTK can recompute its label role as
+            # PRESENTATION when the container becomes visible. Reassert STATUS
+            # after the visibility transition so the live fault message keeps
+            # its intended announcement semantics.
+            self.banner_text.set_accessible_role(Gtk.AccessibleRole.STATUS)
 
     def _on_restart(self, _button: Gtk.Button) -> None:
         """Restart whichever units own the buses that are missing."""

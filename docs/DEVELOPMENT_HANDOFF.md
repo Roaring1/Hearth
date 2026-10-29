@@ -362,7 +362,9 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 - After a successful keyboard move, the next collector snapshot rebuilds the
   source/destination rows and restores focus to that app's row on the intended
   destination bus. A stale snapshot cannot clear the pending focus request while
-  the stream is still present only on its old bus.
+  the stream is still present only on its old bus. The Left/Right handler also
+  requires the row itself to hold focus, so arrow keys on the nested app-volume
+  slider are not intercepted as stream moves.
   Regression coverage checks key routing/bounds and the real production GTK test
   performs a synthetic Firefox move from Game to Chat and verifies post-rebuild
   focus without making a real `pactl` call.
@@ -432,3 +434,21 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 - The production GTK test now checks both the active laptop-service name and
   that the name, tooltip, visibility and target list reset when the fixture
   returns to a healthy state; no restart handler is activated.
+
+## App row key propagation — 2026-10-29
+
+The row-level key controller now ignores Left/Right unless the row itself is the
+focused widget. This prevents bubbling arrow-key events from the nested per-app
+volume scale from moving that stream. Both the focused-slider no-op and focused
+row movement are checked in the safety test and real GTK production-window test.
+
+
+## Main repair-banner status semantics — 2026-10-29
+
+- The active missing-bus banner message uses GTK's `STATUS` role. GTK can reset
+  a standard label's role during the hidden-to-visible transition, so the app
+  reasserts the role after showing the banner instead of relying only on the
+  constructor-time setting.
+- The real GTK/Xvfb regression verifies the status role and exact Laptop-missing
+  message after production logic shows the banner. It only uses synthetic
+  channel state and never invokes the restart handler.

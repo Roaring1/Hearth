@@ -1333,6 +1333,13 @@ def test_keyboard_app_move_targets_adjacent_visible_bus_and_preserves_boundary(
     mixer = _load_mixer()
     Gdk = mixer.Gdk
 
+    class FakeMoveControl:
+        def __init__(self, focused: bool) -> None:
+            self.focused = focused
+
+        def has_focus(self) -> bool:
+            return self.focused
+
     class FakeTarget:
         def __init__(self, sink: str) -> None:
             self.channel = SimpleNamespace(sink=sink)
@@ -1350,12 +1357,27 @@ def test_keyboard_app_move_targets_adjacent_visible_bus_and_preserves_boundary(
         strips={"vm_game": game, "vm_chat": chat, "vm_music": music},
         _pending_listener_focus=None,
     )
-    source = SimpleNamespace(channel=game.channel, win=window)
+    move_control = FakeMoveControl(focused=True)
+    source = SimpleNamespace(
+        channel=game.channel,
+        win=window,
+        _listener_move_controls={"42": move_control},
+    )
 
     assert mixer.Strip._on_listener_name_key_pressed(
         source, None, Gdk.KEY_Right, 0, Gdk.ModifierType(0), "42"
     )
     assert chat.moves == [("42", True)]
+
+    # A bubbling Left/Right event from the nested volume scale must not move
+    # the stream. The action is only active while the row itself owns focus.
+    move_control.focused = False
+    assert not mixer.Strip._on_listener_name_key_pressed(
+        source, None, Gdk.KEY_Right, 0, Gdk.ModifierType(0), "42"
+    )
+    assert chat.moves == [("42", True)]
+    move_control.focused = True
+
     assert not mixer.Strip._on_listener_name_key_pressed(
         source, None, Gdk.KEY_Escape, 0, Gdk.ModifierType(0), "42"
     )
@@ -1364,7 +1386,11 @@ def test_keyboard_app_move_targets_adjacent_visible_bus_and_preserves_boundary(
     )
     assert chat.moves == [("42", True)]
     assert not mixer.Strip._on_listener_name_key_pressed(
-        SimpleNamespace(channel=SimpleNamespace(sink="laptop_audio"), win=window),
+        SimpleNamespace(
+            channel=SimpleNamespace(sink="laptop_audio"),
+            win=window,
+            _listener_move_controls={"42": FakeMoveControl(focused=True)},
+        ),
         None,
         Gdk.KEY_Right,
         0,

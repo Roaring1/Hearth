@@ -292,3 +292,20 @@ On recovery, the hidden banner Restart control resets its accessible label to
 `Restart affected audio services` and clears its tooltip after disarming the
 stale target list. The production-window test verifies both active and healthy
 states without invoking systemd.
+
+## App-row keyboard focus ownership — 2026-10-29
+
+The app row only handles Left/Right stream movement when the row itself owns
+focus. If the nested per-app volume scale is focused, those arrows are left for
+slider adjustment rather than moving the stream. The production GTK test checks
+the child-slider no-op and successful row-focused move, including focus return
+after rebuild.
+
+
+
+## Main repair-banner status role — 2026-10-29
+
+When a previously available bus disappears, the visible repair-banner message
+uses the GTK `STATUS` role. Production GTK coverage confirms the role and
+message after the visibility transition, because GTK may recalculate a standard
+label's role when its parent changes from hidden to visible.

@@ -372,6 +372,8 @@ def test_production_windows_render_and_capture(
     window.ever_present.add("laptop_audio")
     window._update_banner()
     assert window.banner_units == ("roaring-laptop-audio.service",)
+    assert window.banner_text.get_accessible_role() == Gtk.AccessibleRole.STATUS
+    assert window.banner_text.get_text() == ("Laptop missing - the audio graph is not fully up")
     assert "Restart roaring-laptop-audio.service" in accessible_labels[id(window.banner_button)]
     assert window.banner_button.get_tooltip_text() == "Restart roaring-laptop-audio.service"
     capture("mixer-fault-banner")
@@ -549,7 +551,22 @@ def test_production_windows_render_and_capture(
     monkeypatch.setattr(GLib, "timeout_add", lambda *_args: 1)
     game_state = window.states["vm_game"]
     chat_state = window.states["vm_chat"]
-    assert window.strips["vm_game"]._on_listener_name_key_pressed(
+    game_strip = window.strips["vm_game"]
+    move_handle = game_strip._listener_move_controls["fixture-101"]
+    app_volume = game_strip._listener_volume_controls["fixture-101"][0]
+    assert app_volume.grab_focus()
+    pump(0.02)
+    assert app_volume.has_focus()
+    assert not move_handle.has_focus()
+    assert not game_strip._on_listener_name_key_pressed(
+        None, app_mod.Gdk.KEY_Right, 0, app_mod.Gdk.ModifierType(0), "fixture-101"
+    )
+    assert moved_streams == []
+
+    assert move_handle.grab_focus()
+    pump(0.02)
+    assert move_handle.has_focus()
+    assert game_strip._on_listener_name_key_pressed(
         None, app_mod.Gdk.KEY_Right, 0, app_mod.Gdk.ModifierType(0), "fixture-101"
     )
     assert moved_streams == [("fixture-101", "vm_chat")]
