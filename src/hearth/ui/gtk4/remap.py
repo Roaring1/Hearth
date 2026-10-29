@@ -129,6 +129,7 @@ class _Pad(Gtk.Button, _Control):
         self.number = pad
         self.add_css_class("lpd8-pad")
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.update_property([Gtk.AccessibleProperty.LABEL], [f"LPD8 pad {pad}; unassigned"])
         self.cap = Gtk.Label(label=f"PAD {pad}", xalign=0.0)
         self.cap.add_css_class("lpd8-cap")
         self.job = Gtk.Label(label="", xalign=0.0)
@@ -146,6 +147,10 @@ class _Pad(Gtk.Button, _Control):
     def show_job(self, text: str, tooltip: str) -> None:
         self.job.set_text(text)
         self.set_tooltip_text(tooltip)
+        assignment = f": {text}" if text else "; unassigned"
+        self.update_property(
+            [Gtk.AccessibleProperty.LABEL], [f"LPD8 pad {self.number}{assignment}"]
+        )
         # An unused pad is drawn as an empty box rather than hidden: the
         # hardware still has eight pads whether or not the script uses them.
         if text:
@@ -184,6 +189,7 @@ class _Knob(Gtk.Button, _Control):
         self.open = False
         #: 0-1, or None when nothing has said where this knob is.
         self.level: float | None = None
+        self.update_property([Gtk.AccessibleProperty.LABEL], [f"LPD8 knob {knob}; unassigned"])
         self.add_css_class("lpd8-knob")
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         box.set_halign(Gtk.Align.CENTER)
@@ -210,6 +216,10 @@ class _Knob(Gtk.Button, _Control):
     def show_job(self, text: str, tooltip: str) -> None:
         self.job.set_text(text)
         self.set_tooltip_text(tooltip)
+        assignment = f": {text}" if text else "; unassigned"
+        self.update_property(
+            [Gtk.AccessibleProperty.LABEL], [f"LPD8 knob {self.number}{assignment}"]
+        )
         self.assigned = bool(text)
         self.face.queue_draw()
 
