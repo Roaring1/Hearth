@@ -624,9 +624,20 @@ row movement are checked in the safety test and real GTK production-window test.
   files), legacy compilation, desktop entry/AppStream metadata and ShellCheck
   pass. AppStream's existing uppercase-ID pedantic notice is non-fatal.
 - Hosted [CI #151](https://github.com/Roaring1/Hearth/actions/runs/40974425768)
-  passed all six jobs on handoff-only head `41150d6`. Hosted [CI #152]
-  (https://github.com/Roaring1/Hearth/actions/runs/40974946525) also passed
-  all six jobs on code commit `3464157`: lint/types, Python 3.11–3.13 tests,
-  GTK visual capture and installed-package smoke. The GTK job uploaded ten
-  production screenshots in [artifact 12941902287]
-  (https://github.com/Roaring1/Hearth/actions/runs/40974946525/artifacts/12941902287).
+  passed all six jobs on handoff-only head `41150d6`. Hosted [CI #152](https://github.com/Roaring1/Hearth/actions/runs/40974946525)
+  also passed all six jobs on code commit `3464157`: lint/types, Python
+  3.11–3.13 tests, GTK visual capture and installed-package smoke. The GTK job
+  uploaded ten production screenshots in [artifact 12941902287](https://github.com/Roaring1/Hearth/actions/runs/40974946525/artifacts/12941902287).
+- Final handoff-only commit `0d27d61` has all-six-job green [CI #153](https://github.com/Roaring1/Hearth/actions/runs/40975155510).
+
+
+## Deferred companion-tool UI integration — 2026-10-29
+
+- `src/hearth/tools.py` defines a registry for companion scripts and its
+  module docstring says the UI renders installed tools, with confirmation for
+  disruptive commands. A search of production `src/hearth/ui` modules found
+  no imports or callers of that registry; only unit tests exercise the data
+  model. The current GTK4 app does not expose those companion-script buttons.
+- Treat this as a separate product-scope follow-up unless the PR was explicitly
+  intended to ship a GUI launcher for those scripts. Do not infer UI access or
+  confirmation behavior from the registry's unit tests alone.
