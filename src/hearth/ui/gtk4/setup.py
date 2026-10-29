@@ -189,7 +189,13 @@ class SetupWindow(Gtk.Window):
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         self.astro_chat = Gtk.CheckButton(label="Chat")
+        action_icons.accessible_label(
+            self.astro_chat, "Use Astro A50 Chat endpoint for bus routing"
+        )
         self.astro_game = Gtk.CheckButton(label="Game")
+        action_icons.accessible_label(
+            self.astro_game, "Use Astro A50 Game endpoint for bus routing"
+        )
         self.astro_game.set_group(self.astro_chat)
         is_game = "game" in conf.get("ASTRO_TARGET", "")
         self.astro_game.set_active(is_game)
@@ -328,7 +334,9 @@ class SetupWindow(Gtk.Window):
         sends = _section("MOONLIGHT SENDS")
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         self.ml_stream = Gtk.CheckButton(label="Stream")
+        action_icons.accessible_label(self.ml_stream, "Send B1 microphone to Moonlight Stream")
         self.ml_chat = Gtk.CheckButton(label="Chat")
+        action_icons.accessible_label(self.ml_chat, "Send B2 microphone to Moonlight Chat")
         self.ml_chat.set_group(self.ml_stream)
         source = self._core.moonlight_mic_source()
         self.ml_stream.set_active(source == "b1_mic")

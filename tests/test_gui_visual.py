@@ -465,6 +465,22 @@ def test_production_windows_render_and_capture(
         widget is setup_window.latency and label == "Routing latency in milliseconds"
         for widget, label in accessible_names
     )
+    assert any(
+        widget is setup_window.astro_chat and label == "Use Astro A50 Chat endpoint for bus routing"
+        for widget, label in accessible_names
+    )
+    assert any(
+        widget is setup_window.astro_game and label == "Use Astro A50 Game endpoint for bus routing"
+        for widget, label in accessible_names
+    )
+    assert any(
+        widget is setup_window.ml_stream and label == "Send B1 microphone to Moonlight Stream"
+        for widget, label in accessible_names
+    )
+    assert any(
+        widget is setup_window.ml_chat and label == "Send B2 microphone to Moonlight Chat"
+        for widget, label in accessible_names
+    )
     assert setup_window.latency.get_accessible_role() == Gtk.AccessibleRole.SPIN_BUTTON
     setup_window.flow.set_text("SM7B → Carla → Mic B1\nMic B1 → voice apps\nMic B2 → spare input")
     setup_window.lpd8_state.set_text("Controller status is checked when Setup opens")

@@ -354,3 +354,11 @@ input selectors say `Route {source} into {mic bus}`. Their visible captions and
 routing actions are unchanged. The production GTK test checks the actual GTK
 LABEL property updates for an output, Carla and raw-input checkbox, even while
 the initial route/source inventory is still awaiting a verified snapshot.
+
+
+## Setup endpoint-choice names — 2026-10-29
+
+Setup's visually compact Chat/Game endpoint choices announce the Astro A50
+routing function, while the Moonlight Stream/Chat choices identify both source
+microphone and destination. The production GTK test verifies the actual
+accessible LABEL updates without changing any routing selections or saved state.
