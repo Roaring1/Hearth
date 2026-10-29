@@ -386,9 +386,13 @@ def test_read_line_reassembles_chunks():
         right.close()
 
 
-def test_is_known_filters_unsupported_commands():
+def test_is_known_matches_the_full_server_command_vocabulary():
     assert protocol.is_known("get_sinks")
     assert protocol.is_known("dump now")
+    # These two verbs are used by the LPD8/Padfire integration and are
+    # registered by MixerApp even though they were missing from COMMANDS.
+    assert protocol.is_known("remap")
+    assert protocol.is_known('padfire_status {"connected":true}')
     assert not protocol.is_known("rm -rf /")
     assert not protocol.is_known("")
 

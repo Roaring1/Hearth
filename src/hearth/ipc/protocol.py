@@ -21,7 +21,9 @@ TIMEOUT = 2.0
 
 #: Commands the server understands. Anything else gets a clear error back
 #: instead of being silently treated as a no-op.
-COMMANDS: frozenset[str] = frozenset({"show", "quit", "unmute", "dump", "get_sinks"})
+COMMANDS: frozenset[str] = frozenset(
+    {"show", "quit", "unmute", "dump", "get_sinks", "remap", "padfire_status"}
+)
 
 #: Reply sent when a handler returns nothing.
 OK = "ok"
