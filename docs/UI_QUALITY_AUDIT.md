@@ -230,3 +230,11 @@ The short binding chip in a bus strip remains visually compact (for example,
 `K7`) but exposes a contextual accessible name that identifies opening LPD8
 remapping for the channel controlled by that knob. The production GTK test
 checks the explicit label property.
+
+
+## LPD8 assignment dropdown context — 2026-10-29
+
+The one reused LPD8 assignment dropdown explicitly announces which hardware
+control it edits (`Choose assignment for LPD8 pad N` or `... knob N`) each time
+the menu model is refreshed. A production-window GTK regression checks Pad 3 and
+Knob 5 without selecting an option or triggering a map write/restart.

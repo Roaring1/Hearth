@@ -336,3 +336,17 @@ No dump or log contents were published to GitHub. Machine-specific configuration
   printed token. Its existing tooltip, visible chip and click handler are intact.
 - The real GTK production-window test captures and asserts the chip's explicit
   accessible LABEL property alongside the route and mute control names.
+
+
+## Contextual LPD8 assignment dropdown name — 2026-10-29
+
+- The shared controller assignment dropdown now sets its GTK accessible LABEL
+  whenever it is repopulated: `Choose assignment for LPD8 pad 3` or the matching
+  knob/number. This makes the currently edited hardware control explicit even
+  though a single dropdown is reused for all sixteen pad/knob buttons.
+- The production GTK window test invokes the real `_fill_choice()` method for
+  Pad 3 and Knob 5 and checks the emitted accessible name for each. Selection
+  notifications remain blocked while repopulating; the test does not commit or
+  restart an assignment.
+- Targeted GTK, full local gate and hosted CI should be checked for this follow-up.
+  No hardware script, audio graph or systemd unit is touched.

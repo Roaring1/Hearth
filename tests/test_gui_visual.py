@@ -376,6 +376,10 @@ def test_production_windows_render_and_capture(
     assert remap_window.get_mapped()
     assert len(remap_window._pads) == 8 and len(remap_window._knobs) == 8
     assert remap_window._map_usable
+    remap_window._fill_choice(remap_window._pads[3])
+    assert "Choose assignment for LPD8 pad 3" in accessible_labels[id(remap_window.choice)]
+    remap_window._fill_choice(remap_window._knobs[5])
+    assert "Choose assignment for LPD8 knob 5" in accessible_labels[id(remap_window.choice)]
     capture("lpd8-controls")
 
     # The minimized rail uses a custom-drawn control too. Include a focused

@@ -583,6 +583,11 @@ class RemapWindow(Gtk.Window):
     def _fill_choice(self, widget: _Pad | _Knob) -> None:
         """Put that control's job list in the dropdown."""
         number = widget.number
+        kind = "pad" if widget.kind == "pad" else "knob"
+        self.choice.update_property(
+            [Gtk.AccessibleProperty.LABEL],
+            [f"Choose assignment for LPD8 {kind} {number}"],
+        )
         if widget.kind == "pad":
             self.menu_name.set_text(f"Pad {number} does")
             names = [s.label for s in lpd8map.PAD_SLOTS]
