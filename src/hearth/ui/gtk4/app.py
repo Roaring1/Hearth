@@ -2062,8 +2062,11 @@ class MixerWindow(Gtk.ApplicationWindow):
             self.banner_button.set_tooltip_text(restart_name if units else "")
         else:
             # The banner hides, but the button underneath stayed armed with
-            # the units from the last fault. Disarm it when the graph is well.
+            # the units from the last fault. Disarm it and clear that stale
+            # accessible name when the graph is healthy again.
             self.banner_units = ()
+            action_icons.accessible_label(self.banner_button, "Restart affected audio services")
+            self.banner_button.set_tooltip_text("")
             self.banner_button.set_visible(False)
             self.banner_button.set_sensitive(True)
         self.banner.set_visible(bool(missing))

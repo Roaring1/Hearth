@@ -284,3 +284,11 @@ The Setup verdict label now exposes GTK's semantic `STATUS` role while keeping
 its existing compact text/visibility behavior. The production-window regression
 checks the status role and one synthetic failed-unit message together with that
 unit's accessible Restart name. No real service is restarted by the test.
+
+
+## Fault-banner cleared-state name — 2026-10-29
+
+On recovery, the hidden banner Restart control resets its accessible label to
+`Restart affected audio services` and clears its tooltip after disarming the
+stale target list. The production-window test verifies both active and healthy
+states without invoking systemd.

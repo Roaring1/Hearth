@@ -378,6 +378,10 @@ def test_production_windows_render_and_capture(
     window.states["laptop_audio"].present = True
     window.ever_present = previous_ever_present
     window._update_banner()
+    assert not window.banner_button.get_visible()
+    assert not window.banner_units
+    assert "Restart affected audio services" in accessible_labels[id(window.banner_button)]
+    assert window.banner_button.get_tooltip_text() is None
 
     window.set_visible(False)
     accessible_names: list[tuple[Gtk.Widget, str]] = []

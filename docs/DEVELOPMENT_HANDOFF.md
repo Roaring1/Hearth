@@ -420,3 +420,15 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 - The production GTK test injects a synthetic failed unit and checks the status
   role, `1 thing is wrong` text/visibility, and the unit-specific Restart label.
   It never activates Restart or connects to the real systemd service manager.
+
+
+## Fault-banner cleared-state accessible name — 2026-10-29
+
+- When the audio graph recovers and the banner hides, the disabled-target
+  button now clears its old service list, accessible name and tooltip, returning
+  to the neutral name `Restart affected audio services`. This avoids retaining
+  a stale unit target in GTK's accessibility state even though the button is
+  no longer visible.
+- The production GTK test now checks both the active laptop-service name and
+  that the name, tooltip, visibility and target list reset when the fixture
+  returns to a healthy state; no restart handler is activated.
