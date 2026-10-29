@@ -598,6 +598,8 @@ class SetupWindow(Gtk.Window):
                 row.append(text)
                 button = Gtk.Button(label="Restart")
                 button.add_css_class("setup-act")
+                action_icons.accessible_label(button, f"Restart {name}")
+                button.set_tooltip_text(f"Restart {name}")
                 button.connect("clicked", self._on_restart, name)
                 row.append(button)
                 row._text = text  # type: ignore[attr-defined]

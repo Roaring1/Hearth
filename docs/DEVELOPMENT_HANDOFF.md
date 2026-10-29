@@ -385,3 +385,14 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 - The targeted GTK test and full `./scripts/check.sh` pass with **478 tests**;
   verify hosted CI after the combined accessibility changes are pushed. This
   metadata change does not alter meter drawing, the collector or fader write path.
+
+
+## Per-unit Setup restart labels — 2026-10-29
+
+- Generated restart buttons keep the short visible caption `Restart` but now
+  announce and tooltip the exact unit, e.g. `Restart roaring-vm-share.service`.
+  The existing button handler still passes the same unit name to the restart
+  worker; no service is started by the label-setting code.
+- The real Setup-window GTK test injects a synthetic failed unit after capturing
+  the normal Setup screenshot and asserts the emitted accessible name and
+  tooltip, without connecting to systemd or clicking Restart.

@@ -260,3 +260,11 @@ value. The value is quantized to 5% increments to avoid emitting accessibility
 updates at the full animation rate. A production-window regression exercises
 one deterministic level update without starting PipeWire or touching the host
 audio graph.
+
+
+## Per-unit Setup restart names — 2026-10-29
+
+Every dynamically generated service restart button has a contextual accessible
+name and tooltip identifying the exact systemd unit, while retaining its compact
+visible `Restart` caption. The production-window regression injects a synthetic
+failed unit and verifies the label without invoking the restart handler.

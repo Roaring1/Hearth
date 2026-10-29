@@ -417,6 +417,19 @@ def test_production_windows_render_and_capture(
     )
     capture("setup")
 
+    # Service restart buttons share the visible caption, but each control's
+    # accessible name identifies the exact unit it will restart.
+    failed_unit = setup_mod.units_mod.Unit("roaring-vm-share.service", "daemon", "failed", "failed")
+    setup_window._apply([failed_unit])
+    failed_row = setup_window._fault_rows[failed_unit.name]
+    restart_button = failed_row.get_last_child()
+    assert isinstance(restart_button, Gtk.Button)
+    assert any(
+        widget is restart_button and label == f"Restart {failed_unit.name}"
+        for widget, label in accessible_names
+    )
+    assert restart_button.get_tooltip_text() == f"Restart {failed_unit.name}"
+
     setup_window.set_visible(False)
     remap_window = remap_mod.RemapWindow(window)
     remap_window.present()
