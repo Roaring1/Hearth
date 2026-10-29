@@ -168,3 +168,11 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 - Regression coverage now includes optimistic mute followed by a stale backend snapshot, dynamic app mute names, rail-dock action labels, fader focusability/slider role, keyboard updates, range endpoints, and dead-state input suppression.
 - `./scripts/check.sh` passes locally with **474 tests**; Ruff lint/format, mypy (33 source files), desktop-entry validation, AppStream validation and ShellCheck also pass. Existing GTK/PyGObject deprecation warnings and the AppStream uppercase application-ID warning remain non-fatal.
 - After the accessibility slice is committed/pushed, verify its hosted CI before any merge. The key handler is exercised under Xvfb, but the real Plasma/AT-SPI tree, screen-reader announcement and visible keyboard focus still need a live desktop pass. No live audio graph or systemd units were touched by these automated checks.
+
+
+## Latest checkpoint — keyboard-accessible minimized rail (2026-10-29)
+
+- Hosted CI [run #111](https://github.com/Roaring1/Hearth/actions/runs/40951877992) passed all six jobs for commit [`4e834c4`](https://github.com/Roaring1/Hearth/commit/4e834c487e94a7031703c2ce39835491944ae484), including GUI screenshots and installed SVG resource checks.
+- The current follow-up makes minimized channel slivers focusable GTK button-role widgets named `Restore {channel}`. Enter, keypad Enter and Space emit a restore request wired to the existing window restore method. The new Xvfb regression covers role/focusability and key activation while unrelated keys remain unhandled.
+- The current local full gate passes with **475 tests**; lint, formatting, mypy (33 source files), desktop entry, AppStream and ShellCheck pass. This new sliver change has not yet completed hosted CI; verify its run after pushing.
+- No live audio graph or systemd unit was changed. Real Plasma focus traversal, visible focus styling and AT-SPI/screen-reader announcements still need manual confirmation.

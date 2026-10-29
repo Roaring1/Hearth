@@ -134,3 +134,21 @@ state, interaction flow, DPI scale, or Plasma theme.
   the commit carrying this follow-up. The automated fader test invokes the real
   GTK key handler under Xvfb; a live Plasma/AT-SPI screen-reader and keyboard
   pass remains an outstanding manual verification, not a claim made by Xvfb.
+
+## Keyboard-accessible minimized-channel rail — 2026-10-29
+
+- Minimized channel slivers now behave as real keyboard-accessible controls:
+  they are focusable, expose the GTK button role, and announce `Restore
+  {channel}` to assistive technology instead of being anonymous drawing areas.
+- Enter, keypad Enter and Space emit a `restore-requested` signal. The main
+  window wires this into the same existing restore operation used by pointer
+  activation, so keyboard restoration doesn't fork persistence/layout logic.
+- Xvfb regression coverage checks the button role and focusability, Enter/Space
+  activation and ignored unrelated keys. The test remains isolated from the
+  host desktop and audio graph.
+- Local `./scripts/check.sh` passes with **475 tests** and the complete lint,
+  format, mypy, metadata and ShellCheck gates. The previous accessible-fader
+  commit (`4e834c4`) passed hosted CI run [#111](https://github.com/Roaring1/Hearth/actions/runs/40951877992).
+- Live Plasma focus traversal, AT-SPI label inspection and visual focus-ring
+  confirmation are still manual verification items; Xvfb tests only establish
+  the widget semantics and key handler behavior.

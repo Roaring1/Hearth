@@ -366,7 +366,11 @@ class Scale(Gtk.DrawingArea):
 
 
 class Sliver(Gtk.DrawingArea):
-    """A minimised channel in the right rail: name on its side, one state dot."""
+    """A keyboard-accessible restore button drawn as a compact channel sliver."""
+
+    __gsignals__: ClassVar[dict] = {
+        "restore-requested": (GObject.SignalFlags.RUN_FIRST, None, ()),
+    }
 
     def __init__(
         self,
@@ -381,6 +385,12 @@ class Sliver(Gtk.DrawingArea):
         self._level = 0.0
         self._muted = False
         self._horizontal = horizontal
+        self.set_focusable(True)
+        self.set_accessible_role(Gtk.AccessibleRole.BUTTON)
+        self.update_property([Gtk.AccessibleProperty.LABEL], [f"Restore {name}"])
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_key_pressed)
+        self.add_controller(keys)
         # ``length`` is the long axis either way: a rail along the bottom of
         # the window wants wide, short slivers, not rotated tall ones.
         self.set_content_width(length if horizontal else 24)
@@ -390,6 +400,19 @@ class Sliver(Gtk.DrawingArea):
     def feed(self, level: float, muted: bool) -> None:
         self._level, self._muted = level, muted
         self.queue_draw()
+
+    def _on_key_pressed(
+        self,
+        _controller: Gtk.EventControllerKey,
+        keyval: int,
+        _keycode: int,
+        _state: Gdk.ModifierType,
+    ) -> bool:
+        """Restore the channel when this focused control is activated."""
+        if keyval not in (Gdk.KEY_space, Gdk.KEY_Return, Gdk.KEY_KP_Enter):
+            return False
+        self.emit("restore-requested")
+        return True
 
     def _draw(self, _area: Gtk.DrawingArea, cr, w: int, h: int) -> None:
         cr.set_source_rgb(*parse_rgb(self._pal["view-alt"]))

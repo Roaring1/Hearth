@@ -391,3 +391,34 @@ def test_custom_fader_supports_keyboard_and_exposes_slider_role() -> None:
     assert fader.value == VMAX
     fader.set_dead(False)
     assert fader.get_sensitive()
+
+
+@pytest.mark.gui
+def test_minimised_sliver_is_a_keyboard_accessible_restore_button() -> None:
+    """Compact channel slivers can be focused and activated without a pointer."""
+    import gi
+
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("Gdk", "4.0")
+    from gi.repository import Gdk, Gtk
+
+    from hearth.ui.gtk4.widgets import Sliver
+
+    palette = {
+        "view-alt": "#202020",
+        "bad": "#ff5555",
+        "ok": "#55ff55",
+        "fg-dim": "#aaaaaa",
+        "fg": "#eeeeee",
+    }
+    sliver = Sliver(palette, "Game", 56)
+    assert sliver.get_focusable()
+    assert sliver.get_accessible_role() == Gtk.AccessibleRole.BUTTON
+
+    activations: list[bool] = []
+    sliver.connect("restore-requested", lambda *_args: activations.append(True))
+    assert sliver._on_key_pressed(None, Gdk.KEY_Return, 0, Gdk.ModifierType(0))
+    assert sliver._on_key_pressed(None, Gdk.KEY_space, 0, Gdk.ModifierType(0))
+    assert activations == [True, True]
+    assert not sliver._on_key_pressed(None, Gdk.KEY_Escape, 0, Gdk.ModifierType(0))
+    assert activations == [True, True]
