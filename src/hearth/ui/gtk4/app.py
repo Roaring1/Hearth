@@ -267,6 +267,7 @@ class Strip(Gtk.Box):
         # header: grip, name, minimise
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         grip = self._grip()
+        self.reorder_handle = grip
         header.append(grip)
         # Single-word bus names shout; a two-word name like "Discord mic"
         # reads better as typed and would not fit the strip uppercased.
@@ -397,19 +398,63 @@ class Strip(Gtk.Box):
     # -- construction helpers -------------------------------------------
     def _grip(self) -> Gtk.DrawingArea:
         area = Gtk.DrawingArea()
-        area.set_content_width(10)
-        area.set_content_height(12)
-        area.set_tooltip_text("Drag to reorder")
+        # This is a drag handle, not a clickable button. Keep its native role
+        # honest, but make it reachable by Tab and let Left/Right reorder a
+        # strip for users who cannot drag with a pointer.
+        area.set_content_width(16)
+        area.set_content_height(16)
+        area.set_focusable(True)
+        area.set_accessible_role(Gtk.AccessibleRole.GROUP)
+        area.update_property(
+            [Gtk.AccessibleProperty.LABEL],
+            [f"Reorder {self.channel.name}; press Left or Right to move"],
+        )
+        area.set_tooltip_text("Drag to reorder; focus and press Left/Right to move")
 
         def draw(_a, cr, w, h):
             cr.set_source_rgb(*parse_rgb(self.pal["button"]))
             for col in range(2):
                 for rowi in range(3):
-                    cr.arc(3 + col * 4, 3 + rowi * 3.5, 1.1, 0, 6.2832)
+                    cr.arc(4 + col * 5, 3.5 + rowi * 4.5, 1.15, 0, 6.2832)
                     cr.fill()
 
         area.set_draw_func(draw)
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_grip_key_pressed)
+        area.add_controller(keys)
         return area
+
+    def _on_grip_key_pressed(
+        self,
+        _controller: Gtk.EventControllerKey,
+        keyval: int,
+        _keycode: int,
+        _state: Gdk.ModifierType,
+    ) -> bool:
+        """Move one visible strip with arrow keys while the drag handle is focused."""
+        if keyval not in (Gdk.KEY_Left, Gdk.KEY_Right):
+            return False
+        direction = -1 if keyval == Gdk.KEY_Left else 1
+        visible = [
+            sink
+            for sink in self.win.order
+            if sink in self.win.strips
+            and (channel := self.win._channel(sink)) is not None
+            and channel.group == self.channel.group
+        ]
+        try:
+            index = visible.index(self.channel.sink)
+        except ValueError:
+            return False
+        destination = index + direction
+        if not 0 <= destination < len(visible):
+            # It's a supported key, but moving past a group's edge is a no-op.
+            return True
+        self.win.reorder(self.channel.sink, visible[destination])
+        # Reorder rebuilds every strip. Return focus to the same logical handle
+        # after the new hierarchy is attached so repeated arrow presses work.
+        GLib.idle_add(self.win._focus_reorder_handle, self.channel.sink)
+        return True
 
     def _bind_tip(self) -> str:
         pad = f", pad {self.channel.pad}" if self.channel.pad else ""
@@ -1555,6 +1600,13 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.hidden.discard(sink)
         self.rebuild()
         self._save()
+
+    def _focus_reorder_handle(self, sink: str) -> bool:
+        """Restore keyboard focus after a reorder rebuilt the strip widgets."""
+        strip = self.strips.get(sink)
+        if strip is not None:
+            strip.reorder_handle.grab_focus()
+        return False
 
     def reorder(self, moved: str, target: str) -> None:
         if moved == target or moved not in self.order or target not in self.order:

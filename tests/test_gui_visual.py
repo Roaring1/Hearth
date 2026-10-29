@@ -362,6 +362,22 @@ def test_production_windows_render_and_capture(
     rail_focus_path = capture("mixer-rail-focus", settle=0.0)
     assert_focus_changes_pixels(unfocused_rail, rail_focus_path, "minimized rail")
 
+    # Restore Music, then show the same visible focus cue on the strip-order
+    # handle; keyboard reordering is a separate operation from slider focus.
+    window.restore("vm_music")
+    pump(0.4)
+    reorder_grip = window.strips["vm_game"].reorder_handle
+    assert reorder_grip.get_focusable()
+    assert reorder_grip.get_accessible_role() == Gtk.AccessibleRole.GROUP
+    window.set_focus(None)
+    pump(0.05)
+    unfocused_grip = rendered_frame("mixer-reorder-grip-unfocused-reference")
+    assert reorder_grip.grab_focus()
+    pump(0.02)
+    assert reorder_grip.has_focus()
+    grip_focus_path = capture("mixer-reorder-grip-focus", settle=0.0)
+    assert_focus_changes_pixels(unfocused_grip, grip_focus_path, "strip reorder grip")
+
     # Stable evidence: the artifacts are all raster screenshots from the Xvfb
     # root window and contain the expected sample of production GUI states.
     assert {path.name for path in captures} == {
@@ -369,6 +385,7 @@ def test_production_windows_render_and_capture(
         "mixer-ready.png",
         "mixer-fader-focus.png",
         "mixer-rail-focus.png",
+        "mixer-reorder-grip-focus.png",
         "mixer-missing-device.png",
         "mixer-fault-banner.png",
         "setup.png",

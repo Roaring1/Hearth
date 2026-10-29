@@ -156,7 +156,7 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 - Before the first verified collector snapshot, mixer strips now show a dim ghost state (`checking…` / `Loading apps…`) and disable actions until a snapshot is known. Confirmed missing devices still use `no device` and fault styling, not the loading style.
 - Added four original, hand-authored SVG action glyphs (`collapse`, `refresh`, `save`, `sliders`) and used icon-plus-visible-label buttons for Setup's save/reconnect/remap actions. Decorative SVG/app glyphs are marked presentation-only; minimize controls carry explicit accessible names. No AI image generation or third-party SVG assets were used.
 - Cold profiling on this desktop measured `icons._file_index()` at 2.58 seconds and `_entry_index()` at 180 ms. The UI now returns an immediate letter fallback and builds the indexes on a daemon worker, updating the widget via the GTK main loop once an actual icon is found. A separate GUI regression test ensures a cold lookup does not synchronously populate either index.
-- CI's GTK job now runs production GTK4 windows under a fixed 1600x1200 Xvfb display, captures eight screenshots (loading, ready, focused fader, missing device, fault banner, Setup, LPD8 Controls and focused minimized rail), and uploads `hearth-gtk-visual-audit` for 14 days. The package job checks all four SVGs after installation. `tests/test_gui_visual.py` exercises deterministic fixtures only; it does not touch PipeWire, systemd, the physical LPD8 or real user settings.
+- CI's GTK job now runs production GTK4 windows under a fixed 1600x1200 Xvfb display, captures nine screenshots (loading, ready, focused fader, focused reorder grip, missing device, fault banner, Setup, LPD8 Controls and focused minimized rail), and uploads `hearth-gtk-visual-audit` for 14 days. The package job checks all four SVGs after installation. `tests/test_gui_visual.py` exercises deterministic fixtures only; it does not touch PipeWire, systemd, the physical LPD8 or real user settings.
 - Final local validation after these changes: `./scripts/check.sh` passed with **471 tests**, Ruff, formatting, mypy (33 source files), legacy compile, desktop entry/AppStream metadata and ShellCheck. The GTK-only capture pass separately reported **48 passed**. The remaining AppStream output is the existing pedantic uppercase application-ID warning. GTK's bundled PyGObject currently emits external deprecation warnings in its asyncio integration; no test fails on those warnings.
 - Visual scope is intentionally a first slice, not a claim of full visual regression: screenshots are uploaded for human review but no approved pixel-diff baselines have been committed. Live Plasma/DPI/theme checks, keyboard focus/navigation, popover/menu flows and real unplug/replug remain outstanding. See `docs/UI_QUALITY_AUDIT.md`.
 
@@ -236,3 +236,21 @@ No dump or log contents were published to GitHub. Machine-specific configuration
   screenshot fixtures; no audio backend or systemd action is involved. The local
   targeted visual test passes; rerun the full gate and hosted CI before considering
   the focus artifact complete.
+
+
+## Keyboard strip reordering — 2026-10-29
+
+- The dotted strip-order grip is now focusable and exposes a descriptive GTK
+  group label (`Reorder Game; press Left or Right to move`) instead of being a
+  tooltip-only, nonfocusable drawing area. Its pointer drag source is preserved.
+- Left/Right moves the focused strip by one visible position within its own
+  group. It reuses `MixerWindow.reorder()` and therefore the same persistence
+  path as pointer drag-and-drop; after a rebuild the idle callback returns focus
+  to the moved strip's new handle. Arrows at a group's edge are a safe no-op.
+- Regression coverage checks role/focusability, Left/Right reordering, edge
+  boundaries, ignored unrelated keys and focus restoration. CI's GTK artifact
+  now adds `mixer-reorder-grip-focus.png` and asserts the focused grip changes
+  visible pixels compared with its unfocused reference frame.
+- This is a new follow-up beyond commit `5216dfb`; rerun `./scripts/check.sh`,
+  then verify the hosted CI run and nine-image screenshot artifact before calling
+  the work complete. No audio or systemd operations are involved.

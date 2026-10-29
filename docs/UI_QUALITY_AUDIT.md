@@ -29,7 +29,7 @@ mixer state.
 `SetupWindow`, and `RemapWindow` under Xvfb. It does **not** connect to live
 PipeWire, invoke systemd, access the installed LPD8 script, or mutate user
 settings. Backends and state are replaced with deterministic fixtures while
-the real GTK widgets and production styles render. It captures eight named PNGs:
+the real GTK widgets and production styles render. It captures nine named PNGs:
 
 1. `mixer-loading.png`
 2. `mixer-ready.png`
@@ -39,6 +39,7 @@ the real GTK widgets and production styles render. It captures eight named PNGs:
 6. `setup.png`
 7. `lpd8-controls.png`
 8. `mixer-rail-focus.png`
+9. `mixer-reorder-grip-focus.png`
 
 The test checks meaningful widget state (including loading controls disabled,
 ready controls enabled, missing-device state, and all eight pads/knobs), then

@@ -219,6 +219,71 @@ def test_rail_dock_button_accessible_name_describes_its_action(
     assert strip.rail_handle.accessible_label == "Stack minimised channels down the right"
 
 
+def test_strip_grip_keyboard_reorders_visible_strips_and_restores_focus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+    Gdk, Gtk = mixer.Gdk, mixer.Gtk
+
+    class FakeWindow:
+        def __init__(self) -> None:
+            self.order = ["vm_game", "vm_chat", "vm_music", "laptop_audio", "mic_b1"]
+            self.strips = {sink: object() for sink in self.order[:4]}
+            self.rebuild_count = 0
+            self.save_count = 0
+            self.focused: list[str] = []
+
+        def _channel(self, sink):
+            return mixer.MixerWindow._channel(self, sink)
+
+        def rebuild(self) -> None:
+            self.rebuild_count += 1
+
+        def _save(self) -> None:
+            self.save_count += 1
+
+        def _focus_reorder_handle(self, sink: str) -> bool:
+            self.focused.append(sink)
+            return False
+
+        def reorder(self, moved: str, target: str) -> None:
+            mixer.MixerWindow.reorder(self, moved, target)
+
+    window = FakeWindow()
+    queued: list[tuple[object, tuple[object, ...]]] = []
+    monkeypatch.setattr(
+        mixer.GLib, "idle_add", lambda callback, *args: queued.append((callback, args)) or 1
+    )
+    strip = SimpleNamespace(channel=mixer.MixerWindow._channel(window, "vm_game"), win=window)
+    grip_owner = SimpleNamespace(
+        channel=strip.channel,
+        pal={"button": "#888888"},
+        _on_grip_key_pressed=lambda *args: mixer.Strip._on_grip_key_pressed(strip, *args),
+    )
+    grip = mixer.Strip._grip(grip_owner)
+    assert isinstance(grip, Gtk.DrawingArea)
+    assert grip.get_focusable()
+    assert grip.get_accessible_role() == Gtk.AccessibleRole.GROUP
+    assert "Left/Right" in grip.get_tooltip_text()
+
+    # A keyboard move uses the same reorder/save implementation as drag-drop.
+    assert mixer.Strip._on_grip_key_pressed(strip, None, Gdk.KEY_Right, 0, Gdk.ModifierType(0))
+    assert window.order[:4] == ["vm_chat", "vm_game", "vm_music", "laptop_audio"]
+    assert window.rebuild_count == 1 and window.save_count == 1
+    assert queued
+    callback, args = queued.pop(0)
+    callback(*args)
+    assert window.focused == ["vm_game"]
+
+    # Left returns it, boundaries are handled without an out-of-range move,
+    # and unrelated keys remain available to normal GTK navigation.
+    assert mixer.Strip._on_grip_key_pressed(strip, None, Gdk.KEY_Left, 0, Gdk.ModifierType(0))
+    assert window.order[:4] == ["vm_game", "vm_chat", "vm_music", "laptop_audio"]
+    assert mixer.Strip._on_grip_key_pressed(strip, None, Gdk.KEY_Left, 0, Gdk.ModifierType(0))
+    assert window.order[:4] == ["vm_game", "vm_chat", "vm_music", "laptop_audio"]
+    assert not mixer.Strip._on_grip_key_pressed(strip, None, Gdk.KEY_Escape, 0, Gdk.ModifierType(0))
+
+
 def test_per_app_volume_callback_queues_stream_not_bus(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
