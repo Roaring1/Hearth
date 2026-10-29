@@ -132,6 +132,7 @@ class SetupWindow(Gtk.Window):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
 
         self.verdict = Gtk.Label(label="", xalign=0.0)
+        self.verdict.set_accessible_role(Gtk.AccessibleRole.STATUS)
         self.verdict.add_css_class("setup-verdict")
         self.verdict.set_wrap(True)
         # Nothing to say when nothing is wrong. A standing line that only
