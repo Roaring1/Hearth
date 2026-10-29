@@ -1886,6 +1886,64 @@ def test_led_updates_run_off_gtk_thread_and_coalesce_latest_state(
     assert window._led_worker_active is False
 
 
+def test_led_worker_invalidates_disappeared_port_and_reprobes_next_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+    port_lookups: list[bool] = []
+    writes: list[tuple[str, bool]] = []
+    completions: list[threading.Event] = []
+
+    def find_port() -> str | None:
+        port_lookups.append(True)
+        return None
+
+    def failed_write(_port: str, sink: str, muted: bool, _channel: int) -> bool:
+        writes.append((sink, muted))
+        return False
+
+    monkeypatch.setattr(mixer.leds, "find_port", find_port)
+    monkeypatch.setattr(mixer.leds, "set_sink_mute", failed_write)
+    window = SimpleNamespace(
+        _led_port="hw:6,0,0",  # Cached discovery succeeds before the device disconnects.
+        _led_lock=threading.Lock(),
+        _led_pending={},
+        _led_worker_active=False,
+        cfg={},
+    )
+    real_drain = mixer.MixerWindow._drain_led_updates
+
+    def drain_and_signal() -> None:
+        completion = completions[-1]
+        try:
+            real_drain(window)
+        finally:
+            completion.set()
+
+    window._drain_led_updates = drain_and_signal
+    window._push_led = lambda sink, muted: mixer.MixerWindow._push_led(window, sink, muted)
+
+    first = threading.Event()
+    completions.append(first)
+    window._push_led("vm_game", True)
+    assert first.wait(timeout=2)
+    assert writes == [("vm_game", True)]
+    assert window._led_port is None
+    assert window._led_worker_active is False
+    assert window._led_pending == {}
+
+    # The next state change must discover again; a missing controller drops
+    # the batch and returns to idle instead of retrying a stale port forever.
+    second = threading.Event()
+    completions.append(second)
+    window._push_led("vm_chat", False)
+    assert second.wait(timeout=2)
+    assert len(port_lookups) == 1
+    assert writes == [("vm_game", True)]
+    assert window._led_worker_active is False
+    assert window._led_pending == {}
+
+
 def test_led_queue_recovers_if_worker_thread_cannot_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
