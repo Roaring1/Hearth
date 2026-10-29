@@ -1,20 +1,20 @@
-"""The companion tooling, described once so the app can offer all of it.
+"""Metadata and helpers for companion commands; not yet wired into GTK4.
 
-The rig grew a folder of shell and Python helpers that only a terminal can
-reach: diagnostics, a mic capture suite, speaker-bleed analysis, Carla
-control, a full stack restart. The stated goal is that a person who never
-opens a terminal can still use every one of them, so they are described
-here as data -- label, one-line purpose, argv, and whether they are
-destructive -- and the UI renders whatever is actually installed.
+The rig has shell and Python helpers for diagnostics, microphone analysis,
+speaker-bleed checks, Carla control and audio-stack repair. This module records
+their labels, descriptions, argv and confirmation requirements so a future GUI
+launcher can consume one registry instead of embedding shell commands in
+widgets.
 
-Rules that make this safe to expose in a GUI:
+The current production GTK4 modules do not import this registry, so these
+entries do not currently create buttons and no UI enforces the confirmation
+metadata. A launcher that consumes this registry must add that confirmation
+step before calling :func:`invoke`.
 
-* Nothing here imports ``gi``; this is a registry, not a widget.
+* This module does not import ``gi``; it is data and command helpers, not a widget.
 * Every entry is argv, never a shell string.
-* ``confirm`` marks anything that interrupts audio. The UI must ask first.
-* ``missing`` tools are reported, not hidden, so a user can tell the
-  difference between "this rig does not have that" and "the button is gone".
-* Long-running tools are spawned detached, so quitting Hearth never kills a
+* ``installed`` and ``missing`` describe which registered scripts exist.
+* Long-running tools are spawned detached, so quitting Hearth does not kill a
   restart halfway through.
 """
 
