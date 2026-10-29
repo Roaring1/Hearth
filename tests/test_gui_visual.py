@@ -132,8 +132,8 @@ def test_production_windows_render_and_capture(
 
     captures: list[Path] = []
 
-    def capture(name: str) -> Path:
-        pump()
+    def capture(name: str, *, settle: float = 0.35) -> Path:
+        pump(settle)
         desktop = ImageGrab.grab().convert("RGB")
         # Xvfb has no window manager, so GTK places each window at the root
         # origin and leaves the rest of the 1600x1200 desktop black. Trim that
@@ -240,6 +240,16 @@ def test_production_windows_render_and_capture(
     assert icon_calls.get("Firefox", 0) >= 2  # fallback then real icon
     capture("mixer-ready")
 
+    # Capture a real keyboard-focus state as visual evidence, not just a
+    # focusable-property assertion. Clear focus again so later states remain
+    # representative of their default appearance.
+    focused_fader = window.strips["vm_game"].fader
+    assert focused_fader.grab_focus()
+    pump(0.02)
+    assert focused_fader.has_focus()
+    capture("mixer-fader-focus", settle=0.0)
+    window.set_focus(None)
+
     # A confirmed missing endpoint is different from loading: it must stop
     # looking like a skeleton and must not allow actions on a vanished bus.
     window.states["laptop_audio"].present = False
@@ -298,11 +308,28 @@ def test_production_windows_render_and_capture(
     assert remap_window._map_usable
     capture("lpd8-controls")
 
+    # The minimized rail uses a custom-drawn control too. Include a focused
+    # example in the artifact so the visual reviewer can inspect its focus ring.
+    setup_window.set_visible(False)
+    remap_window.set_visible(False)
+    window.present()
+    pump(0.05)
+    window.minimise("vm_music")
+    pump(0.05)
+    focused_sliver = window.slivers["vm_music"]
+    assert focused_sliver.get_accessible_role() == Gtk.AccessibleRole.BUTTON
+    assert focused_sliver.grab_focus()
+    pump(0.02)
+    assert focused_sliver.has_focus()
+    capture("mixer-rail-focus", settle=0.0)
+
     # Stable evidence: the artifacts are all raster screenshots from the Xvfb
     # root window and contain the expected sample of production GUI states.
     assert {path.name for path in captures} == {
         "mixer-loading.png",
         "mixer-ready.png",
+        "mixer-fader-focus.png",
+        "mixer-rail-focus.png",
         "mixer-missing-device.png",
         "mixer-fault-banner.png",
         "setup.png",

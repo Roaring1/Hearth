@@ -156,7 +156,7 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 - Before the first verified collector snapshot, mixer strips now show a dim ghost state (`checking…` / `Loading apps…`) and disable actions until a snapshot is known. Confirmed missing devices still use `no device` and fault styling, not the loading style.
 - Added four original, hand-authored SVG action glyphs (`collapse`, `refresh`, `save`, `sliders`) and used icon-plus-visible-label buttons for Setup's save/reconnect/remap actions. Decorative SVG/app glyphs are marked presentation-only; minimize controls carry explicit accessible names. No AI image generation or third-party SVG assets were used.
 - Cold profiling on this desktop measured `icons._file_index()` at 2.58 seconds and `_entry_index()` at 180 ms. The UI now returns an immediate letter fallback and builds the indexes on a daemon worker, updating the widget via the GTK main loop once an actual icon is found. A separate GUI regression test ensures a cold lookup does not synchronously populate either index.
-- CI's GTK job now runs production GTK4 windows under a fixed 1600x1200 Xvfb display, captures six screenshots (loading, ready, missing device, fault banner, Setup and LPD8 Controls), and uploads `hearth-gtk-visual-audit` for 14 days. The package job checks all four SVGs after installation. `tests/test_gui_visual.py` exercises deterministic fixtures only; it does not touch PipeWire, systemd, the physical LPD8 or real user settings.
+- CI's GTK job now runs production GTK4 windows under a fixed 1600x1200 Xvfb display, captures eight screenshots (loading, ready, focused fader, missing device, fault banner, Setup, LPD8 Controls and focused minimized rail), and uploads `hearth-gtk-visual-audit` for 14 days. The package job checks all four SVGs after installation. `tests/test_gui_visual.py` exercises deterministic fixtures only; it does not touch PipeWire, systemd, the physical LPD8 or real user settings.
 - Final local validation after these changes: `./scripts/check.sh` passed with **471 tests**, Ruff, formatting, mypy (33 source files), legacy compile, desktop entry/AppStream metadata and ShellCheck. The GTK-only capture pass separately reported **48 passed**. The remaining AppStream output is the existing pedantic uppercase application-ID warning. GTK's bundled PyGObject currently emits external deprecation warnings in its asyncio integration; no test fails on those warnings.
 - Visual scope is intentionally a first slice, not a claim of full visual regression: screenshots are uploaded for human review but no approved pixel-diff baselines have been committed. Live Plasma/DPI/theme checks, keyboard focus/navigation, popover/menu flows and real unplug/replug remain outstanding. See `docs/UI_QUALITY_AUDIT.md`.
 
@@ -176,3 +176,22 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 - The current follow-up makes minimized channel slivers focusable GTK button-role widgets named `Restore {channel}`. Enter, keypad Enter and Space emit a restore request wired to the existing window restore method. The new Xvfb regression covers role/focusability and key activation while unrelated keys remain unhandled.
 - The current local full gate passes with **475 tests**; lint, formatting, mypy (33 source files), desktop entry, AppStream and ShellCheck pass. This new sliver change has not yet completed hosted CI; verify its run after pushing.
 - No live audio graph or systemd unit was changed. Real Plasma focus traversal, visible focus styling and AT-SPI/screen-reader announcements still need manual confirmation.
+
+
+## Latest checkpoint — visible keyboard focus artifacts (2026-10-29)
+
+- Expanded the GTK screenshot artifact from six to eight production captures:
+  `mixer-fader-focus.png` focuses the Game volume fader and
+  `mixer-rail-focus.png` focuses the minimized Music restore control. Both
+  tests assert that the widget actually acquired GTK focus before capturing.
+  The test restores normal focus after the first capture so subsequent default
+  states remain representative.
+- The focused captures passed locally under Xvfb; the full `./scripts/check.sh`
+  gate remains green with **475 tests**, Ruff lint/format, mypy (33 files),
+  desktop-entry/AppStream validation and ShellCheck. GTK emits an increased but
+  non-fatal number of existing PyGObject asyncio deprecation warnings because
+  the screenshot test pumps the GTK main loop while capturing multiple states.
+- This visual-evidence follow-up is pending its own hosted CI after push. CI #112
+  on the preceding minimized-rail commit passed all six jobs. The screenshot
+  suite still is not a pixel-diff baseline, and live Plasma/AT-SPI behavior is
+  not claimed from a headless display.

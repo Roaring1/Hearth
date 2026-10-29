@@ -29,14 +29,16 @@ mixer state.
 `SetupWindow`, and `RemapWindow` under Xvfb. It does **not** connect to live
 PipeWire, invoke systemd, access the installed LPD8 script, or mutate user
 settings. Backends and state are replaced with deterministic fixtures while
-the real GTK widgets and production styles render. It captures six named PNGs:
+the real GTK widgets and production styles render. It captures eight named PNGs:
 
 1. `mixer-loading.png`
 2. `mixer-ready.png`
-3. `mixer-missing-device.png`
-4. `mixer-fault-banner.png`
-5. `setup.png`
-6. `lpd8-controls.png`
+3. `mixer-fader-focus.png`
+4. `mixer-missing-device.png`
+5. `mixer-fault-banner.png`
+6. `setup.png`
+7. `lpd8-controls.png`
+8. `mixer-rail-focus.png`
 
 The test checks meaningful widget state (including loading controls disabled,
 ready controls enabled, missing-device state, and all eight pads/knobs), then
@@ -48,8 +50,10 @@ present after installing the built wheel.
 This is a first real-rendering/visual-evidence gate, **not yet a full visual
 regression suite**. It saves screenshots and checks that they're nonempty and
 appropriately sized, but there are not yet approved golden images with a pixel
-diff threshold. It doesn't yet automate every popup/menu, save failure, focus
-state, interaction flow, DPI scale, or Plasma theme.
+diff threshold. It doesn't yet automate every popup/menu, save failure,
+interaction flow, DPI scale, or Plasma theme. The focus captures prove the
+GTK focus ring can be rendered in Xvfb, not that every desktop theme or AT-SPI
+screen reader presents it optimally.
 
 ## First visual review
 
