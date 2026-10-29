@@ -464,3 +464,13 @@ row movement are checked in the safety test and real GTK production-window test.
 - The production GTK regression verifies `35%` from a deterministic active
   level, immediate `0%` on mute, stable `0%` across the next tick, and continued
   `0%` when the channel transitions to unavailable. No audio device is read.
+
+
+## Decorative dB ruler semantics — 2026-10-29
+
+- The static dB tick ruler next to each bus meter uses GTK's `PRESENTATION`
+  role because it is a non-interactive Cairo drawing area; the adjacent named
+  meter and channel fader already provide semantic values and interaction.
+- The production GTK test explicitly checks the contrast: `METER` for the live
+  level, `SLIDER` for the keyboard volume fader, and `PRESENTATION` for its
+  decorative ruler. This avoids exposing the ruler as an unnamed generic object.

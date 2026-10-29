@@ -216,6 +216,8 @@ def test_production_windows_render_and_capture(
     game_out = game_strip.out_button
     game_meter = game_strip.meter
     assert game_meter.get_accessible_role() == Gtk.AccessibleRole.METER
+    assert game_strip.fader.get_accessible_role() == Gtk.AccessibleRole.SLIDER
+    assert game_strip.scale.get_accessible_role() == Gtk.AccessibleRole.PRESENTATION
     assert "Game audio level" in accessible_labels[id(game_meter)]
     assert any(
         Gtk.AccessibleProperty.VALUE_MIN in properties

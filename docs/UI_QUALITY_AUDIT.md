@@ -318,3 +318,11 @@ muted or unavailable it announces `0%` and does not report the private smoothed
 level until it becomes active again. The production-window test checks active
 35%, mute reset, persistence across ticks, and unavailable-state zero. This
 changes accessible metadata only; the meter drawing and smoothing remain intact.
+
+
+## Decorative dB ruler role — 2026-10-29
+
+The non-interactive tick ruler beside the bus meter is now marked
+`PRESENTATION`, while the adjacent live level and volume controls remain a
+named `METER` and keyboard-operable `SLIDER`. The production GTK test asserts
+all three roles so the decorative ruler doesn't become a spurious unnamed item.
