@@ -487,3 +487,17 @@ row movement are checked in the safety test and real GTK production-window test.
   `76%` value, disappearance, a suppressed `82%` update during absence, and the
   `82%` metadata restoration before returning the fixture to `76%`. No live
   audio device or command is used.
+
+
+## Disable all route selectors while a route job is in flight — 2026-10-29
+
+- Route mutations now track the currently rendered OUT checks, raw microphone
+  input checks, and the Carla input toggle as one sensitivity set. Starting any
+  route job disables every dependent selector; completion restores each control's
+  previous sensitivity, so absent/unknown-device controls do not accidentally
+  become enabled. Input popovers opened or rebuilt while busy also create a
+  disabled Carla toggle with a clear `Another route change is still running`
+  tooltip, matching their raw source checkboxes.
+- Regression coverage extends the worker-thread route job test to assert OUT,
+  raw IN and Carla checks all disable and recover, and adds a popover test for
+  controls first opened while a route is already busy.

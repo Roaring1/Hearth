@@ -335,3 +335,12 @@ text `Unavailable` and numeric zero. Its old numeric value is held internally
 but not exposed during absence; on recovery the current actual percentage is
 published again. The production GTK regression covers disable, suppressed
 updates during unavailability, and recovery without talking to PipeWire.
+
+
+## Route-popover busy-state consistency — 2026-10-29
+
+A route mutation now disables every currently rendered output selector, raw
+microphone input selector and Carla input toggle, then restores each control's
+prior sensitivity. An input popover opened during a job also renders Carla
+insensitive with a busy tooltip. Tests cover both controls already present when
+the worker starts and controls created while the worker is already running.

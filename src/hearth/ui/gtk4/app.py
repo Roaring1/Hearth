@@ -253,8 +253,11 @@ class Strip(Gtk.Box):
         self.set_valign(Gtk.Align.START)
         self._held_until = 0.0
         self._hw_until = 0.0
-        # Destination checkboxes, kept so one endpoint can untick another.
+        # Route controls are tracked so one serialized mutation disables every
+        # affected input/output selector, not just the checkbox that started it.
         self._out_checks: dict[str, Gtk.CheckButton] = {}
+        self._in_checks: dict[str, Gtk.CheckButton] = {}
+        self._carla_check: Gtk.CheckButton | None = None
         self._routing = False
         self._route_busy = False
         self._route_errors: dict[str, str] = {}
@@ -783,7 +786,12 @@ class Strip(Gtk.Box):
         carla = Gtk.CheckButton(label="SM7B via Carla")
         carla.set_active(mic_routes.carla_enabled(conf, self.channel.sink))
         carla.set_tooltip_text("2i2 \u2192 Carla \u2192 this bus")
+        carla.set_sensitive(not self._route_busy)
+        if self._route_busy:
+            carla.set_tooltip_text("Another route change is still running")
         carla.connect("toggled", self._on_carla_in)
+        self._carla_check = carla
+        self._in_checks = {}
         box.append(carla)
 
         for label, source in MIC_SOURCES:
@@ -800,6 +808,7 @@ class Strip(Gtk.Box):
             elif source not in present:
                 check.set_tooltip_text("Not plugged in")
             check.connect("toggled", self._on_mic_in, source)
+            self._in_checks[source] = check
             box.append(check)
         self.in_popover.set_child(box)
 
@@ -939,7 +948,15 @@ class Strip(Gtk.Box):
         generation = self._route_generation
         self._route_prior_sensitivity = []
         seen: set[int] = set()
-        for widget in (*self._out_checks.values(), check):
+        controls = [
+            *self._out_checks.values(),
+            *getattr(self, "_in_checks", {}).values(),
+        ]
+        carla_check = getattr(self, "_carla_check", None)
+        if carla_check is not None:
+            controls.append(carla_check)
+        controls.append(check)
+        for widget in controls:
             if id(widget) in seen:
                 continue
             seen.add(id(widget))

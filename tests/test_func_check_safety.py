@@ -883,6 +883,86 @@ def test_input_popover_uses_cached_sources_without_pactl_io(
     assert checks["LifeCam"].tooltip == "Not plugged in"
 
 
+def test_input_popover_disables_carla_and_present_sources_during_route_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+
+    class FakeBox:
+        def __init__(self, **_kwargs) -> None:
+            self.children = []
+
+        def append(self, child) -> None:
+            self.children.append(child)
+
+    class FakeLabel:
+        def __init__(self, *, label: str, **_kwargs) -> None:
+            self.label = label
+
+        def add_css_class(self, *_args) -> None:
+            pass
+
+        def set_wrap(self, *_args) -> None:
+            pass
+
+    class FakeCheck:
+        def __init__(self, *, label: str) -> None:
+            self.label = label
+            self.active = False
+            self.sensitive = True
+            self.tooltip = None
+
+        def set_active(self, active: bool) -> None:
+            self.active = active
+
+        def set_sensitive(self, sensitive: bool) -> None:
+            self.sensitive = sensitive
+
+        def set_tooltip_text(self, tooltip: str | None) -> None:
+            self.tooltip = tooltip
+
+        def connect(self, *_args) -> None:
+            pass
+
+    class FakePopover:
+        child = None
+
+        def set_child(self, child) -> None:
+            self.child = child
+
+    monkeypatch.setattr(mixer.Gtk, "Box", FakeBox)
+    monkeypatch.setattr(mixer.Gtk, "Label", FakeLabel)
+    monkeypatch.setattr(mixer.Gtk, "CheckButton", FakeCheck)
+    monkeypatch.setattr(mixer.mic_routes, "read", lambda: {})
+    strip = SimpleNamespace(
+        win=SimpleNamespace(
+            _routes={"sm7b_mono": {"mic_b1"}},
+            _sources_present={"sm7b_mono", "astro_mic_48k"},
+            _sources_known=True,
+        ),
+        channel=SimpleNamespace(sink="mic_b1"),
+        in_popover=FakePopover(),
+        _route_busy=True,
+        _route_popover_dirty=False,
+        _on_carla_in=lambda *_args: None,
+        _on_mic_in=lambda *_args: None,
+    )
+
+    mixer.Strip._fill_inputs(strip)
+
+    checks = {
+        check.label: check
+        for check in strip.in_popover.child.children
+        if hasattr(check, "sensitive")
+    }
+    assert checks["SM7B via Carla"].sensitive is False
+    assert "still running" in checks["SM7B via Carla"].tooltip
+    assert checks["SM7B (raw)"].sensitive is False
+    assert checks["A50 boom mic"].sensitive is False
+    assert "still running" in checks["SM7B (raw)"].tooltip
+    assert strip._route_popover_dirty is True
+
+
 def test_route_settled_keeps_checkbox_state_when_module_read_is_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1061,6 +1141,8 @@ def test_route_job_runs_off_caller_thread_and_disables_controls_until_reconcile(
 
     monkeypatch.setattr(mixer.GLib, "idle_add", queue_idle)
     check = FakeCheck(True)
+    input_check = FakeCheck(True)
+    carla_check = FakeCheck(True)
     strip = SimpleNamespace(
         _routing=False,
         _route_busy=False,
@@ -1070,6 +1152,8 @@ def test_route_job_runs_off_caller_thread_and_disables_controls_until_reconcile(
         _route_popover_dirty=False,
         _refresh_visible_route_popovers=lambda **_kwargs: None,
         _out_checks={"vm_chat": check},
+        _in_checks={"sm7b_mono": input_check},
+        _carla_check=carla_check,
         channel=SimpleNamespace(sink="vm_game"),
         win=SimpleNamespace(collector=FakeCollector()),
     )
@@ -1084,6 +1168,8 @@ def test_route_job_runs_off_caller_thread_and_disables_controls_until_reconcile(
     mixer.Strip._start_route_job(strip, operation, check, True, route_sink="vm_chat")
 
     assert not check.sensitive
+    assert not input_check.sensitive
+    assert not carla_check.sensitive
     assert finished.wait(timeout=2)
     assert callback_ready.wait(timeout=2)
     assert operation_thread[0] != caller
@@ -1095,6 +1181,8 @@ def test_route_job_runs_off_caller_thread_and_disables_controls_until_reconcile(
 
     assert strip._route_busy is False
     assert check.sensitive is True
+    assert input_check.sensitive is True
+    assert carla_check.sensitive is True
     assert check.active is True
 
 
