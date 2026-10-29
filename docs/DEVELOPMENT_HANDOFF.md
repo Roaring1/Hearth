@@ -2,7 +2,19 @@
 
 This document is the durable checkpoint for the current repair/audit pass. It is kept in the PR branch so work can continue even when the NobaraSupervisor connection to the development PC is unavailable.
 
-## Latest verified checkpoint — 2026-10-28 16:31 PDT
+## Latest verified checkpoint — 2026-10-28 17:22 PDT
+
+- The audited source tree was clean at [`6d4edd6`](https://github.com/Roaring1/Hearth/commit/6d4edd655917eb3021f5a4d3440b25c055013293); this checkpoint changes documentation only, not app code. PR #1 remains open, mergeable and unmerged.
+- `./scripts/check.sh` was rerun on that source tree: Ruff lint/format passed, mypy passed on 33 source files, **460 pytest tests passed**, legacy compile, desktop-entry validation and ShellCheck passed; AppStream validation succeeds with its existing pedantic uppercase application-ID warning. GitHub Actions run [#94](https://github.com/Roaring1/Hearth/actions/runs/40788233279) has all six jobs green for source commit `6d4edd6` (lint/types, Python 3.11/3.12/3.13, GTK4 import smoke and install smoke).
+- Additional controls smoke tests used private copies under `/tmp`, private XDG config/state/runtime directories, and a headless Xvfb display. After the user reported that host pointer automation affected Firefox, no more pointer or keyboard input was sent to the physical desktop. The temporary test code and hooks were never committed.
+- The per-app slider on a zero-valued synthetic stream changed from 100% to 93%, PipeWire reflected the change, and the stream was restored to 100%. Its mute/unmute UI buttons changed the stream mute state `no → yes → no`. The Game bus mute UI control also changed `no → yes → no`; Game was restored unmuted. These tests produced no audible signal.
+- A real bus-fader drag on an isolated test UI moved Chat from 58% to 61%, as observed by PipeWire, then restored it to 58%. A separate headless Xvfb test dragged only the zero-valued `Hearth_UI_DragSmokeTest` stream from `vm_game` (sink index 38) to `vm_chat` (sink index 40); the sink change was verified, the stream was returned to `vm_game`, and that stream was then terminated. The live bus levels/mute flags did not change as a result of the app drag.
+- The Chat OUT popover was visually confirmed on an isolated virtual KWin display: it showed `A50 game`, `A50 chat`, `Scarlett`, and `Share`, with `A50 chat` checked and the other choices unchecked. A test-only checkbox callback also enabled a temporary `vm_chat.monitor → hearth_ui_route_test_aux_sink` route and showed the controls becoming insensitive while the route worker was busy. The test helper did **not** complete the OFF callback reliably; the temporary route was removed by unloading only its own module. Therefore, do not mark interactive route-enable/disable and busy-recovery as fully verified. The Mic B1 IN popover was observed open once via the private helper, but an open-and-close pointer sequence was not confirmed.
+- Still unverified: Setup headset-save/restart feedback and physical LPD8 LED feedback. No LPD8 mapping was edited and no test command intentionally drove the hardware LEDs. Do not treat the full interactive smoke test as complete yet.
+- Final read-only audio check after cleanup: `vm_game` 76%, `vm_chat` 58%, `vm_music` 29%, and `vm_share` 100%, all unmuted. The original Game and Chat loopbacks to the Astro A50 chat output were intact; the test-only null sink and our DnD stream were removed. One separate zero-valued `Hearth_UI_SmokeTest` stream was still present on `vm_game` from a process outside this isolated test tree; it was left untouched because its ownership was unclear. Confirm ownership before stopping it.
+- `pipewire.service`, `pipewire-pulse.service`, `wireplumber.service`, `lpd8-mixer.service`, and `roaring-audio-routesd.service` remained active/running with `Result=success`; `hearth-ui.service` remained inactive/dead with `Result=success`. No systemd unit was started, stopped or restarted during this pass.
+
+## Earlier checkpoint — 2026-10-28 16:31 PDT
 
 - NobaraSupervisor reconnection is healthy: service version 1.5.0, OAuth enabled, user session `roaring` (UID 1000), and no active subprocess.
 - Current branch HEAD is [`677f443`](https://github.com/Roaring1/Hearth/commit/677f443bc4b97f3b416ca71c5abbd232207fbaa7), a documentation-only service-restart-policy update. The latest GTK changes are in [`a4b637e`](https://github.com/Roaring1/Hearth/commit/a4b637edbedf68897c1f3a8fa417d0d97a2d8dfa) and [`dc839f2`](https://github.com/Roaring1/Hearth/commit/dc839f26870c269d5bd3cea95d62bd452e925fde). CI runs [#90](https://github.com/Roaring1/Hearth/actions/runs/40786803750), [#92](https://github.com/Roaring1/Hearth/actions/runs/40787232387), and [#93](https://github.com/Roaring1/Hearth/actions/runs/40787755262) all passed all six jobs for their respective heads, including lint/types, Python 3.11/3.12/3.13 tests, GTK4/Xvfb smoke, and install smoke.
@@ -22,10 +34,10 @@ This document is the durable checkpoint for the current repair/audit pass. It is
 - PR status: open, mergeable, **not merged**.
 - Base commit: 4600ebed949107114822827056f09d7cd0780b4e (the PR base; main has not been changed by this work).
 - Branch: fix/gtk4-install-and-smoke-test
-- Local checkout is synchronized and clean at branch head `677f443bc4b97f3b416ca71c5abbd232207fbaa7`; recent commits after the last code commit are handoff/documentation updates. The diagnostic bundle script is executable (`100755`) again after a GitHub contents-API edit had changed its mode.
+- At the start of the 17:22 PDT checkpoint, the audited code tree was synchronized and clean at `6d4edd655917eb3021f5a4d3440b25c055013293`; this checkpoint is a documentation-only follow-up. The diagnostic bundle script is executable (`100755`) again after a GitHub contents-API edit had changed its mode.
 - CI run #83 for `43e7c1c` passed lint/types, GTK4 smoke, Python 3.11/3.12/3.13 and install smoke: https://github.com/Roaring1/Hearth/actions/runs/40784116221.
 - CI run #84 for `d8ad784` passed: https://github.com/Roaring1/Hearth/actions/runs/40784293718. CI run #85 for `7ab6bec` passed all jobs: https://github.com/Roaring1/Hearth/actions/runs/40784474690.
-- CI runs #86 (`d86b030`), #87 (`65047a6`), #88 (`a82b57b`), #89 (`a4b637e`), #90 (`dc839f2`), #92 (`3a39766`), and #93 (`677f443`) all passed all six jobs. Current-head run #93: https://github.com/Roaring1/Hearth/actions/runs/40787755262. Always use the newest branch head and workflow run as current truth.
+- CI runs #86 (`d86b030`), #87 (`65047a6`), #88 (`a82b57b`), #89 (`a4b637e`), #90 (`dc839f2`), #92 (`3a39766`), #93 (`677f443`), and #94 (`6d4edd6`) all passed all six jobs. Run #94 is the latest verification of the audited code tree: https://github.com/Roaring1/Hearth/actions/runs/40788233279. Always use the newest branch head and workflow run as current truth.
 - The PR currently contains many small commits because GitHub's file-update endpoint made one commit per file while the development PC connector was unavailable. Prefer **Squash and merge** (or consolidate history before merging) instead of preserving the entire incremental history. Do not merge without the maintainer's decision.
 
 ## CI evidence
@@ -103,7 +115,7 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 
 ### P0 — remaining interactive verification
 
-1. Finish the normal Plasma-session interactive smoke test. Main mixer and LPD8 Remap launch/render are now verified, but still test actual per-app/bus slider movement, per-app mute, drag-to-move, IN/OUT popover open/close and route-job busy behavior, Setup-save feedback, and LPD8 LED feedback. Avoid claiming success for any control not exercised. Check responsiveness with pactl/ALSA slow or the controller disconnected.
+1. Finish the remaining interactive checks. Main mixer and LPD8 Remap launch/render, synthetic-stream per-app volume/mute, Game bus mute, Chat bus fader movement, and app drag-to-move to another bus have now been exercised in isolated test sessions. Still confirm normal pointer-driven IN/OUT route open/close plus OFF completion and route-job busy recovery, Setup-save feedback, and LPD8 LED feedback. Route-on worker-disable behavior was observed, but the off callback stalled in the test harness and cleanup had to unload only the temporary null-sink route directly. Do not overstate this as a complete route test. Check responsiveness with pactl/ALSA slow or the controller disconnected.
 2. The `config.json` audit is complete: there is no in-app writer. `src/hearth/config.py` only reads/parses it, and legacy callers delegate to that read path. The on-disk file was secured to `0600`; do not copy its contents into the public repo. If a writer is added later, require atomic 0600 writes and a regression test.
 3. `hearth-ui.service` last exited cleanly with status 0; do not restart it automatically. When the user next opens Hearth through their normal desktop flow, verify the UI remains responsive and exercise the new per-app volume control and Setup-save feedback.
 
@@ -116,6 +128,6 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 
 ## Safety boundaries
 
-- This audit has not intentionally changed a live audio graph or restarted user routing services.
+- Live audio state was changed only transiently for the controlled tests: a synthetic zero-valued stream, its test-only route to a virtual null sink, and brief Chat/Game mute/volume interactions. The synthetic DnD stream was moved back and terminated, our route module and null sink were removed, and Chat was restored to 58%/unmuted; final read-only samples were stable. One separate zero-valued `Hearth_UI_SmokeTest` stream remained and was deliberately left untouched because its owner was unclear. No physical routing/config file, LPD8 mapping or systemd unit was changed by this pass.
 - Do not publish local status dumps, VU captures, private config contents, tokens, or full logs in public GitHub issues/PR comments. Share a redacted excerpt only when necessary.
 - Do not merge PR #1 automatically. Main is unchanged by this repair branch.
