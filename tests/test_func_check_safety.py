@@ -83,6 +83,103 @@ def test_listener_rows_are_not_rebuilt_for_identical_snapshots() -> None:
     assert synced == [listeners]
 
 
+def test_app_mute_cache_reconciles_a_stale_backend_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A successful launch must not pin the optimistic mute state in the UI."""
+    mixer = _load_mixer()
+    monkeypatch.setattr(mixer.pactl, "set_stream_mute", lambda *_args: True)
+    monkeypatch.setattr(mixer, "_set_mute_icon", lambda *_args: None)
+    cleared: list[object] = []
+
+    class FakeWidget:
+        def __init__(self, *args, **kwargs) -> None:
+            self.children: list[FakeWidget] = []
+            self.classes: set[str] = set()
+            self.parent = None
+
+        def __getattr__(self, _name):
+            return lambda *_args, **_kwargs: None
+
+        def append(self, child) -> None:
+            self.children.append(child)
+            child.parent = self
+
+        def get_parent(self):
+            return self.parent
+
+        def get_first_child(self):
+            return self.children[0] if self.children else None
+
+        def get_next_sibling(self):
+            if self.parent is None:
+                return None
+            try:
+                index = self.parent.children.index(self)
+            except ValueError:
+                return None
+            return (
+                self.parent.children[index + 1] if index + 1 < len(self.parent.children) else None
+            )
+
+        def add_css_class(self, name: str) -> None:
+            self.classes.add(name)
+
+        def remove_css_class(self, name: str) -> None:
+            self.classes.discard(name)
+
+        def set_tooltip_text(self, _tooltip: str | None) -> None:
+            pass
+
+    class FakeScale(FakeWidget):
+        @classmethod
+        def new_with_range(cls, *_args):
+            return cls()
+
+    monkeypatch.setattr(mixer.Gtk, "Box", FakeWidget)
+    monkeypatch.setattr(mixer.Gtk, "Label", FakeWidget)
+    monkeypatch.setattr(mixer.Gtk, "Button", FakeWidget)
+    monkeypatch.setattr(mixer.Gtk, "Scale", FakeScale)
+    monkeypatch.setattr(mixer.Gtk, "DragSource", FakeWidget)
+    monkeypatch.setattr(
+        mixer.Strip, "_clear", lambda _self, box: (cleared.append(box), box.children.clear())
+    )
+    monkeypatch.setattr(mixer.Strip, "_mark", lambda _self, _name, _size: FakeWidget())
+    monkeypatch.setattr(mixer.Strip, "_sync_listener_volumes", lambda _self, _items: None)
+
+    initial = mixer.Listener(name="Firefox", muted=False, index="42", volume=63)
+    strip = SimpleNamespace(
+        channel=SimpleNamespace(group="audio"),
+        listeners=FakeWidget(),
+        _listener_signature=None,
+        _listener_volume_controls={},
+        _listener_volume_held={},
+        _on_app_volume=lambda *_args: None,
+        _on_app_mute=lambda *_args: None,
+    )
+    strip._clear = lambda box: mixer.Strip._clear(strip, box)
+    strip._mark = lambda name, size: mixer.Strip._mark(strip, name, size)
+    strip._sync_listener_volumes = lambda items: mixer.Strip._sync_listener_volumes(strip, items)
+
+    mixer.Strip._fill_listeners(strip, [initial])
+    original_row = strip.listeners.children[0]
+    mute_button = original_row.children[4]
+    name_label = original_row.children[1]
+
+    mixer.Strip._on_app_mute(strip, mute_button, initial)
+    assert initial.muted is True
+    assert strip._listener_signature == (("42", "Firefox", True),)
+    assert "muted" in name_label.classes
+
+    # A stale backend snapshot must rebuild the row to its observed state.
+    stale_snapshot = mixer.Listener(name="Firefox", muted=False, index="42", volume=63)
+    mixer.Strip._fill_listeners(strip, [stale_snapshot])
+    assert len(cleared) == 2
+    assert strip._listener_signature == (("42", "Firefox", False),)
+    assert strip.listeners.children[0] is not original_row
+    assert "muted" not in strip.listeners.children[0].children[1].classes
+
+
 def test_per_app_volume_callback_queues_stream_not_bus(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

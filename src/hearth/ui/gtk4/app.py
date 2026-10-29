@@ -1031,14 +1031,38 @@ class Strip(Gtk.Box):
             button.set_tooltip_text("Could not change app mute; check pactl/PipeWire")
             self.win.collector.refresh_now()
             return
-        # Paint immediately; the next snapshot confirms it.
+        # Paint immediately, but advance the cache to that optimistic state.
+        # If the next collector snapshot disagrees (the command launched but
+        # PipeWire did not apply it), its signature must differ and rebuild
+        # the row back to the state actually observed from the backend.
         listener.muted = muted
+        signature = getattr(self, "_listener_signature", None)
+        if signature is not None:
+            self._listener_signature = tuple(
+                (
+                    index,
+                    name,
+                    muted if index == listener.index and name == listener.name else was_muted,
+                )
+                for index, name, was_muted in signature
+            )
         _set_mute_icon(button, muted)
         button.set_tooltip_text(f"Unmute {listener.name}" if muted else f"Mute {listener.name}")
         if muted:
             button.add_css_class("on")
         else:
             button.remove_css_class("on")
+
+        # Cached rows are intentionally retained between snapshots, so keep
+        # the visible app-name styling in sync with the mute button as well.
+        row = button.get_parent()
+        mark = row.get_first_child() if row is not None else None
+        name_label = mark.get_next_sibling() if mark is not None else None
+        if name_label is not None:
+            if muted:
+                name_label.add_css_class("muted")
+            else:
+                name_label.remove_css_class("muted")
 
     def _on_app_volume(self, scale: Gtk.Scale, listener: Listener) -> None:
         """Adjust one sink input without changing the bus volume."""
