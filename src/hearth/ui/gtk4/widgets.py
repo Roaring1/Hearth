@@ -365,12 +365,8 @@ class Scale(Gtk.DrawingArea):
             cr.show_text(text)
 
 
-class Sliver(Gtk.DrawingArea):
-    """A keyboard-accessible restore button drawn as a compact channel sliver."""
-
-    __gsignals__: ClassVar[dict] = {
-        "restore-requested": (GObject.SignalFlags.RUN_FIRST, None, ()),
-    }
+class Sliver(Gtk.Button):
+    """A minimized channel represented by a native, accessible GTK button."""
 
     def __init__(
         self,
@@ -385,34 +381,22 @@ class Sliver(Gtk.DrawingArea):
         self._level = 0.0
         self._muted = False
         self._horizontal = horizontal
-        self.set_focusable(True)
-        self.set_accessible_role(Gtk.AccessibleRole.BUTTON)
+        # Keep the custom drawing inside a native button. GTK then supplies
+        # the actual accessible button action and standard Space/Enter behavior
+        # rather than asking assistive technology to operate a DrawingArea.
+        canvas = Gtk.DrawingArea()
+        canvas.set_content_width(length if horizontal else 24)
+        canvas.set_content_height(24 if horizontal else length)
+        canvas.set_draw_func(self._draw)
+        canvas.set_can_target(False)
+        canvas.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
+        self._canvas = canvas
+        self.set_child(canvas)
         self.update_property([Gtk.AccessibleProperty.LABEL], [f"Restore {name}"])
-        keys = Gtk.EventControllerKey()
-        keys.connect("key-pressed", self._on_key_pressed)
-        self.add_controller(keys)
-        # ``length`` is the long axis either way: a rail along the bottom of
-        # the window wants wide, short slivers, not rotated tall ones.
-        self.set_content_width(length if horizontal else 24)
-        self.set_content_height(24 if horizontal else length)
-        self.set_draw_func(self._draw)
 
     def feed(self, level: float, muted: bool) -> None:
         self._level, self._muted = level, muted
-        self.queue_draw()
-
-    def _on_key_pressed(
-        self,
-        _controller: Gtk.EventControllerKey,
-        keyval: int,
-        _keycode: int,
-        _state: Gdk.ModifierType,
-    ) -> bool:
-        """Restore the channel when this focused control is activated."""
-        if keyval not in (Gdk.KEY_space, Gdk.KEY_Return, Gdk.KEY_KP_Enter):
-            return False
-        self.emit("restore-requested")
-        return True
+        self._canvas.queue_draw()
 
     def _draw(self, _area: Gtk.DrawingArea, cr, w: int, h: int) -> None:
         cr.set_source_rgb(*parse_rgb(self._pal["view-alt"]))

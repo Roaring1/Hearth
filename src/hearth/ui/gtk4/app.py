@@ -1532,11 +1532,8 @@ class MixerWindow(Gtk.ApplicationWindow):
             )
             sliver.set_vexpand(vertical)
             sliver.set_hexpand(not vertical)
-            click = Gtk.GestureClick()
-            click.connect("released", lambda *_a, s=sink: self.restore(s))
             sliver.add_css_class("sliver")
-            sliver.add_controller(click)
-            sliver.connect("restore-requested", lambda _sliver, s=sink: self.restore(s))
+            sliver.connect("clicked", lambda _sliver, s=sink: self.restore(s))
             sliver.set_tooltip_text(f"Restore {channel.name}")
             self.rail.append(sliver)
             self.slivers[sink] = sliver

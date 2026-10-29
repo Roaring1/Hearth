@@ -426,8 +426,7 @@ def test_minimised_sliver_is_a_keyboard_accessible_restore_button() -> None:
     import gi
 
     gi.require_version("Gtk", "4.0")
-    gi.require_version("Gdk", "4.0")
-    from gi.repository import Gdk, Gtk
+    from gi.repository import Gtk
 
     from hearth.ui.gtk4.widgets import Sliver
 
@@ -439,13 +438,14 @@ def test_minimised_sliver_is_a_keyboard_accessible_restore_button() -> None:
         "fg": "#eeeeee",
     }
     sliver = Sliver(palette, "Game", 56)
+    assert isinstance(sliver, Gtk.Button)
     assert sliver.get_focusable()
     assert sliver.get_accessible_role() == Gtk.AccessibleRole.BUTTON
 
     activations: list[bool] = []
-    sliver.connect("restore-requested", lambda *_args: activations.append(True))
-    assert sliver._on_key_pressed(None, Gdk.KEY_Return, 0, Gdk.ModifierType(0))
-    assert sliver._on_key_pressed(None, Gdk.KEY_space, 0, Gdk.ModifierType(0))
-    assert activations == [True, True]
-    assert not sliver._on_key_pressed(None, Gdk.KEY_Escape, 0, Gdk.ModifierType(0))
-    assert activations == [True, True]
+    sliver.connect("clicked", lambda *_args: activations.append(True))
+    # Activation belongs to the native button, preserving GTK's standard
+    # keyboard and assistive-technology action instead of a simulated key path.
+    sliver.emit("clicked")
+    assert activations == [True]
+    assert sliver.get_child().get_accessible_role() == Gtk.AccessibleRole.PRESENTATION

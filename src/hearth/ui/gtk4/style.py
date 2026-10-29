@@ -120,6 +120,18 @@ window.hearth {{
               color 140ms ease-out, opacity 160ms ease-out;
 }}
 
+button.sliver {{
+  background: transparent;
+  background-image: none;
+  box-shadow: none;
+  border: none;
+  border-radius: 3px;
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+}}
+button.sliver:hover {{ background: transparent; background-image: none; box-shadow: none; }}
+
 /* ---- routing popover --------------------------------------------- */
 .outbtn {{
   background: {pal["view-alt"]};

@@ -141,18 +141,20 @@ screen reader presents it optimally.
 
 ## Keyboard-accessible minimized-channel rail — 2026-10-29
 
-- Minimized channel slivers now behave as real keyboard-accessible controls:
-  they are focusable, expose the GTK button role, and announce `Restore
-  {channel}` to assistive technology instead of being anonymous drawing areas.
-- Enter, keypad Enter and Space emit a `restore-requested` signal. The main
-  window wires this into the same existing restore operation used by pointer
-  activation, so keyboard restoration doesn't fork persistence/layout logic.
-- Xvfb regression coverage checks the button role and focusability, Enter/Space
-  activation and ignored unrelated keys. The test remains isolated from the
-  host desktop and audio graph.
+- Minimized channel slivers are native `Gtk.Button` widgets with a decorative
+  custom-drawn child. They expose the button role and `Restore {channel}` name,
+  and rely on GTK's built-in button action for pointer, Enter/Space and
+  assistive-technology activation instead of simulating those behaviors on a
+  `DrawingArea`.
+- Xvfb regression coverage checks that the sliver is a native button, is
+  focusable, has a decorative child and routes its `clicked` signal. The test
+  does not synthesize key events; keyboard and assistive-technology activation
+  are delegated to GTK's native button implementation. The test remains
+  isolated from the host desktop and audio graph.
 - Local `./scripts/check.sh` passes with **475 tests** and the complete lint,
   format, mypy, metadata and ShellCheck gates. The previous accessible-fader
   commit (`4e834c4`) passed hosted CI run [#111](https://github.com/Roaring1/Hearth/actions/runs/40951877992).
-- Live Plasma focus traversal, AT-SPI label inspection and visual focus-ring
-  confirmation are still manual verification items; Xvfb tests only establish
-  the widget semantics and key handler behavior.
+- Live Plasma focus traversal and AT-SPI/screen-reader inspection remain manual
+  verification items. Xvfb establishes the widget type/role, focusability and
+  visible focus state, but does not establish the user's desktop screen-reader
+  announcements or theme-specific behavior.

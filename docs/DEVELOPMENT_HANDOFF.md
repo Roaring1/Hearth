@@ -173,7 +173,7 @@ No dump or log contents were published to GitHub. Machine-specific configuration
 ## Latest checkpoint — keyboard-accessible minimized rail (2026-10-29)
 
 - Hosted CI [run #111](https://github.com/Roaring1/Hearth/actions/runs/40951877992) passed all six jobs for commit [`4e834c4`](https://github.com/Roaring1/Hearth/commit/4e834c487e94a7031703c2ce39835491944ae484), including GUI screenshots and installed SVG resource checks.
-- The current follow-up makes minimized channel slivers focusable GTK button-role widgets named `Restore {channel}`. Enter, keypad Enter and Space emit a restore request wired to the existing window restore method. The new Xvfb regression covers role/focusability and key activation while unrelated keys remain unhandled.
+- The current follow-up makes minimized channel slivers native `Gtk.Button` widgets with a decorative drawing child, a `Restore {channel}` accessible name, and native GTK activation routed to the existing window restore method. This preserves the compact custom graphic while letting GTK provide standard keyboard and assistive-technology button actions.
 - The current local full gate passes with **475 tests**; lint, formatting, mypy (33 source files), desktop entry, AppStream and ShellCheck pass. This new sliver change has not yet completed hosted CI; verify its run after pushing.
 - No live audio graph or systemd unit was changed. Real Plasma focus traversal, visible focus styling and AT-SPI/screen-reader announcements still need manual confirmation.
 
@@ -195,3 +195,24 @@ No dump or log contents were published to GitHub. Machine-specific configuration
   on the preceding minimized-rail commit passed all six jobs. The screenshot
   suite still is not a pixel-diff baseline, and live Plasma/AT-SPI behavior is
   not claimed from a headless display.
+
+
+## Latest checkpoint — native rail activation semantics (2026-10-29)
+
+- Minimized channel slivers now extend `Gtk.Button`; their custom Cairo drawing
+  lives in a decorative, non-targetable `Gtk.DrawingArea` child. This gives the
+  control GTK's native button action and its standard keyboard/assistive-tech
+  activation instead of manually imitating a button on a drawing area. The
+  click signal still routes to the existing `MixerWindow.restore()` path.
+- Added minimal button CSS to suppress the desktop theme's default fill/border
+  while retaining the `.hearth *:focus` outline. This preserves the compact rail
+  design while moving the focus/action semantics to the actual button.
+- Focused fader and minimized-rail screenshot captures are in the visual artifact
+  from CI #113. Their dimensions and screenshot validation passed; the fader
+  focus outline causes a measurable pixel difference from the default ready
+  screenshot. Run [#113](https://github.com/Roaring1/Hearth/actions/runs/40954289258)
+  passed all six jobs on the previous screenshot-expansion commit.
+- The current native-button refactor passes the full local gate with **475 tests**,
+  including actual GTK window capture under Xvfb. The isolated AT-SPI tree probe
+  did not complete reliably, so do not claim screen-reader name/action verification;
+  live Plasma/AT-SPI is still outstanding. This change is pending its own hosted CI.
