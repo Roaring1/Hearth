@@ -539,7 +539,8 @@ row movement are checked in the safety test and real GTK production-window test.
   paths. The lock file intentionally persists at mode `0600`; deleting it on
   unlock would let later processes lock different inodes.
 - Regression coverage starts two contenders against one stale socket and
-  asserts exactly one live listener, and verifies symlinked locks never touch
-  their target files. The focused IPC suite passes **36 tests**; the full local
-  gate passes **487 tests**, with Ruff, formatting, mypy (34 source files),
-  metadata checks and ShellCheck green.
+  asserts exactly one live listener, verifies symlinked/hard-linked locks never
+  touch their target files, and confirms the persistent lock has mode `0600`.
+  The focused IPC suite passes **38 tests**; the full local gate passes **489
+  tests**, with Ruff, formatting, mypy (34 source files), metadata checks and
+  ShellCheck green.

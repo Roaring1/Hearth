@@ -153,6 +153,29 @@ def test_stale_cleanup_never_removes_a_regular_file(sock_path):
     assert sock_path.read_text() == "not a socket"
 
 
+def test_socket_path_lock_file_is_owner_only(running, sock_path):
+    lock_path = sock_path.with_name(f".{sock_path.name}.lock")
+    metadata = lock_path.stat()
+    assert metadata.st_mode & 0o777 == 0o600
+    assert metadata.st_nlink == 1
+
+
+def test_bind_refuses_a_hard_linked_lock_file(sock_path):
+    sock_path.parent.mkdir(parents=True, exist_ok=True)
+    victim = sock_path.parent / "unrelated.txt"
+    victim.write_text("keep this file")
+    lock_path = sock_path.with_name(f".{sock_path.name}.lock")
+    os.link(victim, lock_path)
+
+    srv = server.Server(lambda _request: "ok", socket_path=sock_path)
+    with pytest.raises(OSError, match="hard-linked"):
+        srv.bind()
+
+    assert not sock_path.exists()
+    assert victim.read_text() == "keep this file"
+    assert victim.stat().st_nlink == 2
+
+
 def test_bind_refuses_a_symlinked_lock_file(sock_path):
     sock_path.parent.mkdir(parents=True, exist_ok=True)
     victim = sock_path.parent / "unrelated.txt"
