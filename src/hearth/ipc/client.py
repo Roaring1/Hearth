@@ -16,6 +16,7 @@ from pathlib import Path
 from hearth import paths
 from hearth.errors import IpcError
 from hearth.ipc import protocol
+from hearth.ipc.path_lock import socket_path_lock
 
 log = logging.getLogger(__name__)
 
@@ -49,13 +50,23 @@ def is_running(*, socket_path: Path | None = None) -> bool:
 
 
 def clear_stale_socket(socket_path: Path | None = None) -> bool:
+    """Remove a stale socket while serializing with competing app startups."""
+    path = socket_path or paths.socket_file()
+    try:
+        with socket_path_lock(path):
+            return _clear_stale_socket_locked(path)
+    except OSError as exc:
+        log.debug("could not lock IPC path %s for stale cleanup: %s", path, exc)
+        return False
+
+
+def _clear_stale_socket_locked(path: Path) -> bool:
     """Remove a stale Unix socket without unlinking a live or unrelated path.
 
     A reply timeout does not mean a listener is dead: it may simply be busy.
     A successful connect proves that something is listening, even when its
     handler takes longer than the normal CLI timeout to reply.
     """
-    path = socket_path or paths.socket_file()
     try:
         initial = path.lstat()
     except FileNotFoundError:

@@ -153,6 +153,77 @@ def test_stale_cleanup_never_removes_a_regular_file(sock_path):
     assert sock_path.read_text() == "not a socket"
 
 
+def test_bind_refuses_a_symlinked_lock_file(sock_path):
+    sock_path.parent.mkdir(parents=True, exist_ok=True)
+    victim = sock_path.parent / "unrelated.txt"
+    victim.write_text("keep this file")
+    sock_path.with_name(f".{sock_path.name}.lock").symlink_to(victim)
+
+    srv = server.Server(lambda _request: "ok", socket_path=sock_path)
+    with pytest.raises(OSError):
+        srv.bind()
+
+    assert not sock_path.exists()
+    assert victim.read_text() == "keep this file"
+
+
+def test_concurrent_starts_of_a_stale_socket_leave_one_live_listener(sock_path):
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale.bind(str(sock_path))
+    stale.close()
+
+    barrier = threading.Barrier(3)
+    servers = [
+        server.Server(lambda _request, reply=f"listener-{i}": reply, socket_path=sock_path)
+        for i in range(2)
+    ]
+    outcomes: list[tuple[server.Server, OSError | None]] = []
+    outcome_lock = threading.Lock()
+
+    def launch(candidate: server.Server) -> None:
+        barrier.wait()
+        try:
+            candidate.start()
+        except OSError as exc:
+            result = (candidate, exc)
+        else:
+            result = (candidate, None)
+        with outcome_lock:
+            outcomes.append(result)
+
+    workers = [threading.Thread(target=launch, args=(item,), daemon=True) for item in servers]
+    for worker in workers:
+        worker.start()
+    barrier.wait()
+    for worker in workers:
+        worker.join(timeout=2.0)
+        assert not worker.is_alive()
+
+    successful = [candidate for candidate, error in outcomes if error is None]
+    failed = [error for _candidate, error in outcomes if error is not None]
+    assert len(successful) == 1
+    assert len(failed) == 1
+    assert failed[0] is not None
+    assert "already has a listener" in str(failed[0])
+    assert sock_path.exists()
+    assert client.send("show", socket_path=sock_path) in {"listener-0", "listener-1"}
+    successful[0].stop()
+
+
+def test_stale_cleanup_refuses_a_symlinked_lock_file(sock_path):
+    sock_path.parent.mkdir(parents=True, exist_ok=True)
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale.bind(str(sock_path))
+    stale.close()
+    victim = sock_path.parent / "unrelated.txt"
+    victim.write_text("keep this file")
+    sock_path.with_name(f".{sock_path.name}.lock").symlink_to(victim)
+
+    assert client.clear_stale_socket(sock_path) is False
+    assert sock_path.exists()
+    assert victim.read_text() == "keep this file"
+
+
 def test_bind_replaces_a_stale_unix_socket(sock_path):
     sock_path.parent.mkdir(parents=True, exist_ok=True)
     stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

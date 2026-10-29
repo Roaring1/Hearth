@@ -22,6 +22,7 @@ from pathlib import Path
 from hearth import paths
 from hearth.errors import IpcError
 from hearth.ipc import protocol
+from hearth.ipc.path_lock import socket_path_lock
 
 log = logging.getLogger(__name__)
 
@@ -44,13 +45,13 @@ class Server:
         self._path_identity: tuple[int, int] | None = None
 
     def bind(self) -> None:
-        """Create and bind the listening socket without stealing another instance.
-
-        A path left by a crashed instance is safe to remove, but a live socket
-        belongs to another Hearth process and a regular file must never be
-        unlinked just because it occupies the expected pathname.
-        """
+        """Bind under a cross-process lock so a racer cannot unlink our socket."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        with socket_path_lock(self.path):
+            self._bind_locked()
+
+    def _bind_locked(self) -> None:
+        """Perform stale-path inspection and bind while holding the path lock."""
         try:
             existing_stat = self.path.lstat()
         except FileNotFoundError:
@@ -126,10 +127,15 @@ class Server:
             self._sock = sock
         except BaseException:
             sock.close()
-            self._remove_owned_path()
+            self._remove_owned_path_locked()
             raise
 
     def _remove_owned_path(self) -> None:
+        """Remove this server's socket path under the shared maintenance lock."""
+        with socket_path_lock(self.path):
+            self._remove_owned_path_locked()
+
+    def _remove_owned_path_locked(self) -> None:
         """Unlink the socket only if the pathname still names our inode."""
         identity = self._path_identity
         if not self._owns_path or identity is None:
@@ -176,30 +182,29 @@ class Server:
                 conn.close()
 
     def start(self) -> threading.Thread:
-        """Run :meth:`serve_forever` on a background thread.
+        """Bind and start under one lock so a failing startup cannot orphan a racer.
 
         If the OS refuses to create the worker, release the listening socket
-        and remove only the socket inode this instance created. Convert the
-        thread-start failure to OSError so the GUI can gracefully run without
-        optional IPC rather than aborting startup.
+        and remove only the socket inode this instance created before another
+        launcher is allowed to inspect or bind the pathname.
         """
-        self.bind()
-        thread = threading.Thread(target=self.serve_forever, daemon=True, name="hearth-ipc")
-        try:
-            thread.start()
-        except BaseException as exc:
-            # No listener owns the socket yet. Close it and remove only our
-            # inode, leaving any replacement path untouched.
-            if self._sock is not None:
-                with contextlib.suppress(OSError):
-                    self._sock.close()
-                self._sock = None
-            self._remove_owned_path()
-            if isinstance(exc, RuntimeError):
-                raise OSError("could not start the IPC listener thread") from exc
-            raise
-        self._thread = thread
-        return thread
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with socket_path_lock(self.path):
+            self._bind_locked()
+            thread = threading.Thread(target=self.serve_forever, daemon=True, name="hearth-ipc")
+            try:
+                thread.start()
+            except BaseException as exc:
+                if self._sock is not None:
+                    with contextlib.suppress(OSError):
+                        self._sock.close()
+                    self._sock = None
+                self._remove_owned_path_locked()
+                if isinstance(exc, RuntimeError):
+                    raise OSError("could not start the IPC listener thread") from exc
+                raise
+            self._thread = thread
+            return thread
 
     def stop(self, *, timeout: float = 2.0) -> None:
         """Stop accepting, join the thread, and remove the socket file."""
