@@ -166,8 +166,10 @@ def test_app_mute_cache_reconciles_a_stale_backend_snapshot(
 
     mixer.Strip._fill_listeners(strip, [initial])
     original_row = strip.listeners.children[0]
+    volume_slider = original_row.children[2]
     mute_button = original_row.children[4]
     name_label = original_row.children[1]
+    assert volume_slider.accessible_label == "Firefox volume"
     assert mute_button.accessible_label == "Mute Firefox"
 
     mixer.Strip._on_app_mute(strip, mute_button, initial)

@@ -267,3 +267,15 @@ No dump or log contents were published to GitHub. Machine-specific configuration
   calls cheaply, while the production test now proves focus survives the real
   strip rebuild. The full `./scripts/check.sh` gate passes with **476 tests**;
   the next hosted CI run must validate this last test-only follow-up.
+
+
+## Per-application slider accessible names — 2026-10-29
+
+- App-specific volume scales now explicitly announce `{app name} volume` through
+  the GTK accessible LABEL property, rather than relying on an adjacent visible
+  app-name label or tooltip. The shared label helper accepts any `Gtk.Widget`,
+  because both native scales and buttons use it.
+- Extended the existing row-render regression to assert the volume scale's
+  accessible name alongside the changing app-mute button label. Local full-gate
+  and hosted CI checks are required after this focused change; no audio backend
+  or systemd operation is involved.

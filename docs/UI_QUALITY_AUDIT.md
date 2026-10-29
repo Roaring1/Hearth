@@ -179,3 +179,12 @@ screen reader presents it optimally.
 - The local full gate passes with **476 tests**. Hosted CI is being checked for
   the most recent real-window focus regression; live Plasma/AT-SPI verification
   is still a separate manual item.
+
+
+## Per-app volume accessible names — 2026-10-29
+
+Each application volume scale receives an explicit accessible label such as
+`Firefox volume`, in addition to its current percentage/value and tooltip. The
+shared GTK helper now correctly accepts `Gtk.Widget` instead of only buttons;
+regression coverage checks this name at row construction. This does not change
+the slider's range, gesture handling, volume target or write-coalescing path.

@@ -52,9 +52,9 @@ def button(button: Gtk.Button, icon_name: str, label: str, size: int = 14) -> Gt
     return text
 
 
-def accessible_label(button: Gtk.Button, label: str) -> None:
-    """Keep a changing icon-button's assistive-technology name in sync."""
-    button.update_property([Gtk.AccessibleProperty.LABEL], [label])
+def accessible_label(widget: Gtk.Widget, label: str) -> None:
+    """Set a control's accessible name, keeping it explicit and predictable."""
+    widget.update_property([Gtk.AccessibleProperty.LABEL], [label])
 
 
 def set_label(button: Gtk.Button, text_widget: Gtk.Label | None, label: str) -> None:
