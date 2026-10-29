@@ -252,10 +252,13 @@ class Fader(Gtk.DrawingArea):
         if value != self._value:
             self._value = value
             self.queue_draw()
-            self.update_property(
-                [Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT],
-                [float(value), f"{value}%"],
-            )
+            # An unavailable slider is announced as unavailable, regardless
+            # of programmatic/internal values while its drawing is blank.
+            if not self._dead:
+                self.update_property(
+                    [Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT],
+                    [float(value), f"{value}%"],
+                )
 
     def set_hardware(self, touched: bool) -> None:
         if touched != self._hw:
@@ -267,6 +270,10 @@ class Fader(Gtk.DrawingArea):
             self._dead = dead
             self.set_sensitive(not dead)
             self.queue_draw()
+            self.update_property(
+                [Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT],
+                [0.0, "Unavailable"] if dead else [float(self._value), f"{self._value}%"],
+            )
 
     def _emit_from_y(self, y: float) -> None:
         if self._dead:

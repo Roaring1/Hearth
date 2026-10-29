@@ -326,3 +326,12 @@ The non-interactive tick ruler beside the bus meter is now marked
 `PRESENTATION`, while the adjacent live level and volume controls remain a
 named `METER` and keyboard-operable `SLIDER`. The production GTK test asserts
 all three roles so the decorative ruler doesn't become a spurious unnamed item.
+
+
+## Bus fader unavailable value — 2026-10-29
+
+When a channel is loading or disappears, the custom slider now reports value
+text `Unavailable` and numeric zero. Its old numeric value is held internally
+but not exposed during absence; on recovery the current actual percentage is
+published again. The production GTK regression covers disable, suppressed
+updates during unavailability, and recovery without talking to PipeWire.

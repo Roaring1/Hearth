@@ -474,3 +474,16 @@ row movement are checked in the safety test and real GTK production-window test.
 - The production GTK test explicitly checks the contrast: `METER` for the live
   level, `SLIDER` for the keyboard volume fader, and `PRESENTATION` for its
   decorative ruler. This avoids exposing the ruler as an unnamed generic object.
+
+
+## Bus fader unavailable value semantics — 2026-10-29
+
+- A bus fader now announces `0 / Unavailable` while loading or when its device
+  disappears, rather than retaining the last volume percentage while the
+  visible cap is blank and the control is disabled. Programmatic/internal value
+  changes during this state keep the unavailable announcement; when the bus
+  returns, the current percentage is republished.
+- The production GTK test checks the initial loading state, the real synthetic
+  `76%` value, disappearance, a suppressed `82%` update during absence, and the
+  `82%` metadata restoration before returning the fixture to `76%`. No live
+  audio device or command is used.

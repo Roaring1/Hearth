@@ -215,8 +215,9 @@ def test_production_windows_render_and_capture(
     chat_strip = window.strips["vm_chat"]
     game_out = game_strip.out_button
     game_meter = game_strip.meter
+    game_fader = game_strip.fader
     assert game_meter.get_accessible_role() == Gtk.AccessibleRole.METER
-    assert game_strip.fader.get_accessible_role() == Gtk.AccessibleRole.SLIDER
+    assert game_fader.get_accessible_role() == Gtk.AccessibleRole.SLIDER
     assert game_strip.scale.get_accessible_role() == Gtk.AccessibleRole.PRESENTATION
     assert "Game audio level" in accessible_labels[id(game_meter)]
     assert any(
@@ -278,6 +279,15 @@ def test_production_windows_render_and_capture(
     )
     assert window.strips["vm_game"].device.get_text() == "checking…"
     assert window.strips["vm_game"].value.get_text() == "…"
+    fader_value_property = (
+        Gtk.AccessibleProperty.VALUE_NOW,
+        Gtk.AccessibleProperty.VALUE_TEXT,
+    )
+    assert not game_fader.get_sensitive()
+    assert accessible_updates[id(game_fader)][-1] == (
+        fader_value_property,
+        (0.0, "Unavailable"),
+    )
     capture("mixer-loading")
 
     # Deliver an entirely synthetic snapshot to the actual widgets.
@@ -320,6 +330,18 @@ def test_production_windows_render_and_capture(
     window._sources_present = {"sm7b_mono", "astro_mic_48k"}
     window.apply_states()
     pump(0.45)
+    assert game_fader.get_sensitive()
+    assert accessible_updates[id(game_fader)][-1] == (fader_value_property, (76.0, "76%"))
+    # Disappearance clears the stale accessible percentage just as it clears
+    # the visible cap. Programmatic changes during absence must not announce a
+    # fictitious live volume; recovery republishes the current actual value.
+    game_fader.set_dead(True)
+    assert accessible_updates[id(game_fader)][-1] == (fader_value_property, (0.0, "Unavailable"))
+    game_fader.set_value(82)
+    assert accessible_updates[id(game_fader)][-1] == (fader_value_property, (0.0, "Unavailable"))
+    game_fader.set_dead(False)
+    assert accessible_updates[id(game_fader)][-1] == (fader_value_property, (82.0, "82%"))
+    game_fader.set_value(76)
     assert f"Unmute {chat_strip.channel.name}" in accessible_labels[id(chat_strip.mute)]
     assert "ghost" not in window.strips["vm_game"].get_css_classes()
     assert window.strips["vm_game"].mute.get_sensitive()
