@@ -747,6 +747,7 @@ class Strip(Gtk.Box):
             if sink == self.channel.sink:
                 continue
             check = Gtk.CheckButton(label=label)
+            action_icons.accessible_label(check, f"Send {self.channel.name} to {label}")
             check.set_active(sink in live)
             check.set_sensitive(known and not self._route_busy)
             route_errors = getattr(self, "_route_errors", {})
@@ -784,6 +785,7 @@ class Strip(Gtk.Box):
         # used to be wired into both mic buses at login with no way to say
         # no, so B2 was a copy of B1 whether or not anyone asked.
         carla = Gtk.CheckButton(label="SM7B via Carla")
+        action_icons.accessible_label(carla, f"Route SM7B via Carla into {self.channel.name}")
         carla.set_active(mic_routes.carla_enabled(conf, self.channel.sink))
         carla.set_tooltip_text("2i2 \u2192 Carla \u2192 this bus")
         carla.set_sensitive(not self._route_busy)
@@ -796,6 +798,7 @@ class Strip(Gtk.Box):
 
         for label, source in MIC_SOURCES:
             check = Gtk.CheckButton(label=label)
+            action_icons.accessible_label(check, f"Route {label} into {self.channel.name}")
             known = source in mic_routes.RAW_TOKEN
             check.set_active(
                 mic_routes.raw_enabled(conf, self.channel.sink, source) if known else source in live

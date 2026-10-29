@@ -258,6 +258,31 @@ def test_production_windows_render_and_capture(
     assert game_out_name in accessible_labels[id(game_out)]
     assert mic_in_name in accessible_labels[id(mic_in)]
     assert f"Mute {game_strip.channel.name}" in accessible_labels[id(game_strip.mute)]
+
+    # The popover's short visible captions remain intact, while each
+    # checkbox announces its own route action and the bus it affects.
+    game_strip._fill_outputs()
+    output_label, output_sink = next(
+        (label, sink) for label, sink in app_mod.OUTPUTS if sink != game_strip.channel.sink
+    )
+    output_check = game_strip._out_checks[output_sink]
+    assert (
+        f"Send {game_strip.channel.name} to {output_label}" in accessible_labels[id(output_check)]
+    )
+    mic_strip = window.strips["mic_b1"]
+    mic_strip._fill_inputs()
+    assert mic_strip._carla_check is not None
+    assert (
+        f"Route SM7B via Carla into {mic_strip.channel.name}"
+        in accessible_labels[id(mic_strip._carla_check)]
+    )
+    raw_label, raw_source = next(
+        (label, source) for label, source in app_mod.MIC_SOURCES if source == "sm7b_mono"
+    )
+    assert (
+        f"Route {raw_label} into {mic_strip.channel.name}"
+        in accessible_labels[id(mic_strip._in_checks[raw_source])]
+    )
     assert game_strip.bind_button is not None
     bind_name = (
         f"Open LPD8 remapping for {game_strip.channel.name} (knob {game_strip.channel.bind})"

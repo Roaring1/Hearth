@@ -345,3 +345,12 @@ prior sensitivity, including preserving an input already disabled because its
 source is unavailable. An input popover opened during a job also renders Carla
 insensitive with a busy tooltip. Tests cover both controls already present when
 the worker starts and controls created while the worker is already running.
+
+## Contextual names for route checkboxes — 2026-10-29
+
+The compact output-route checkboxes now announce `Send {channel} to {endpoint}`;
+the Carla input checkbox says `Route SM7B via Carla into {mic bus}`, and raw
+input selectors say `Route {source} into {mic bus}`. Their visible captions and
+routing actions are unchanged. The production GTK test checks the actual GTK
+LABEL property updates for an output, Carla and raw-input checkbox, even while
+the initial route/source inventory is still awaiting a verified snapshot.

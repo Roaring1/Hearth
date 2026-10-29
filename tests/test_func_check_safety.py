@@ -637,6 +637,9 @@ def test_output_popover_uses_cached_routes_without_pactl_io(
         def set_tooltip_text(self, tooltip: str | None) -> None:
             self.tooltip = tooltip
 
+        def update_property(self, _properties, values) -> None:
+            self.accessible_label = values[0]
+
         def connect(self, *_args) -> None:
             pass
 
@@ -663,7 +666,7 @@ def test_output_popover_uses_cached_routes_without_pactl_io(
             },
             _routes_known=True,
         ),
-        channel=SimpleNamespace(sink="vm_game", group="headset"),
+        channel=SimpleNamespace(sink="vm_game", name="Game", group="headset"),
         out_popover=FakePopover(),
         _route_busy=False,
         _route_errors={},
@@ -706,6 +709,9 @@ def test_opening_output_popover_during_route_job_defers_refresh_until_completion
         def set_tooltip_text(self, tooltip: str | None) -> None:
             self.tooltip = tooltip
 
+        def update_property(self, _properties, values) -> None:
+            self.accessible_label = values[0]
+
         def connect(self, *_args) -> None:
             pass
 
@@ -722,7 +728,7 @@ def test_opening_output_popover_during_route_job_defers_refresh_until_completion
             _routes={"vm_game.monitor": {"vm_chat"}},
             _routes_known=True,
         ),
-        channel=SimpleNamespace(sink="vm_game", group="headset"),
+        channel=SimpleNamespace(sink="vm_game", name="Game", group="headset"),
         out_popover=FakePopover(),
         _route_busy=True,
         _route_popover_dirty=False,
@@ -774,6 +780,9 @@ def test_output_popover_disables_controls_until_route_state_is_verified(
         def set_tooltip_text(self, tooltip: str | None) -> None:
             self.tooltip = tooltip
 
+        def update_property(self, _properties, values) -> None:
+            self.accessible_label = values[0]
+
         def connect(self, *_args) -> None:
             pass
 
@@ -788,7 +797,7 @@ def test_output_popover_disables_controls_until_route_state_is_verified(
     monkeypatch.setattr(mixer.Gtk, "CheckButton", FakeCheck)
     strip = SimpleNamespace(
         win=SimpleNamespace(_routes={}, _routes_known=False),
-        channel=SimpleNamespace(sink="vm_game", group="headset"),
+        channel=SimpleNamespace(sink="vm_game", name="Game", group="headset"),
         out_popover=FakePopover(),
         _route_busy=False,
         _route_errors={},
@@ -839,6 +848,9 @@ def test_input_popover_uses_cached_sources_without_pactl_io(
         def set_tooltip_text(self, tooltip: str | None) -> None:
             self.tooltip = tooltip
 
+        def update_property(self, _properties, values) -> None:
+            self.accessible_label = values[0]
+
         def connect(self, *_args) -> None:
             pass
 
@@ -863,7 +875,7 @@ def test_input_popover_uses_cached_sources_without_pactl_io(
             _sources_present={"sm7b_mono", "astro_mic_48k"},
             _sources_known=True,
         ),
-        channel=SimpleNamespace(sink="mic_b1"),
+        channel=SimpleNamespace(sink="mic_b1", name="Mic B1"),
         in_popover=FakePopover(),
         _route_busy=False,
         _on_carla_in=lambda *_args: None,
@@ -921,6 +933,9 @@ def test_input_popover_disables_carla_and_present_sources_during_route_job(
         def set_tooltip_text(self, tooltip: str | None) -> None:
             self.tooltip = tooltip
 
+        def update_property(self, _properties, values) -> None:
+            self.accessible_label = values[0]
+
         def connect(self, *_args) -> None:
             pass
 
@@ -940,7 +955,7 @@ def test_input_popover_disables_carla_and_present_sources_during_route_job(
             _sources_present={"sm7b_mono", "astro_mic_48k"},
             _sources_known=True,
         ),
-        channel=SimpleNamespace(sink="mic_b1"),
+        channel=SimpleNamespace(sink="mic_b1", name="Mic B1"),
         in_popover=FakePopover(),
         _route_busy=True,
         _route_popover_dirty=False,
