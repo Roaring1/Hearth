@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from hearth import leds
+from hearth.errors import CommandError
 
 FIXTURES = Path(__file__).parent / "fixtures"
 RAW = FIXTURES / "amidi_l.txt"
@@ -73,6 +74,32 @@ def test_the_other_controller_is_not_mistaken_for_the_lpd8() -> None:
 
 def test_an_empty_listing_is_not_a_port() -> None:
     assert leds.parse_port("") is None
+
+
+def test_find_port_degrades_to_none_when_amidi_probe_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(leds.proc, "have", lambda _name: True)
+
+    def timed_out(_cmd, **_kwargs):
+        raise CommandError(["amidi", "-l"], timed_out=True, stderr="timed out")
+
+    monkeypatch.setattr(leds.proc, "run", timed_out)
+
+    assert leds.find_port(timeout=0.1) is None
+
+
+def test_led_write_returns_false_when_amidi_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(leds.proc, "have", lambda _name: True)
+
+    def timed_out(_cmd, **_kwargs):
+        raise CommandError(["amidi", "-p", "hw:6,0,0", "-S", "99 42 7F"], timed_out=True)
+
+    monkeypatch.setattr(leds.proc, "run", timed_out)
+
+    assert leds.set_pad("hw:6,0,0", 7, True) is False
 
 
 def test_writing_to_no_port_is_a_no_op(monkeypatch: pytest.MonkeyPatch) -> None:

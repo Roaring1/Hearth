@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 
 from hearth import proc
+from hearth.errors import CommandError
 
 log = logging.getLogger(__name__)
 
@@ -101,7 +102,13 @@ def find_port(timeout: float = 2.0) -> str | None:
     """
     if not proc.have("amidi"):
         return None
-    result = proc.run(["amidi", "-l"], timeout=timeout, check=False)
+    try:
+        result = proc.run(["amidi", "-l"], timeout=timeout, check=False)
+    except CommandError as exc:
+        # A slow/unavailable controller is not a mixer failure. The caller
+        # retries on the next queued state update; don't let a timeout escape.
+        log.debug("could not list LPD8 ports: %s", exc)
+        return None
     if not result.ok:
         return None
     return parse_port(result.out)
@@ -116,10 +123,15 @@ def set_pad(port: str, pad: int, lit: bool, channel: int = DEFAULT_CHANNEL) -> b
     except ValueError:
         log.debug("refusing to write LED for pad %s on channel %s", pad, channel)
         return False
-    result = proc.run(["amidi", "-p", port, "-S", payload], timeout=2.0, check=False)
+    try:
+        result = proc.run(["amidi", "-p", port, "-S", payload], timeout=2.0, check=False)
+    except CommandError as exc:
+        # NOTE TOGGLE mode, or the pad went away mid-session. A timed-out or
+        # unavailable MIDI write only loses LED feedback; audio must keep
+        # working and the worker must be able to invalidate this port.
+        log.debug("LED write failed on %s: %s", port, exc)
+        return False
     if not result.ok:
-        # NOTE TOGGLE mode, or the pad went away mid-session. Either way
-        # the mixer keeps working; only the lamp is wrong.
         log.debug("LED write failed on %s: %s", port, payload)
     return result.ok
 
