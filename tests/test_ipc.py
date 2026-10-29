@@ -298,8 +298,11 @@ if outcome.startswith("started:"):
                     ],
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
                     env=env,
+                    # The checkout's legacy hearth.py shim shadows src/hearth
+                    # when child Python inherits the repository root as cwd.
+                    cwd=sock_path.parent,
                 )
             )
 
@@ -307,9 +310,18 @@ if outcome.startswith("started:"):
         deadline = time.monotonic() + 5.0
         while not all(path.exists() for path in ready_paths) and time.monotonic() < deadline:
             time.sleep(0.01)
-        assert all(path.exists() for path in ready_paths), (
-            "both child processes must reach the gate"
-        )
+        if not all(path.exists() for path in ready_paths):
+            failures = {}
+            for index, process in enumerate(processes):
+                if process.poll() is not None:
+                    _stdout, stderr = process.communicate()
+                    failures[index] = {
+                        "exit_code": process.returncode,
+                        "stderr": (stderr or b"").decode(errors="replace")[-2000:],
+                    }
+            assert all(path.exists() for path in ready_paths), (
+                f"both child processes must reach the gate; child failures={failures}"
+            )
         gate.touch()
 
         result_paths = [sock_path.parent / f"result-{index}" for index in range(2)]
@@ -329,10 +341,10 @@ if outcome.startswith("started:"):
         release.touch()
         for process in processes:
             try:
-                process.wait(timeout=5.0)
+                process.communicate(timeout=5.0)
             except subprocess.TimeoutExpired:
                 process.terminate()
-                process.wait(timeout=2.0)
+                process.communicate(timeout=2.0)
 
 
 def test_stale_cleanup_refuses_a_symlinked_lock_file(sock_path):
