@@ -152,6 +152,13 @@ def write(updates: dict[str, str], path: Path | None = None) -> bool:
         return False
 
     try:
+        lock_metadata = os.fstat(lock_fd)
+        if not stat.S_ISREG(lock_metadata.st_mode):
+            raise OSError(f"microphone config lock is not a regular file: {lock_path}")
+        if lock_metadata.st_uid != os.getuid():
+            raise PermissionError(f"microphone config lock is not owned by this user: {lock_path}")
+        if lock_metadata.st_nlink != 1:
+            raise OSError(f"refusing hard-linked microphone config lock: {lock_path}")
         os.fchmod(lock_fd, 0o600)
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         try:
@@ -168,6 +175,10 @@ def write(updates: dict[str, str], path: Path | None = None) -> bool:
                     metadata = os.fstat(cfg_fd)
                     if not stat.S_ISREG(metadata.st_mode):
                         raise OSError(f"refusing to edit non-regular config: {target}")
+                    if metadata.st_uid != os.getuid():
+                        raise PermissionError(
+                            f"microphone config is not owned by this user: {target}"
+                        )
                     with os.fdopen(cfg_fd, "r", encoding="utf-8") as stream:
                         cfg_fd = -1
                         original = stream.read()

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -103,6 +105,46 @@ def test_legacy_mixer_config_writer_updates_multiple_keys_atomically(
     assert (tmp_path / ".roaring_mixer.conf.lock").stat().st_mode & 0o777 == 0o600
 
 
+def test_legacy_mixer_config_refuses_a_hard_linked_lock_without_chmodding_target(
+    tmp_path: Path,
+) -> None:
+    from hearth import legacy_core as core
+
+    conf = tmp_path / "roaring_mixer.conf"
+    original = 'ASTRO_TARGET="chat"\nLATENCY_MSEC="12"\n'
+    conf.write_text(original, encoding="utf-8")
+    victim = tmp_path / "outside.txt"
+    victim.write_text("leave this alone", encoding="utf-8")
+    original_mode = victim.stat().st_mode & 0o777
+    (tmp_path / ".roaring_mixer.conf.lock").hardlink_to(victim)
+
+    assert core.write_conf_keys(conf, {"LATENCY_MSEC": "20"}) is False
+    assert conf.read_text(encoding="utf-8") == original
+    assert victim.read_text(encoding="utf-8") == "leave this alone"
+    assert victim.stat().st_mode & 0o777 == original_mode
+
+
+def test_legacy_mixer_config_refuses_a_foreign_owned_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from hearth import legacy_core as core
+
+    conf = tmp_path / "roaring_mixer.conf"
+    original = 'ASTRO_TARGET="chat"\nLATENCY_MSEC="12"\n'
+    conf.write_text(original, encoding="utf-8")
+    real_lstat = Path.lstat
+
+    def report_foreign_owner(path):
+        metadata = real_lstat(path)
+        if path == conf:
+            return SimpleNamespace(st_mode=metadata.st_mode, st_uid=os.getuid() + 1)
+        return metadata
+
+    monkeypatch.setattr(Path, "lstat", report_foreign_owner)
+    assert core.write_conf_keys(conf, {"LATENCY_MSEC": "20"}) is False
+    assert conf.read_text(encoding="utf-8") == original
+
+
 def test_legacy_mixer_config_writer_fails_closed_on_missing_invalid_or_symlinked_files(
     tmp_path: Path,
 ) -> None:
@@ -183,6 +225,55 @@ def test_moonlight_source_write_is_atomic_and_queues_restart(
             ["systemctl", "--user", "restart", "roaring-moonlight-mic.service"],
         ]
     ]
+
+
+def test_moonlight_write_refuses_hard_linked_lock_without_chmodding_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from hearth import legacy_core as core
+
+    unit = tmp_path / "roaring-moonlight-mic.service"
+    original = "Environment=MIC_SOURCE=b2_mic\n"
+    unit.write_text(original, encoding="utf-8")
+    victim = tmp_path / "outside.txt"
+    victim.write_text("leave this alone", encoding="utf-8")
+    original_mode = victim.stat().st_mode & 0o777
+    (tmp_path / ".roaring-moonlight-mic.service.lock").hardlink_to(victim)
+    monkeypatch.setattr(core, "MOONLIGHT_SVC", unit)
+    queued: list[object] = []
+    monkeypatch.setattr(core, "run_steps", lambda steps, **_kw: queued.append(steps))
+
+    assert core.set_moonlight_mic("b1_mic") == (False, False)
+    assert unit.read_text(encoding="utf-8") == original
+    assert victim.read_text(encoding="utf-8") == "leave this alone"
+    assert victim.stat().st_mode & 0o777 == original_mode
+    assert queued == []
+
+
+def test_moonlight_write_refuses_a_foreign_owned_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from hearth import legacy_core as core
+
+    unit = tmp_path / "roaring-moonlight-mic.service"
+    original = "Environment=MIC_SOURCE=b2_mic\n"
+    unit.write_text(original, encoding="utf-8")
+    real_lstat = Path.lstat
+
+    def report_foreign_owner(path):
+        metadata = real_lstat(path)
+        if path == unit:
+            return SimpleNamespace(st_mode=metadata.st_mode, st_uid=os.getuid() + 1)
+        return metadata
+
+    monkeypatch.setattr(Path, "lstat", report_foreign_owner)
+    monkeypatch.setattr(core, "MOONLIGHT_SVC", unit)
+    queued: list[object] = []
+    monkeypatch.setattr(core, "run_steps", lambda steps, **_kw: queued.append(steps))
+
+    assert core.set_moonlight_mic("b1_mic") == (False, False)
+    assert unit.read_text(encoding="utf-8") == original
+    assert queued == []
 
 
 def test_moonlight_source_write_fails_closed_and_does_not_restart(

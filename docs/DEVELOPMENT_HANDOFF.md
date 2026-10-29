@@ -559,3 +559,18 @@ row movement are checked in the safety test and real GTK production-window test.
 - The focused LPD8 map suite passes **14 tests**; the full local gate passes
   **492 tests**, with Ruff, formatting, mypy (34 source files), metadata checks
   and ShellCheck green.
+
+
+## Shared config-writer lock integrity — 2026-10-29
+
+- Applied the same lock-inode checks to the microphone router config, legacy
+  mixer config, and Moonlight unit-file writers: the opened lock must be a
+  regular file owned by the current user with exactly one hard link before
+  its mode is changed or an advisory lock is taken.
+- Existing target files must also be owned by the current user before the
+  atomic rewrite proceeds. Rejected hard-linked locks leave the unrelated
+  hard-link target's content and permissions unchanged; rejected foreign-owned
+  config/unit targets remain unchanged, and Moonlight restart work is not queued.
+- Validation: the mic-route and CLI/config focused suites pass **64 tests**;
+  the full local gate passes **498 tests**. Ruff, formatting, mypy (34 source
+  files), compile, metadata checks and ShellCheck all pass.

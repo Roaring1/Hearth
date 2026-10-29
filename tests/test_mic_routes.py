@@ -7,9 +7,11 @@ and that nothing else in the file moves.
 
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
+from types import SimpleNamespace
 
 import pytest
 
@@ -225,6 +227,52 @@ def test_write_rejects_unknown_keys_and_shell_unsafe_values(
     assert config.read_text(encoding="utf-8") == original
     assert not (tmp_path / "hearth-route-injection-test").exists()
     assert list(tmp_path.glob("roaring_mic_router.conf.tmp.*")) == []
+
+
+def test_write_refuses_a_hard_linked_lock_without_chmodding_its_target(
+    tmp_path: Path,
+) -> None:
+    conf = tmp_path / "roaring_mic_router.conf"
+    conf.write_text(SAMPLE, encoding="utf-8")
+    original = conf.read_text(encoding="utf-8")
+    victim = tmp_path / "outside.txt"
+    victim.write_text("leave this alone", encoding="utf-8")
+    original_mode = victim.stat().st_mode & 0o777
+    (tmp_path / ".roaring_mic_router.conf.lock").hardlink_to(victim)
+
+    assert mic_routes.write({"B2_ROUTE": "none"}, conf) is False
+    assert conf.read_text(encoding="utf-8") == original
+    assert victim.read_text(encoding="utf-8") == "leave this alone"
+    assert victim.stat().st_mode & 0o777 == original_mode
+
+
+def test_write_refuses_a_config_owned_by_another_user(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    conf = tmp_path / "roaring_mic_router.conf"
+    conf.write_text(SAMPLE, encoding="utf-8")
+    original = conf.read_text(encoding="utf-8")
+    real_open = os.open
+    real_fstat = os.fstat
+    target_fds: set[int] = set()
+
+    def tracking_open(path, flags, *args, **kwargs):
+        fd = real_open(path, flags, *args, **kwargs)
+        if Path(path) == conf:
+            target_fds.add(fd)
+        return fd
+
+    def report_foreign_owner(fd):
+        metadata = real_fstat(fd)
+        if fd in target_fds:
+            return SimpleNamespace(st_mode=metadata.st_mode, st_uid=os.getuid() + 1)
+        return metadata
+
+    monkeypatch.setattr(mic_routes.os, "open", tracking_open)
+    monkeypatch.setattr(mic_routes.os, "fstat", report_foreign_owner)
+
+    assert mic_routes.write({"B2_ROUTE": "none"}, conf) is False
+    assert conf.read_text(encoding="utf-8") == original
 
 
 def test_write_refuses_a_symlink_lock_file_without_touching_its_target(

@@ -543,6 +543,13 @@ def write_conf_keys(path, updates):
         return False
 
     try:
+        lock_metadata = os.fstat(lock_fd)
+        if not stat.S_ISREG(lock_metadata.st_mode):
+            raise OSError(f"mixer config lock is not a regular file: {lock_path}")
+        if lock_metadata.st_uid != os.getuid():
+            raise PermissionError(f"mixer config lock is not owned by this user: {lock_path}")
+        if lock_metadata.st_nlink != 1:
+            raise OSError(f"refusing hard-linked mixer config lock: {lock_path}")
         os.fchmod(lock_fd, 0o600)
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         try:
@@ -550,6 +557,9 @@ def write_conf_keys(path, updates):
                 metadata = p.lstat()
                 if not stat.S_ISREG(metadata.st_mode):
                     log.warning("refusing to edit non-regular mixer config %s", p)
+                    return False
+                if metadata.st_uid != os.getuid():
+                    log.warning("refusing to edit mixer config not owned by this user: %s", p)
                     return False
                 original = p.read_text(encoding="utf-8")
                 original_mode = stat.S_IMODE(metadata.st_mode)
@@ -632,12 +642,24 @@ def set_moonlight_mic(src: str) -> tuple[bool, bool]:
         flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0)
         lock_fd = os.open(lock_path, flags, 0o600)
+        lock_metadata = os.fstat(lock_fd)
+        if not stat.S_ISREG(lock_metadata.st_mode):
+            raise OSError(f"Moonlight unit lock is not a regular file: {lock_path}")
+        if lock_metadata.st_uid != os.getuid():
+            raise PermissionError(f"Moonlight unit lock is not owned by this user: {lock_path}")
+        if lock_metadata.st_nlink != 1:
+            raise OSError(f"refusing hard-linked Moonlight unit lock: {lock_path}")
         os.fchmod(lock_fd, 0o600)
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
 
         metadata = MOONLIGHT_SVC.lstat()
         if not stat.S_ISREG(metadata.st_mode):
             log.warning("refusing to edit non-regular unit file %s", MOONLIGHT_SVC)
+            return False, False
+        if metadata.st_uid != os.getuid():
+            log.warning(
+                "refusing to edit Moonlight unit file not owned by this user: %s", MOONLIGHT_SVC
+            )
             return False, False
         text = MOONLIGHT_SVC.read_text(encoding="utf-8")
         pattern = r"^(Environment=MIC_SOURCE=).*"
