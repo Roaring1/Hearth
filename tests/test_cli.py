@@ -69,6 +69,41 @@ def test_file_logging_creates_private_state_and_log(
         root.setLevel(previous_level)
 
 
+def test_file_logging_refuses_a_hard_linked_log_without_modifying_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
+    target = paths.log_file()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    victim = target.parent / "unrelated.txt"
+    victim.write_text("keep this file", encoding="utf-8")
+    victim.chmod(0o644)
+    original_mode = victim.stat().st_mode & 0o777
+    target.hardlink_to(victim)
+
+    root = logging.getLogger()
+    previous_handlers = list(root.handlers)
+    previous_level = root.level
+    try:
+        logging_setup.configure("info", to_file=True)
+        assert target.exists()
+        assert target.stat().st_nlink == 2
+        assert target.read_text(encoding="utf-8") == "keep this file"
+        assert victim.read_text(encoding="utf-8") == "keep this file"
+        assert victim.stat().st_mode & 0o777 == original_mode
+        assert not any(
+            isinstance(handler, logging.handlers.RotatingFileHandler) for handler in root.handlers
+        )
+    finally:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+            handler.close()
+        for handler in previous_handlers:
+            root.addHandler(handler)
+        root.setLevel(previous_level)
+
+
 def test_unknown_level_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HEARTH_LOG_LEVEL", "chatty")
     logging_setup.configure(None, to_file=False)

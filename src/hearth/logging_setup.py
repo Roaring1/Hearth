@@ -76,6 +76,8 @@ def configure(level: str | None = None, *, to_file: bool = True) -> None:
                 raise OSError(f"refusing to open non-regular log path: {log_path}")
             if existing.st_uid != os.getuid():
                 raise PermissionError(f"log file is not owned by this user: {log_path}")
+            if existing.st_nlink != 1:
+                raise OSError(f"refusing to open hard-linked log path: {log_path}")
         file_handler = logging.handlers.RotatingFileHandler(
             log_path,
             maxBytes=_MAX_BYTES,

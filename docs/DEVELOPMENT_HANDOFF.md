@@ -574,3 +574,15 @@ row movement are checked in the safety test and real GTK production-window test.
 - Validation: the mic-route and CLI/config focused suites pass **64 tests**;
   the full local gate passes **498 tests**. Ruff, formatting, mypy (34 source
   files), compile, metadata checks and ShellCheck all pass.
+
+
+## Rotating log hard-link safety — 2026-10-29
+
+- File logging now rejects an existing log whose inode has more than one hard
+  link before opening `RotatingFileHandler`. Unlike atomic-replace config
+  writers, a rotating log appends to its existing inode, so hard links could
+  otherwise expose Hearth log writes through another filename.
+- Regression coverage hard-links the configured log to an unrelated file and
+  verifies file logging is disabled while the content, permissions, and link
+  count remain unchanged. The full local gate passes **499 tests**, with Ruff,
+  formatting, mypy (34 source files), compile, metadata checks and ShellCheck green.
