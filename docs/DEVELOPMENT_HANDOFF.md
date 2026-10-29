@@ -602,5 +602,7 @@ row movement are checked in the safety test and real GTK production-window test.
 - The complete local gate passes **502 tests**; Ruff, formatting, mypy (34
   source files), legacy compilation, desktop/AppStream metadata checks and
   ShellCheck pass. AppStream retains its previously known non-fatal uppercase-ID
-  pedantic notice. Hosted CI #149 is green on the pre-change PR head; this
-  debug-bundle change will receive its own hosted run after it is pushed.
+  pedantic notice.
+- Hosted [CI run #150](https://github.com/Roaring1/Hearth/actions/runs/40974139781)
+  passed all six jobs on code commit `437cf17`, including lint/types, Python
+  3.11–3.13 tests, GTK visual capture, and installed-package smoke.
