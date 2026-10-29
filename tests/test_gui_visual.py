@@ -348,3 +348,46 @@ def test_cold_icon_indexing_stays_off_the_gtk_thread() -> None:
     assert finished, "background icon index did not report back on the GTK main loop"
     assert icons._entry_index.cache_info().currsize == 1
     assert icons._file_index.cache_info().currsize == 1
+
+
+@pytest.mark.gui
+def test_custom_fader_supports_keyboard_and_exposes_slider_role() -> None:
+    """The drawn fader behaves like a value control without pointer input."""
+    import gi
+
+    gi.require_version("Gtk", "4.0")
+    gi.require_version("Gdk", "4.0")
+    from gi.repository import Gdk, Gtk
+
+    from hearth.ui.gtk4.widgets import VMAX, Fader
+
+    palette = {
+        "slot": "#202020",
+        "accent": "#80aaff",
+        "cap": "#d0d0d0",
+        "cap-groove": "#404040",
+    }
+    fader = Fader(palette)
+    assert fader.get_focusable()
+    assert fader.get_accessible_role() == Gtk.AccessibleRole.SLIDER
+
+    moved: list[int] = []
+    fader.connect("moved", lambda _widget, value: moved.append(value))
+    fader.set_value(50)
+    assert fader._on_key_pressed(None, Gdk.KEY_Up, 0, Gdk.ModifierType(0))
+    assert fader.value == 51
+    assert fader._on_key_pressed(None, Gdk.KEY_Page_Up, 0, Gdk.ModifierType(0))
+    assert fader.value == 61
+    assert fader._on_key_pressed(None, Gdk.KEY_Home, 0, Gdk.ModifierType(0))
+    assert fader.value == 0
+    assert fader._on_key_pressed(None, Gdk.KEY_End, 0, Gdk.ModifierType(0))
+    assert fader.value == VMAX
+    assert moved == [51, 61, 0, VMAX]
+
+    fader.set_dead(True)
+    assert not fader.get_sensitive()
+    assert not fader._on_key_pressed(None, Gdk.KEY_Up, 0, Gdk.ModifierType(0))
+    assert not fader._on_scroll(None, 0.0, 1.0)
+    assert fader.value == VMAX
+    fader.set_dead(False)
+    assert fader.get_sensitive()

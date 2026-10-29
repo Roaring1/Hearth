@@ -304,6 +304,7 @@ class Strip(Gtk.Box):
         row.set_halign(Gtk.Align.CENTER)
         self.meter = Meter(self.pal, height=window.meter_h)
         self.fader = Fader(self.pal, height=window.meter_h)
+        action_icons.accessible_label(self.fader, f"{channel.name} volume")
         self.fader.connect("moved", self._on_moved)
         # The ruler used to be drawn once per group, hanging off the right
         # edge where it read as clipped and belonged to nothing. One per
@@ -1047,7 +1048,9 @@ class Strip(Gtk.Box):
                 for index, name, was_muted in signature
             )
         _set_mute_icon(button, muted)
-        button.set_tooltip_text(f"Unmute {listener.name}" if muted else f"Mute {listener.name}")
+        label = f"Unmute {listener.name}" if muted else f"Mute {listener.name}"
+        action_icons.accessible_label(button, label)
+        button.set_tooltip_text(label)
         if muted:
             button.add_css_class("on")
         else:
@@ -1195,9 +1198,9 @@ class Strip(Gtk.Box):
             _set_mute_icon(box, listener.muted)
             if listener.muted:
                 box.add_css_class("on")
-            box.set_tooltip_text(
-                f"Unmute {listener.name}" if listener.muted else f"Mute {listener.name}"
-            )
+            mute_label = f"Unmute {listener.name}" if listener.muted else f"Mute {listener.name}"
+            action_icons.accessible_label(box, mute_label)
+            box.set_tooltip_text(mute_label)
             box.set_sensitive(bool(listener.index))
             box.connect("clicked", self._on_app_mute, listener)
             row.append(box)
@@ -1486,11 +1489,13 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.rail.set_valign(Gtk.Align.FILL if vertical else Gtk.Align.START)
         self.rail.set_halign(Gtk.Align.START if vertical else Gtk.Align.FILL)
         self.rail_handle.set_label("\u2193" if vertical else "\u2192")
-        self.rail_handle.set_tooltip_text(
+        label = (
             "Stack minimised channels along the bottom"
             if vertical
             else "Stack minimised channels down the right"
         )
+        action_icons.accessible_label(self.rail_handle, label)
+        self.rail_handle.set_tooltip_text(label)
 
     def _on_rail_dock(self, _button: Gtk.Button) -> None:
         self.rail_dock = "bottom" if self.rail_dock == "right" else "right"

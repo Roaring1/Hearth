@@ -131,6 +131,9 @@ def test_app_mute_cache_reconciles_a_stale_backend_snapshot(
         def set_tooltip_text(self, _tooltip: str | None) -> None:
             pass
 
+        def update_property(self, _properties, values) -> None:
+            self.accessible_label = values[0]
+
     class FakeScale(FakeWidget):
         @classmethod
         def new_with_range(cls, *_args):
@@ -165,10 +168,12 @@ def test_app_mute_cache_reconciles_a_stale_backend_snapshot(
     original_row = strip.listeners.children[0]
     mute_button = original_row.children[4]
     name_label = original_row.children[1]
+    assert mute_button.accessible_label == "Mute Firefox"
 
     mixer.Strip._on_app_mute(strip, mute_button, initial)
     assert initial.muted is True
     assert strip._listener_signature == (("42", "Firefox", True),)
+    assert mute_button.accessible_label == "Unmute Firefox"
     assert "muted" in name_label.classes
 
     # A stale backend snapshot must rebuild the row to its observed state.
@@ -177,7 +182,41 @@ def test_app_mute_cache_reconciles_a_stale_backend_snapshot(
     assert len(cleared) == 2
     assert strip._listener_signature == (("42", "Firefox", False),)
     assert strip.listeners.children[0] is not original_row
+    assert strip.listeners.children[0].children[4].accessible_label == "Mute Firefox"
     assert "muted" not in strip.listeners.children[0].children[1].classes
+
+
+def test_rail_dock_button_accessible_name_describes_its_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mixer = _load_mixer()
+
+    class FakeWidget:
+        def __init__(self) -> None:
+            self.accessible_label = ""
+            self.label = ""
+            self.tooltip = ""
+
+        def __getattr__(self, _name):
+            return lambda *_args, **_kwargs: None
+
+        def update_property(self, _properties, values) -> None:
+            self.accessible_label = values[0]
+
+        def set_label(self, label: str) -> None:
+            self.label = label
+
+        def set_tooltip_text(self, tooltip: str) -> None:
+            self.tooltip = tooltip
+
+    strip = SimpleNamespace(rail_dock="right", rail=FakeWidget(), rail_handle=FakeWidget())
+    mixer.MixerWindow._apply_rail_dock(strip)
+    assert strip.rail_handle.accessible_label == "Stack minimised channels along the bottom"
+    assert strip.rail_handle.tooltip == strip.rail_handle.accessible_label
+
+    strip.rail_dock = "bottom"
+    mixer.MixerWindow._apply_rail_dock(strip)
+    assert strip.rail_handle.accessible_label == "Stack minimised channels down the right"
 
 
 def test_per_app_volume_callback_queues_stream_not_bus(

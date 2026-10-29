@@ -20,7 +20,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 
-from gi.repository import GObject, Gtk  # noqa: E402 - must follow require_version
+from gi.repository import Gdk, GObject, Gtk  # noqa: E402 - must follow require_version
 
 __all__ = ["VMAX", "Fader", "Meter", "Scale", "Sliver", "parse_rgb"]
 
@@ -177,6 +177,17 @@ class Fader(Gtk.DrawingArea):
         self._value = 0
         self._hw = False
         self._dead = False
+        self.set_focusable(True)
+        self.set_accessible_role(Gtk.AccessibleRole.SLIDER)
+        self.update_property(
+            [
+                Gtk.AccessibleProperty.VALUE_MIN,
+                Gtk.AccessibleProperty.VALUE_MAX,
+                Gtk.AccessibleProperty.VALUE_NOW,
+                Gtk.AccessibleProperty.VALUE_TEXT,
+            ],
+            [0.0, float(VMAX), 0.0, "0%"],
+        )
         self.set_content_width(width)
         self.set_content_height(height)
         self.set_draw_func(self._draw)
@@ -196,6 +207,9 @@ class Fader(Gtk.DrawingArea):
         scroll = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL)
         scroll.connect("scroll", self._on_scroll)
         self.add_controller(scroll)
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_key_pressed)
+        self.add_controller(keys)
 
     @property
     def value(self) -> int:
@@ -206,6 +220,10 @@ class Fader(Gtk.DrawingArea):
         if value != self._value:
             self._value = value
             self.queue_draw()
+            self.update_property(
+                [Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT],
+                [float(value), f"{value}%"],
+            )
 
     def set_hardware(self, touched: bool) -> None:
         if touched != self._hw:
@@ -215,6 +233,7 @@ class Fader(Gtk.DrawingArea):
     def set_dead(self, dead: bool) -> None:
         if dead != self._dead:
             self._dead = dead
+            self.set_sensitive(not dead)
             self.queue_draw()
 
     def _emit_from_y(self, y: float) -> None:
@@ -245,8 +264,42 @@ class Fader(Gtk.DrawingArea):
             self._emit_from_y(sy + dy)
 
     def _on_scroll(self, _c: Gtk.EventControllerScroll, _dx: float, dy: float) -> bool:
+        if self._dead:
+            return False
+        previous = self._value
         self.set_value(self._value + (-2 if dy > 0 else 2))
-        self.emit("moved", self._value)
+        if self._value != previous:
+            self.emit("moved", self._value)
+        return True
+
+    def _on_key_pressed(
+        self,
+        _controller: Gtk.EventControllerKey,
+        keyval: int,
+        _keycode: int,
+        _state: Gdk.ModifierType,
+    ) -> bool:
+        """Make the focused vertical fader usable with standard slider keys."""
+        if self._dead:
+            return False
+        if keyval in (Gdk.KEY_Up, Gdk.KEY_Right):
+            value = self._value + 1
+        elif keyval in (Gdk.KEY_Down, Gdk.KEY_Left):
+            value = self._value - 1
+        elif keyval == Gdk.KEY_Page_Up:
+            value = self._value + 10
+        elif keyval == Gdk.KEY_Page_Down:
+            value = self._value - 10
+        elif keyval == Gdk.KEY_Home:
+            value = 0
+        elif keyval == Gdk.KEY_End:
+            value = VMAX
+        else:
+            return False
+        previous = self._value
+        self.set_value(value)
+        if self._value != previous:
+            self.emit("moved", self._value)
         return True
 
     def _draw(self, _area: Gtk.DrawingArea, cr, w: int, h: int) -> None:

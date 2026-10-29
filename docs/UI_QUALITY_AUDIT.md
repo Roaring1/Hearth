@@ -109,3 +109,28 @@ state, interaction flow, DPI scale, or Plasma theme.
   reviewed image baselines. Playwright itself is browser-oriented; native GTK
   should keep using its actual GTK widgets under Xvfb plus explicit interaction
   and accessibility checks rather than pretending this is a web app.
+
+## Accessibility follow-up — 2026-10-29
+
+- Icon-only per-application mute buttons now expose a descriptive accessible
+  label (`Mute Firefox` / `Unmute Firefox`) and update it as the action changes.
+  The app name's muted styling is kept in sync with the button.
+- The rail-docking arrow now exposes the action it will perform (move the
+  minimised-channel rail to the bottom or right), rather than announcing only
+  the arrow character.
+- The custom-drawn volume fader is now focusable and presents the GTK slider
+  role with minimum, maximum, current-value and value-text properties. Up/Right
+  adjust by one point, Down/Left decrease by one, Page Up/Down adjust by ten,
+  and Home/End jump to 0/150%. Changes use the same `moved` signal as pointer
+  input so the established coalesced audio-write path remains in charge.
+- Marking a channel unavailable also disables the fader. Dead/loading faders
+  ignore keyboard and scroll changes and return to normal sensitivity when the
+  channel is available again. The app-mute cache now reconciles stale snapshots
+  after optimistic updates rather than holding a false state indefinitely.
+- Automated regressions cover stale mute snapshots, changing accessible names,
+  the rail action name, fader role/focusability, key increments, range endpoints,
+  and unavailable-state input suppression.
+- The full local gate passes with **474 tests**; hosted CI should be checked on
+  the commit carrying this follow-up. The automated fader test invokes the real
+  GTK key handler under Xvfb; a live Plasma/AT-SPI screen-reader and keyboard
+  pass remains an outstanding manual verification, not a claim made by Xvfb.
