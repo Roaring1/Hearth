@@ -206,3 +206,11 @@ name such as `LPD8 pad 3: Mute Game` or `LPD8 knob 5: Game volume`. Unassigned
 controls announce that they are unassigned, and map refresh updates the label.
 The GUI regression observes GTK's LABEL property updates while constructing and
 remapping actual GTK controls; it does not claim live screen-reader verification.
+
+
+## Mixer routing menu names — 2026-10-29
+
+The compact `OUT`/`IN` menu buttons have explicit contextual accessible labels
+that name the route direction and channel. Tooltips carry the same phrase; a
+production-window regression checks the GTK LABEL property on both a playback
+bus output selector and a microphone input selector.

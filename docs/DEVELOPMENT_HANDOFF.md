@@ -305,3 +305,14 @@ No dump or log contents were published to GitHub. Machine-specific configuration
   intercepts the property update call, not the unreliable isolated AT-SPI probe.
 - This is the next focused accessibility slice beyond `cff5bac`; run the targeted
   test and full gate before push, then validate the new hosted CI artifact.
+
+
+## Contextual OUT/IN accessible labels — 2026-10-29
+
+- Mixer route menu buttons keep the compact visible captions `OUT`/`IN`, but
+  now expose contextual accessible names: `Choose where {channel} is sent` and
+  `Choose what feeds {channel}`. Tooltips are kept in sync with these names.
+- The production GTK/Xvfb test captures actual accessible LABEL property
+  updates and asserts the Game OUT and microphone IN controls receive the
+  channel-specific names. This supplements, rather than replaces, live
+  AT-SPI/screen-reader verification.

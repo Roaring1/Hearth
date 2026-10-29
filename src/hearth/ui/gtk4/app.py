@@ -359,7 +359,9 @@ class Strip(Gtk.Box):
         self.out_button = Gtk.MenuButton()
         self.out_button.set_label("OUT")
         self.out_button.add_css_class("outbtn")
-        self.out_button.set_tooltip_text(f"Choose where {channel.name} is sent")
+        out_label = f"Choose where {channel.name} is sent"
+        action_icons.accessible_label(self.out_button, out_label)
+        self.out_button.set_tooltip_text(out_label)
         self.out_popover = Gtk.Popover()
         self.out_popover.add_css_class("outpop")
         self.out_button.set_popover(self.out_popover)
@@ -374,7 +376,9 @@ class Strip(Gtk.Box):
             self.in_button = Gtk.MenuButton()
             self.in_button.set_label("IN")
             self.in_button.add_css_class("outbtn")
-            self.in_button.set_tooltip_text(f"Choose what feeds {channel.name}")
+            in_label = f"Choose what feeds {channel.name}"
+            action_icons.accessible_label(self.in_button, in_label)
+            self.in_button.set_tooltip_text(in_label)
             self.in_popover = Gtk.Popover()
             self.in_popover.add_css_class("outpop")
             self.in_button.set_popover(self.in_popover)

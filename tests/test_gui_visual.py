@@ -30,6 +30,19 @@ def test_production_windows_render_and_capture(
     from hearth.ui.gtk4 import remap as remap_mod
     from hearth.ui.gtk4 import setup as setup_mod
 
+    # Observe explicit accessible LABEL updates while preserving the actual
+    # GTK property writes, so the test checks named controls rather than a
+    # tooltip or neighboring visible text.
+    accessible_labels: dict[int, list[str]] = {}
+    original_update_property = Gtk.Accessible.update_property
+
+    def record_accessible_label(widget, properties, values):
+        if Gtk.AccessibleProperty.LABEL in properties:
+            accessible_labels.setdefault(id(widget), []).append(str(values[0]))
+        return original_update_property(widget, properties, values)
+
+    monkeypatch.setattr(Gtk.Accessible, "update_property", record_accessible_label)
+
     # Isolate every host-facing boundary. This still constructs the real GTK
     # application/window/strip widgets, but no collector, meter, IPC, systemd,
     # pactl, MIDI, user config or installed script is read or written.
@@ -192,6 +205,14 @@ def test_production_windows_render_and_capture(
     pump(0.6)
     window = application.window
     assert window is not None and window.get_mapped()
+
+    game_out = window.strips["vm_game"].out_button
+    mic_in = window.strips["mic_b1"].in_button
+    assert game_out is not None and mic_in is not None
+    game_out_name = f"Choose where {window.strips['vm_game'].channel.name} is sent"
+    mic_in_name = f"Choose what feeds {window.strips['mic_b1'].channel.name}"
+    assert game_out_name in accessible_labels[id(game_out)]
+    assert mic_in_name in accessible_labels[id(mic_in)]
 
     # Initial state before any collector snapshot: strips are skeletons,
     # their controls are disabled, and the device text says it is checking.
