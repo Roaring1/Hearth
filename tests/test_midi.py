@@ -116,6 +116,8 @@ def test_no_internal_names_reach_the_user() -> None:
     texts = [c.action for c in midi.LPD8_KNOBS + midi.LPD8_PADS]
     texts.append(midi.LED_NOTE)
     texts += [s.label for s in midi.SURFACES]
+    assert "mixer UI" in midi.LED_NOTE
+    assert "not mixer mute status" in midi.LED_NOTE
     for text in texts:
         for token in banned:
             assert token not in text, f"{token!r} leaked into {text!r}"

@@ -15,11 +15,13 @@ imported or built until somebody opens it, and the window reads the map
 only while it is on screen: no poll, just a re-read on every open, which
 also covers the user editing the script by hand.
 
-The controls also show where they actually are. A knob's notch sits at the
-volume that knob last wrote, and a pad glows while the bus it watches is
-audible, matching the pad's own LED. None of that is polled from here: the
-mixer hands this window the snapshot it was already taking, so an open
-LPD8 window costs a few redraws and no extra reads at all.
+The controls also show the mixer's current state. A knob's notch sits at the
+volume that knob last wrote, and a pad glows in this window while the bus it
+watches is audible. This is an on-screen indicator, not a readback of the
+physical pad LED; the original LPD8 cannot receive Note feedback to mirror
+mute state. None of the state is polled from here: the mixer hands this window
+the snapshot it was already taking, so an open LPD8 window costs a few redraws
+and no extra reads at all.
 
 Every edit is written straight to ``~/bin/lpd8_mixer.sh`` and the unit is
 restarted, because a mapping the hardware is not using yet is not a

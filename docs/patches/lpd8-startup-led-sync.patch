@@ -1,28 +1,63 @@
 --- a/lpd8_mixer.sh
 +++ b/lpd8_mixer.sh
-@@ -236 +236,3 @@
+@@ -13,6 +13,6 @@
+-# - LED SYNC: On connect, reads actual PulseAudio mute state and writes Note On/Off back to
+-#   the LPD8 via amidi to sync pad LEDs to reality.  Each mute-state change also updates the LED.
+-#   Action pads (3,5,8) briefly flash their LED on each trigger.
+-#   NOTE: LED sync requires the LPD8 to be in NOTE TOGGLE mode in its hardware preset.
+-#         In CC TOGGLE mode the hardware manages the LED itself; the startup sync still works
+-#         for getting the initial state right after reboot.
++# - Startup reads the actual PulseAudio mute state to seed Hearth's internal toggle state.
++# - The attached classic LPD8 (USB VID:PID 09e8:0075) does not recognize incoming MIDI Note
++#   messages (per Akai's original MIDI implementation chart), so host-driven pad LED feedback
++#   is disabled. Physical pad illumination is controlled by the device itself. Do not report
++#   a MIDI write as visible LED initialization. LED feedback is opt-in for a controller known
++#   to support incoming Note On/Off messages via LED_FEEDBACK_SUPPORTED=1 in the config.
+@@ -106,3 +106,6 @@
+-# ---- LED feedback config ----
+-# MIDI channel (0-indexed) used to send Note On/Off back to the LPD8 for LED control.
+-# 9 = channel 10 (standard drum channel).  Override in roaring_mixer.conf as LED_MIDI_CHANNEL=9
++# ---- LED feedback capability/config ----
++# Default OFF for the classic LPD8 (USB VID:PID 09e8:0075), which cannot accept
++# incoming MIDI Note messages. Opt in only for a controller verified to support
++# host-driven pad LEDs by setting LED_FEEDBACK_SUPPORTED=1 in roaring_mixer.conf.
++LED_FEEDBACK_SUPPORTED=0
++# MIDI channel (0-indexed) used for supported devices; channel 10 by default.
+@@ -110 +113 @@
+-_lpd8_amidi_port=""   # set after port detection in run_port_loop
++_lpd8_amidi_port=""   # detected only if LED feedback is explicitly enabled
+@@ -126,0 +130 @@
++  LED_FEEDBACK_SUPPORTED=0
+@@ -127,0 +132 @@
++  # shellcheck source=/dev/null
+@@ -236 +241,3 @@
 -  amidi -l 2>/dev/null | awk '/LPD8/ {print $2; exit}'
 +  # Port enumeration can fail during USB reconnect; bound it and return empty
 +  # so LED initialization can retry instead of wedging or exiting the daemon.
 +  timeout 2s amidi -l 2>/dev/null | awk '/LPD8/ {print $2; exit}' || true
-@@ -244 +246 @@
+@@ -244 +251,4 @@
 -  [[ -z "${_lpd8_amidi_port:-}" ]] && return 0
++  # The current classic LPD8 cannot receive MIDI Note feedback. Treat pad LEDs
++  # as hardware-managed and avoid futile writes; state initialization is separate.
++  [[ "${LED_FEEDBACK_SUPPORTED:-0}" == "1" ]] || return 0
 +  [[ -z "${_lpd8_amidi_port:-}" ]] && return 1
-@@ -250 +252,4 @@
+@@ -250 +260,4 @@
 -  amidi -p "$_lpd8_amidi_port" \
 +  # Bound each write so a disappearing USB device cannot wedge the MIDI loop.
 +  # Return the real result: startup sync must retry failures instead of falsely
 +  # marking all LEDs initialized after silently discarded amidi errors.
 +  timeout 1s amidi -p "$_lpd8_amidi_port" \
-@@ -252 +257 @@
+@@ -252 +265 @@
 -    2>/dev/null || true
 +    >/dev/null 2>&1
-@@ -259,2 +264,2 @@
+@@ -259,2 +272,4 @@
 -  lpd8_led_set "$pad_idx" 1
 -  ( sleep 0.35; lpd8_led_set "$pad_idx" 0 ) &
++  # Do not spawn a delayed OFF write for hardware that cannot accept feedback.
++  [[ "${LED_FEEDBACK_SUPPORTED:-0}" == "1" ]] || return 0
 +  lpd8_led_set "$pad_idx" 1 || true
 +  ( sleep 0.35; lpd8_led_set "$pad_idx" 0 || true ) &
-@@ -266,0 +272,14 @@
+@@ -266,0 +282,14 @@
 +# Rate-limit retry logs while continuing to retry failed startup/reconnect syncs.
 +LED_SYNC_LAST_LOG_MS=0
 +log_led_sync_retry() {
@@ -37,14 +72,19 @@
 +# Read actual mute state and initialize the LPD8 on every connection. A failed
 +# probe/write returns failure so run_port_loop keeps retrying instead of
 +# treating a no-port/timeout as a completed sync.
-@@ -268 +287,5 @@
+@@ -268 +296,0 @@
 -  [[ -z "${_lpd8_amidi_port:-}" ]] && { log "LED sync skipped: no amidi port"; return 0; }
-+  _lpd8_amidi_port="$(detect_lpd8_amidi_port)" || _lpd8_amidi_port=""
-+  if [[ -z "${_lpd8_amidi_port:-}" ]]; then
-+    log_led_sync_retry "raw amidi port unavailable"
-+    return 1
+@@ -269,0 +298,9 @@
++  if [[ "$LED_FEEDBACK_SUPPORTED" == "1" ]]; then
++    _lpd8_amidi_port="$(detect_lpd8_amidi_port)" || _lpd8_amidi_port=""
++    if [[ -z "${_lpd8_amidi_port:-}" ]]; then
++      log_led_sync_retry "raw amidi port unavailable"
++      return 1
++    fi
++  else
++    _lpd8_amidi_port=""
 +  fi
-@@ -272,2 +295,7 @@
+@@ -272,2 +309,7 @@
 -    # returns 1 if unmuted (LED on), 0 if muted (LED off)
 -    pactl get-sink-mute "$1" 2>/dev/null | grep -q 'Mute: yes' && echo 0 || echo 1
 +    local status
@@ -54,7 +94,7 @@
 +      *"Mute: no"*)  printf '1' ;;
 +      *) return 1 ;;
 +    esac
-@@ -276 +304,7 @@
+@@ -276 +318,7 @@
 -    pactl get-source-mute "$1" 2>/dev/null | grep -q 'Mute: yes' && echo 0 || echo 1
 +    local status
 +    status="$(pactl get-source-mute "$1" 2>/dev/null)" || return 1
@@ -63,7 +103,7 @@
 +      *"Mute: no"*)  printf '1' ;;
 +      *) return 1 ;;
 +    esac
-@@ -279,15 +313,35 @@
+@@ -279,15 +327,37 @@
 -  local s1; s1="$(_sink_led_state "$SINK_MUSIC")"
 -  local s2; s2="$(_sink_led_state "$SINK_CHAT")"
 -  local s4; s4="$(_sink_led_state "$ASTRO_TARGET")"
@@ -102,53 +142,91 @@
 +    return 1
 +  fi
 +
-+  # If any write fails, leave sync pending and retry the entire snapshot.
-+  # Action pads always start dark; state pads show actual mute status.
-+  local spec pad state
-+  for spec in "1:$s1" "2:$s2" "3:0" "4:$s4" "5:0" "6:$s6" "7:$s7" "8:0"; do
-+    pad="${spec%%:*}"
-+    state="${spec#*:}"
-+    if ! lpd8_led_set "$pad" "$state"; then
-+      _lpd8_amidi_port=""
-+      log_led_sync_retry "MIDI write failed on pad $pad"
-+      return 1
-+    fi
-+  done
-@@ -302 +356,3 @@
++  # Only send hardware LED feedback if explicitly enabled for a compatible unit.
++  # For the classic LPD8, still seed Hearth's software toggle state from real mutes.
++  if [[ "$LED_FEEDBACK_SUPPORTED" == "1" ]]; then
++    local spec pad state
++    for spec in "1:$s1" "2:$s2" "3:0" "4:$s4" "5:0" "6:$s6" "7:$s7" "8:0"; do
++      pad="${spec%%:*}"
++      state="${spec#*:}"
++      if ! lpd8_led_set "$pad" "$state"; then
++        _lpd8_amidi_port=""
++        log_led_sync_retry "MIDI write failed on pad $pad"
++        return 1
++      fi
++    done
++  fi
+@@ -302 +372,7 @@
 -  log "LED sync: music=$s1 chat=$s2 astro=$s4 mic=$s6 game=$s7 (action pads dark)"
 +  LED_SYNC_LAST_LOG_MS=0
-+  log "LED sync complete: music=$s1 chat=$s2 astro=$s4 mic=$s6 game=$s7 (action pads dark)"
++  if [[ "$LED_FEEDBACK_SUPPORTED" == "1" ]]; then
++    log "LED sync complete: music=$s1 chat=$s2 astro=$s4 mic=$s6 game=$s7 (action pads dark)"
++  else
++    log "pad state initialized: music=$s1 chat=$s2 astro=$s4 mic=$s6 game=$s7; LED feedback unavailable on classic LPD8 (incoming MIDI Notes unsupported)"
++  fi
 +  return 0
-@@ -325 +381 @@
+@@ -325 +401 @@
 -      lpd8_led_set 1 "$state"
 +      lpd8_led_set 1 "$state" || true
-@@ -329 +385 @@
+@@ -329 +405 @@
 -      lpd8_led_set 2 "$state"
 +      lpd8_led_set 2 "$state" || true
-@@ -333 +389 @@
+@@ -333 +409 @@
 -      lpd8_led_set 4 "$state"
 +      lpd8_led_set 4 "$state" || true
-@@ -337 +393 @@
+@@ -337 +413 @@
 -      lpd8_led_set 6 "$state"
 +      lpd8_led_set 6 "$state" || true
-@@ -341 +397 @@
+@@ -341 +417 @@
 -      lpd8_led_set 7 "$state"
 +      lpd8_led_set 7 "$state" || true
-@@ -616 +672,3 @@
+@@ -358 +434,5 @@
+-      [[ -x "$DUMP_SCRIPT" ]] && "$DUMP_SCRIPT" || log "dump script missing: $DUMP_SCRIPT"
++      if [[ -x "$DUMP_SCRIPT" ]]; then
++        "$DUMP_SCRIPT" || log "dump script failed: $DUMP_SCRIPT"
++      else
++        log "dump script missing: $DUMP_SCRIPT"
++      fi
+@@ -363 +443,5 @@
+-      [[ -x "$TOGGLE_SCARLETT" ]] && "$TOGGLE_SCARLETT" || log "toggle scarlett script missing: $TOGGLE_SCARLETT"
++      if [[ -x "$TOGGLE_SCARLETT" ]]; then
++        "$TOGGLE_SCARLETT" || log "toggle scarlett script failed: $TOGGLE_SCARLETT"
++      else
++        log "toggle scarlett script missing: $TOGGLE_SCARLETT"
++      fi
+@@ -603,4 +687,9 @@
+-  # Detect the raw ALSA MIDI port for LED write-back.
+-  _lpd8_amidi_port="$(detect_lpd8_amidi_port)"
+-  if [[ -n "${_lpd8_amidi_port:-}" ]]; then
+-    log "LED output: amidi port=$_lpd8_amidi_port (Note On/Off for LED sync)"
++  # The raw MIDI output is only needed for explicitly supported LED feedback.
++  load_conf
++  if [[ "$LED_FEEDBACK_SUPPORTED" == "1" ]]; then
++    _lpd8_amidi_port="$(detect_lpd8_amidi_port)"
++    if [[ -n "${_lpd8_amidi_port:-}" ]]; then
++      log "LED feedback enabled: amidi port=$_lpd8_amidi_port"
++    else
++      log "LED feedback enabled but raw amidi port not found; initialization will retry."
++    fi
+@@ -608 +697,2 @@
+-    log "LED output: amidi port not found — install alsa-utils or check 'amidi -l'; LEDs won't sync from software."
++    _lpd8_amidi_port=""
++    log "LED feedback disabled: the attached classic LPD8 does not accept incoming MIDI Note messages."
+@@ -616 +706,3 @@
 -  local led_synced=0   # have we done the startup LED sync yet?
 +  local led_synced=0   # true only after every startup LED write succeeds
 +  local led_sync_retry_ms=0
 +  LED_SYNC_LAST_LOG_MS=0
-@@ -630,6 +688,10 @@
+@@ -630,6 +722,10 @@
 -    # Once the startup guard expires, sync all LEDs to current PulseAudio state.
 -    # This runs exactly once per connection — it fixes the "all LEDs dark after
 -    # reboot/reconnect even though mutes are off" problem.
 -    if (( led_synced == 0 )) && pads_enabled; then
 -      sync_leds_to_pulse_state
 -      led_synced=1
-+    # Retry startup/reconnect LED initialization until every write is accepted.
-+    # Previously a missing raw port or failed amidi write was silently treated
-+    # as success, leaving LEDs dark until a pad was physically pressed.
++    # Initialize internal pad toggle state from PulseAudio; on compatible
++    # devices also sync LEDs. Unsupported classic LPD8 hardware is not probed
++    # repeatedly for a feedback feature it cannot implement.
 +    local led_now
 +    led_now="$(now_ms)"
 +    if (( led_synced == 0 )) && pads_enabled && (( led_now - led_sync_retry_ms >= 1000 )); then

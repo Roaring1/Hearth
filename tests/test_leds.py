@@ -72,6 +72,31 @@ def test_the_other_controller_is_not_mistaken_for_the_lpd8() -> None:
     assert leds.parse_port(listing) is None
 
 
+def test_classic_lpd8_port_is_not_used_for_led_feedback() -> None:
+    """The original hardware is transmit-only for Note messages."""
+    assert leds.parse_feedback_port(RAW.read_text()) is None
+
+
+def test_feedback_port_requires_an_explicit_mkii_label() -> None:
+    listing = "Dir Device    Name\nIO  hw:7,0,0  LPD8 mk2 MIDI 1\n"
+    assert leds.parse_feedback_port(listing) == "hw:7,0,0"
+
+
+def test_find_port_skips_classic_lpd8_for_led_feedback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(leds.proc, "have", lambda _name: True)
+    monkeypatch.setattr(
+        leds.proc,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(ok=True, out=RAW.read_text()),
+    )
+
+    assert leds.find_port() is None
+
+
 def test_an_empty_listing_is_not_a_port() -> None:
     assert leds.parse_port("") is None
 

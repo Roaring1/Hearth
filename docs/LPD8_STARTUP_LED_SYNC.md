@@ -1,47 +1,58 @@
-# LPD8 startup and reconnect LED synchronization
+# LPD8 startup state initialization and LED-feedback limitation
 
-## Runtime change
+## Verified hardware capability
 
-The installed control script is `~/bin/lpd8_mixer.sh` and is invoked by the
-user unit `lpd8-mixer.service`. That script is intentionally outside the Hearth
-source tree because the existing remap UI edits its mapping constants in
-place. The exact host-script delta is preserved in
+The attached device identifies as USB `09e8:0075`, the original/classic Akai
+LPD8 (not the LPD8 MkII). The original Akai LPD8 Quickstart Guide's MIDI
+Implementation Chart lists note numbers `000–127` under Transmit/Export and
+`n/a` under Recognize/Import. Therefore this unit does not accept incoming MIDI
+Note On/Off messages as a means of setting its pad lights.
+
+Reference: [Akai LPD8 Quickstart Guide, MIDI Implementation Chart (page 5)](https://static.bhphotovideo.com/lit_files/84742.pdf).
+
+## Runtime behavior
+
+The installed script is `~/bin/lpd8_mixer.sh`, invoked by `lpd8-mixer.service`.
+It remains outside the Hearth source tree because the remap UI edits mapping
+constants in place. Its complete host-side delta is preserved in
 [`patches/lpd8-startup-led-sync.patch`](patches/lpd8-startup-led-sync.patch).
+Hearth's separate Python LED worker also now ignores raw ports unless their
+reported model explicitly identifies the feedback-capable LPD8 MkII; this
+prevents the GTK mixer from repeatedly trying unsupported feedback on the
+classic unit. The controller drawing in the app is a software indicator, not
+physical LED readback.
 
-The bug was a false-success path: `lpd8_led_set` swallowed every `amidi` error,
-`sync_leds_to_pulse_state` therefore looked successful, and the connection loop
-set `led_synced=1` after its first attempt regardless of whether the raw port
-was available or all pad writes had succeeded. A brief USB/ALSA timing gap at
-startup/reconnect could leave LEDs dark until the user physically pressed a
-pad.
+The earlier startup patch improved timeout/retry handling but incorrectly
+assumed the attached hardware could accept Note On/Off feedback. The MIDI
+command's successful exit only showed that the host-side MIDI utility accepted
+the write; it did not prove the device changed its LEDs. The user confirmed that
+all eight pads remained dark and only the hardware `PAD` mode indicator was lit.
 
-The patch makes MIDI writes return their true status and places each write and
-raw-port enumeration behind a timeout. Startup initialization validates each
-mute-state query, sends the five state-pad values plus explicit OFF messages to
-action pads 3, 5, and 8, and only marks the connection initialized after all
-eight writes succeed. On a missing port, failed state query, timeout, or failed
-write, it retries once per second with retry logging rate-limited to avoid log
-flooding. The same logic runs in every new `run_port_loop`, so an ALSA
-sequencer disconnect/reconnect gets a fresh sync as well. Individual pad-event
-LED failures remain non-fatal to the mixer loop.
+The current script now:
 
-## Verification recorded on 2026-10-28
+- Defaults `LED_FEEDBACK_SUPPORTED=0` for this classic LPD8 and does not send
+  futile Note On/Off messages to it.
+- Logs explicitly that hardware LED feedback is disabled, rather than claiming
+  visible LEDs synchronized.
+- Still reads the actual Pulse/PipeWire mute states on startup/reconnect and
+  seeds Hearth's internal CC/Program toggle state, so the first physical pad
+  press is interpreted against real mixer state.
+- Retains the timeout/retry/write-validation path behind an explicit
+  `LED_FEEDBACK_SUPPORTED=1` opt-in for a different controller verified to
+  support incoming Note On/Off pad-light control. Do not enable this setting for
+  USB device `09e8:0075`.
 
-- `bash -n ~/bin/lpd8_mixer.sh` passes.
-- A fake-device test exercised an empty raw-port listing on the first attempt,
-  a failed first MIDI write on the second attempt, and a successful third
-  attempt. The third attempt emitted all eight expected messages on channel 10:
-  pads 1, 2, 4, 6, and 7 lit for the current unmuted buses/devices; pads 3, 5,
-  and 8 explicitly dark. No real device was touched by this fake-device test.
-- A direct, state-only sync to the real LPD8 at `hw:6,0,0` returned success for
-  all eight writes. The `lpd8-mixer.service` was restarted once to load the
-  patch; the new log reports `LED sync complete: music=1 chat=1 astro=1 mic=1
-game=1 (action pads dark)`. The service is active/running afterwards.
-- The Game/Chat monitor routes, all four VM-bus volume/mute states, and the
-  audio-routing service were checked after restart and remained at baseline.
+## Verification
 
-The MIDI command's successful exit and the service log prove that the host sent
-the initialization messages; they cannot optically verify the physical LEDs.
-If the pads are still dark despite the new `LED sync complete` line, verify the
-LPD8's active pad mode/preset accepts incoming MIDI Note On feedback. The
-script cannot infer a pad's visible color from a successful MIDI write alone.
+- `bash -n ~/bin/lpd8_mixer.sh` and ShellCheck pass after the capability correction.
+- Three regression tests verify that a classic `LPD8 MIDI 1` port is not selected for LED feedback, the supported-port parser requires an explicit MkII label, and `find_port()` skips the classic controller. The original generic `parse_port()` remains available for connection diagnostics.
+- The earlier fake-device test validated recovery from a missing raw MIDI port
+  and transient write failure. That proves retry behavior only, not physical LED
+  support, and is not evidence of actual LEDs illuminating.
+- The actual device is detected by `lsusb` as `09e8:0075`; `amidi -l` lists
+  `hw:6,0,0 LPD8 MIDI 1`.
+- The device's pad LEDs cannot be initialized dynamically through the classic
+  LPD8 MIDI Note protocol. Use a controller with inbound LED feedback (such as
+  an appropriately configured LPD8 MkII) if the app must show mute state on
+  the pad surfaces. Mixer controls continue to work independently of this
+  limitation.

@@ -106,7 +106,10 @@ LPD8_PADS: tuple[Control, ...] = (
 )
 
 #: How to read the pad lights, shown alongside the legend.
-LED_NOTE = "A lit pad means that sound is on. A dark pad means it is muted."
+LED_NOTE = (
+    "Pad lights may show the controller's local state, not mixer mute status; "
+    "use the mixer UI to confirm mute state."
+)
 
 
 @dataclass(frozen=True, slots=True)

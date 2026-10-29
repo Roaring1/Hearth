@@ -1591,10 +1591,9 @@ class MixerWindow(Gtk.ApplicationWindow):
             was_muted, first = state.muted, not was_seen
             state.muted = bool(sink.muted) if sink else False
             if state.present and (first or state.muted != was_muted):
-                # Done here rather than in the mute handler so a mute from
-                # anywhere -- this window, a pad, pavucontrol, a script --
-                # reaches the pad LED. The surface has no screen; a lit pad
-                # over a silent bus is the whole problem.
+                # Queue best-effort feedback for a controller that explicitly
+                # supports incoming LED notes. This is not hardware readback;
+                # the mixer snapshot remains the source of truth for mute state.
                 self._push_led(channel.sink, state.muted)
             state.listeners = streams.get(channel.sink, [])
             state.device = self._device_label(channel, snapshot)

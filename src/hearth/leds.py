@@ -1,26 +1,22 @@
-"""Pad LEDs on the LPD8, pushed from Hearth.
+"""Optional MIDI pad-light feedback for compatible control surfaces.
 
-``lpd8_mixer.sh`` already lights a pad when *it* handles a press, and syncs
-every LED once at connect time. What it cannot do is notice a mute that
-happened somewhere else -- clicking MUTE in this window, or another app
-muting a sink -- so the pad stayed lit over a silent bus and the surface
-quietly started lying about the state of the rig.
+This module can send Note On/Off messages on controllers that explicitly
+support incoming MIDI notes for pad-light control (such as a properly
+configured LPD8 MkII). The attached classic LPD8, USB ID ``09e8:0075``, is
+transmit-only for notes according to Akai's original MIDI implementation
+chart. It cannot mirror Hearth's mute state on its physical pad LEDs, even
+when ``amidi`` exits successfully. ``find_port`` therefore opts in only when
+the device label explicitly identifies the feedback-capable MkII; ordinary
+classic ``LPD8 MIDI 1`` ports are ignored.
 
-This module writes the same bytes the shell script writes, so both paths
-agree:
+For compatible hardware:
 
 * pad *n* (1-8) is note ``59 + n``;
-* the message is a Note On on :data:`DEFAULT_CHANNEL` (``LED_MIDI_CHANNEL``
-  in ``roaring_mixer.conf``);
-* velocity 127 lights the pad, velocity 0 clears it;
-* **lit means audible.** A muted channel is a dark pad, which matches the
-  script's own ``sync_leds_to_pulse_state``.
+* the message is a Note On on :data:`DEFAULT_CHANNEL`;
+* velocity 127 requests a lit pad, velocity 0 requests a dark pad.
 
-Two hardware truths are deliberately not hidden. The LPD8 only accepts LED
-writes in NOTE TOGGLE mode -- in CC mode the device owns its lights and
-these messages are ignored -- and the pad may simply be unplugged. Neither
-is an error worth interrupting a mixer for, so every failure here is
-swallowed and logged.
+A failed/unavailable feedback write must never interrupt audio mixing. The
+mixer UI is the source of truth for mute state regardless of physical LEDs.
 """
 
 from __future__ import annotations
@@ -93,25 +89,46 @@ def parse_port(listing: str) -> str | None:
     return None
 
 
-def find_port(timeout: float = 2.0) -> str | None:
-    """Ask ALSA where the LPD8 is, or ``None`` if it cannot be asked.
+def parse_feedback_port(listing: str) -> str | None:
+    """Return only a raw LPD8 port whose label identifies the LED-capable MkII.
 
-    ``None`` covers both "unplugged" and "``amidi`` is not installed". The
-    caller treats them the same -- there is nothing to light either way --
-    but they are not reported to the user as a fault.
+    The classic LPD8's MIDI implementation is transmit-only for Note messages;
+    it must not be mistaken for a feedback-capable device just because its raw
+    ALSA port is writable. Keep :func:`parse_port` separately available for
+    diagnostics that need to identify any LPD8 generation.
+    """
+    for line in listing.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) < 3 or "lpd8" not in fields[2].lower():
+            continue
+        model = fields[2].lower().replace("-", " ").replace("_", " ")
+        if "mk2" in model or "mkii" in model:
+            return fields[1]
+        log.debug(
+            "not enabling pad LED feedback for unsupported/unverified controller: %s", fields[2]
+        )
+    return None
+
+
+def find_port(timeout: float = 2.0) -> str | None:
+    """Find a known LED-feedback-capable LPD8, or ``None`` if unavailable.
+
+    A classic ``LPD8 MIDI 1`` port is intentionally not returned: the original
+    hardware does not recognize incoming Note On/Off messages, so issuing writes
+    to it would create a false impression that physical pad lights can sync.
     """
     if not proc.have("amidi"):
         return None
     try:
         result = proc.run(["amidi", "-l"], timeout=timeout, check=False)
     except CommandError as exc:
-        # A slow/unavailable controller is not a mixer failure. The caller
-        # retries on the next queued state update; don't let a timeout escape.
+        # A slow/unavailable controller is not a mixer failure. Don't let a
+        # timeout escape into the UI worker.
         log.debug("could not list LPD8 ports: %s", exc)
         return None
     if not result.ok:
         return None
-    return parse_port(result.out)
+    return parse_feedback_port(result.out)
 
 
 def set_pad(port: str, pad: int, lit: bool, channel: int = DEFAULT_CHANNEL) -> bool:
