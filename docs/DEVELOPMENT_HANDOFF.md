@@ -517,3 +517,29 @@ row movement are checked in the safety test and real GTK production-window test.
 - Local validation: the focused IPC suite passes 33 tests; the full suite passes
   484 tests. Ruff and formatting pass. The first full run exposed a mypy import
   issue, which was fixed by importing `IpcError` from its defining module.
+
+
+## Setup endpoint-choice accessible names — 2026-10-29
+
+- The compact headset `Chat`/`Game` choices now announce their function and
+  endpoint (`Use Astro A50 Chat endpoint for bus routing`, etc.). The Moonlight
+  `Stream`/`Chat` choices identify which microphone is routed to which target.
+  Visible labels, grouping and the existing save/restart handlers are unchanged.
+- The production GTK regression checks all four explicit LABEL properties from
+  the actual Setup window; it doesn't toggle or save any of these controls.
+
+
+## Cross-process IPC socket-path locking — 2026-10-29
+
+- Server startup now serializes stale-socket inspection, unlink, bind and
+  listener-thread startup with a persistent owner-only lock file. Stale-socket
+  cleanup and shutdown's owned-inode removal use the same lock, closing the
+  check-then-unlink race between concurrent launchers.
+- The lock refuses symlinked, non-regular, foreign-owned, or hard-linked lock
+  paths. The lock file intentionally persists at mode `0600`; deleting it on
+  unlock would let later processes lock different inodes.
+- Regression coverage starts two contenders against one stale socket and
+  asserts exactly one live listener, and verifies symlinked locks never touch
+  their target files. The focused IPC suite passes **36 tests**; the full local
+  gate passes **487 tests**, with Ruff, formatting, mypy (34 source files),
+  metadata checks and ShellCheck green.
