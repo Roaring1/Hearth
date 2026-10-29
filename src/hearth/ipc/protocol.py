@@ -53,6 +53,7 @@ def read_line(sock: socket.socket, limit: int = MAX_MSG) -> str:
 
     chunks: list[bytes] = []
     total = 0
+    terminated = False
     while total < limit:
         buf = sock.recv(min(4096, limit - total))
         if not buf:
@@ -60,12 +61,15 @@ def read_line(sock: socket.socket, limit: int = MAX_MSG) -> str:
         newline = buf.find(b"\n")
         if newline != -1:
             chunks.append(buf[:newline])
+            terminated = True
             break
         chunks.append(buf)
         total += len(buf)
     else:
         raise IpcError(f"IPC message exceeds {limit} bytes without a newline")
 
+    if not terminated:
+        raise IpcError("IPC message ended before its newline terminator")
     return b"".join(chunks).decode(errors="replace").strip()
 
 

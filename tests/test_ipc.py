@@ -53,6 +53,41 @@ def test_reply_larger_than_the_old_256_byte_recv(running, sock_path):
     assert json.loads(reply)["vm_bus_19"]["volume"] == 55
 
 
+def test_unterminated_command_is_not_dispatched(running, sock_path):
+    calls: list[str] = []
+    running[1]["handler"] = lambda request: calls.append(request) or "ok"
+    peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    peer.settimeout(1.0)
+    try:
+        peer.connect(str(sock_path))
+        peer.sendall(b"quit")  # Deliberately omit the required newline.
+        peer.shutdown(socket.SHUT_WR)
+        assert peer.recv(64) == b""
+    finally:
+        peer.close()
+    assert calls == []
+
+
+def test_client_treats_malformed_unterminated_reply_as_unavailable(sock_path):
+    sock_path.parent.mkdir(parents=True, exist_ok=True)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(sock_path))
+    listener.listen(1)
+
+    def close_without_reply() -> None:
+        conn, _ = listener.accept()
+        conn.close()
+        listener.close()
+
+    worker = threading.Thread(target=close_without_reply, daemon=True)
+    worker.start()
+    try:
+        assert client.send("show", socket_path=sock_path) is None
+    finally:
+        worker.join(timeout=1.0)
+        listener.close()
+
+
 def test_handler_exception_does_not_kill_the_listener(running, sock_path):
     """A raising handler used to break IPC permanently via `except: break`."""
 
@@ -90,6 +125,12 @@ def test_stale_socket_file_is_detected_and_removed(sock_path):
 
 
 def test_live_socket_is_never_removed(running, sock_path):
+    assert client.clear_stale_socket(sock_path) is False
+    assert sock_path.exists()
+
+
+def test_stale_cleanup_preserves_connected_socket_with_malformed_reply(running, sock_path):
+    running[1]["handler"] = lambda _request: (_ for _ in ()).throw(RuntimeError("no reply"))
     assert client.clear_stale_socket(sock_path) is False
     assert sock_path.exists()
 
@@ -135,6 +176,17 @@ def test_bind_refuses_to_replace_a_regular_file(sock_path):
         srv.bind()
 
     assert sock_path.read_text() == "keep this file"
+
+
+def test_bind_preserves_live_socket_when_its_handler_returns_no_reply(running, sock_path):
+    running[1]["handler"] = lambda _request: (_ for _ in ()).throw(RuntimeError("handler failed"))
+    competing = server.Server(lambda _request: "second", socket_path=sock_path)
+
+    with pytest.raises(OSError, match="already has a listener"):
+        competing.bind()
+
+    assert sock_path.exists()
+    assert client.clear_stale_socket(sock_path) is False
 
 
 def test_bind_does_not_unlink_a_live_server_socket(running, sock_path):
@@ -223,6 +275,18 @@ def test_read_line_limit_is_strict_even_for_non_aligned_limits():
         with pytest.raises(IpcError, match="exceeds 1000 bytes"):
             protocol.read_line(right, limit=1000)
     finally:
+        right.close()
+
+
+def test_read_line_rejects_eof_before_newline_terminator():
+    left, right = socket.socketpair()
+    try:
+        left.sendall(b"quit")
+        left.shutdown(socket.SHUT_WR)
+        with pytest.raises(IpcError, match="ended before its newline"):
+            protocol.read_line(right)
+    finally:
+        left.close()
         right.close()
 
 

@@ -502,3 +502,18 @@ row movement are checked in the safety test and real GTK production-window test.
   raw IN and Carla checks all disable and recover. It also verifies an input
   that was already disabled because its source is unavailable remains disabled
   afterward, and adds a popover test for controls first opened while busy.
+
+
+## IPC newline framing hardening — 2026-10-29
+
+- The single-line socket protocol now rejects EOF before the required newline
+  delimiter. A peer that sends a partial command such as `quit` and closes the
+  connection no longer reaches the control dispatcher.
+- Client calls treat malformed/unterminated replies as unavailable IPC, and
+  stale-socket probes still preserve a path once `connect()` succeeds, even if
+  that live peer produces no valid response. Regression tests cover the raw
+  command/dispatch boundary, malformed client reply, and connected live socket
+  with a failing handler.
+- Local validation: the focused IPC suite passes 33 tests; the full suite passes
+  484 tests. Ruff and formatting pass. The first full run exposed a mypy import
+  issue, which was fixed by importing `IpcError` from its defining module.

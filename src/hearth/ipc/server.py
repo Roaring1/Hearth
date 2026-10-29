@@ -20,6 +20,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from hearth import paths
+from hearth.errors import IpcError
 from hearth.ipc import protocol
 
 log = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ class Server:
                 if connected:
                     # Let a live instance focus itself, then refuse to replace
                     # its pathname even if it does not manage to reply.
-                    with contextlib.suppress(OSError, TimeoutError):
+                    with contextlib.suppress(OSError, TimeoutError, IpcError):
                         probe.sendall(protocol.encode("show"))
                         protocol.read_line(probe)
             finally:

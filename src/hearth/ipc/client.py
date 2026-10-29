@@ -14,6 +14,7 @@ import stat
 from pathlib import Path
 
 from hearth import paths
+from hearth.errors import IpcError
 from hearth.ipc import protocol
 
 log = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ def send(command: str, *, socket_path: Path | None = None, timeout: float = 0.5)
         sock.connect(str(path))
         sock.sendall(protocol.encode(command))
         return protocol.read_line(sock)
-    except (OSError, TimeoutError) as exc:
+    except (OSError, TimeoutError, IpcError) as exc:
         # A socket file left behind by a crashed instance is the common case.
         log.debug("IPC send %r failed: %s", command, exc)
         return None
@@ -80,7 +81,7 @@ def clear_stale_socket(socket_path: Path | None = None) -> bool:
         if connected:
             # Keep the current instance's UX: ask a live mixer to focus itself.
             # Whether it replies quickly is not used to determine liveness.
-            with contextlib.suppress(OSError, TimeoutError):
+            with contextlib.suppress(OSError, TimeoutError, IpcError):
                 probe.sendall(protocol.encode("show"))
                 protocol.read_line(probe)
     finally:
