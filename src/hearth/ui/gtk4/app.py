@@ -368,7 +368,7 @@ class Strip(Gtk.Box):
         self.out_button.set_label("OUT")
         self.out_button.add_css_class("outbtn")
         out_label = f"Choose where {channel.name} is sent"
-        action_icons.accessible_label(self.out_button, out_label)
+        action_icons.menu_button_accessible_label(self.out_button, out_label)
         self.out_button.set_tooltip_text(out_label)
         self.out_popover = Gtk.Popover()
         self.out_popover.add_css_class("outpop")
@@ -385,7 +385,7 @@ class Strip(Gtk.Box):
             self.in_button.set_label("IN")
             self.in_button.add_css_class("outbtn")
             in_label = f"Choose what feeds {channel.name}"
-            action_icons.accessible_label(self.in_button, in_label)
+            action_icons.menu_button_accessible_label(self.in_button, in_label)
             self.in_button.set_tooltip_text(in_label)
             self.in_popover = Gtk.Popover()
             self.in_popover.add_css_class("outpop")
@@ -518,12 +518,12 @@ class Strip(Gtk.Box):
         _state: Gdk.ModifierType,
         listener_index: str,
     ) -> bool:
-        """Move a focused app row left/right across visible mixer buses."""
+        """Move a focused app-row grip left/right across visible mixer buses."""
         if keyval not in (Gdk.KEY_Left, Gdk.KEY_Right):
             return False
-        # The key controller bubbles from the focused row. If a child slider
-        # owns focus, its arrow keys must adjust volume rather than moving the
-        # app to another bus. Only the row itself authorizes this action.
+        # The key controller belongs to the dedicated app-row grip. If a
+        # child slider owns focus, its arrow keys must adjust volume rather than
+        # moving the app to another bus. Only the grip authorizes this action.
         move_control = self._listener_move_controls.get(listener_index)
         if move_control is None or not move_control.has_focus():
             return False
@@ -1168,7 +1168,11 @@ class Strip(Gtk.Box):
                 for index, name, was_muted in signature
             )
         _set_mute_icon(button, muted)
-        label = f"Unmute {listener.name}" if muted else f"Mute {listener.name}"
+        label = (
+            f"Unmute {listener.name} in {self.channel.name}"
+            if muted
+            else f"Mute {listener.name} in {self.channel.name}"
+        )
         action_icons.accessible_label(button, label)
         button.set_tooltip_text(label)
         if muted:
@@ -1181,6 +1185,8 @@ class Strip(Gtk.Box):
         row = button.get_parent()
         mark = row.get_first_child() if row is not None else None
         name_label = mark.get_next_sibling() if mark is not None else None
+        if isinstance(name_label, Gtk.DrawingArea):
+            name_label = name_label.get_next_sibling()
         if name_label is not None:
             if muted:
                 name_label.add_css_class("muted")
@@ -1197,7 +1203,7 @@ class Strip(Gtk.Box):
         if controls is not None:
             _control, value_label, _handler = controls
             value_label.set_text(f"{percent}%")
-        scale.set_tooltip_text(f"{listener.name}: {percent}%")
+        scale.set_tooltip_text(f"{listener.name} volume in {self.channel.name}: {percent}%")
 
         def failed() -> None:
             self._listener_volume_held[listener.index] = 0.0
@@ -1223,7 +1229,7 @@ class Strip(Gtk.Box):
                 finally:
                     scale.handler_unblock(handler)
             value_label.set_text(f"{percent}%")
-            scale.set_tooltip_text(f"{listener.name}: {percent}%")
+            scale.set_tooltip_text(f"{listener.name} volume in {self.channel.name}: {percent}%")
 
     def _fill_listeners(self, listeners: list[Listener], *, loading: bool = False) -> None:
         # A snapshot arrives every 250-500 ms. Recreating these rows on each
@@ -1289,38 +1295,56 @@ class Strip(Gtk.Box):
             name.set_hexpand(True)
             name.set_tooltip_text(listener.name)
             if listener.index:
-                # The visible app name remains the drag source. The containing
-                # row is the keyboard move handle, so focus has a real GTK
-                # focus target and the accessible group contains the app label,
-                # volume slider and mute action together.
+                # The app name remains the drag source. Give keyboard movement
+                # its own DrawingArea handle, matching the strip-reorder pattern:
+                # GTK skips focusable containers and labels during Tab traversal.
                 name.add_controller(app_drag)
-                name.set_tooltip_text(f"{listener.name} — drag to another bus")
-                row.set_focusable(True)
-                row.set_accessible_role(Gtk.AccessibleRole.GROUP)
+                name.set_tooltip_text(
+                    f"{listener.name} — drag from {self.channel.name} to another bus"
+                )
+                move_handle = Gtk.DrawingArea()
+                move_handle.set_content_width(16)
+                move_handle.set_content_height(16)
+                move_handle.set_focusable(True)
+                move_handle.set_accessible_role(Gtk.AccessibleRole.GROUP)
                 action_name = (
-                    f"Move {listener.name} between mixer buses; press Left or Right to move"
+                    f"Move {listener.name} from {self.channel.name} between mixer buses; "
+                    "press Left or Right to move"
                 )
-                action_icons.accessible_label(row, action_name)
-                row.set_tooltip_text(
-                    f"{listener.name} — drag its name to another bus, or focus this row and press Left/Right"
+                action_icons.accessible_label(move_handle, action_name)
+                move_handle.set_tooltip_text(
+                    f"{listener.name} — drag from {self.channel.name} to another bus, "
+                    "or focus and press Left/Right"
                 )
+
+                def draw_move_handle(_area, cr, _width, _height):
+                    cr.set_source_rgb(*parse_rgb(self.pal["button"]))
+                    for col in range(2):
+                        for row_index in range(3):
+                            cr.arc(4 + col * 5, 3.5 + row_index * 4.5, 1.15, 0, 6.2832)
+                            cr.fill()
+
+                move_handle.set_draw_func(draw_move_handle)
                 move_keys = Gtk.EventControllerKey()
                 move_keys.connect("key-pressed", self._on_listener_name_key_pressed, listener.index)
-                row.add_controller(move_keys)
-                self._listener_move_controls[listener.index] = row
+                move_handle.add_controller(move_keys)
+                row.append(move_handle)
+                self._listener_move_controls[listener.index] = move_handle
             if listener.muted:
                 name.add_css_class("muted")
             row.append(name)
             initial_volume = max(0, min(150, held_values.get(listener.index, int(listener.volume))))
             volume = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 150.0, 1.0)
-            action_icons.accessible_label(volume, f"{listener.name} volume")
+            action_icons.accessible_label(volume, f"{listener.name} volume in {self.channel.name}")
             volume.add_css_class("app-volume")
             volume.set_draw_value(False)
             volume.set_hexpand(False)
             volume.set_size_request(46, -1)
             volume.set_sensitive(bool(listener.index))
             volume.set_value(initial_volume)
-            volume.set_tooltip_text(f"{listener.name}: {initial_volume}%")
+            volume.set_tooltip_text(
+                f"{listener.name} volume in {self.channel.name}: {initial_volume}%"
+            )
             volume_value = Gtk.Label(label=f"{initial_volume}%", xalign=1.0)
             volume_value.add_css_class("app-volume-value")
             volume_value.set_width_chars(4)
@@ -1338,7 +1362,11 @@ class Strip(Gtk.Box):
             _set_mute_icon(box, listener.muted)
             if listener.muted:
                 box.add_css_class("on")
-            mute_label = f"Unmute {listener.name}" if listener.muted else f"Mute {listener.name}"
+            mute_label = (
+                f"Unmute {listener.name} in {self.channel.name}"
+                if listener.muted
+                else f"Mute {listener.name} in {self.channel.name}"
+            )
             action_icons.accessible_label(box, mute_label)
             box.set_tooltip_text(mute_label)
             box.set_sensitive(bool(listener.index))
