@@ -20,7 +20,7 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 
-from gi.repository import GObject, Gtk  # noqa: E402 - must follow require_version
+from gi.repository import Gdk, GObject, Gtk  # noqa: E402 - must follow require_version
 
 __all__ = ["VMAX", "Fader", "Meter", "Scale", "Sliver", "parse_rgb"]
 
@@ -106,6 +106,17 @@ class Meter(Gtk.DrawingArea):
         self._peak_at = 0.0
         self._muted = False
         self._dead = False
+        self._accessible_percent = 0
+        self.set_accessible_role(Gtk.AccessibleRole.METER)
+        self.update_property(
+            [
+                Gtk.AccessibleProperty.VALUE_MIN,
+                Gtk.AccessibleProperty.VALUE_MAX,
+                Gtk.AccessibleProperty.VALUE_NOW,
+                Gtk.AccessibleProperty.VALUE_TEXT,
+            ],
+            [0.0, 100.0, 0.0, "0%"],
+        )
         self.set_content_width(width)
         self.set_content_height(height)
         self.set_draw_func(self._draw)
@@ -113,6 +124,15 @@ class Meter(Gtk.DrawingArea):
     def set_state(self, *, muted: bool, dead: bool) -> None:
         if (muted, dead) != (self._muted, self._dead):
             self._muted, self._dead = muted, dead
+            # The drawing goes dark immediately when muted or unavailable.
+            # Keep its accessible value truthful instead of announcing the
+            # old smoothed level while the hidden visual buffer decays.
+            if (muted or dead) and self._accessible_percent != 0:
+                self._accessible_percent = 0
+                self.update_property(
+                    [Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT],
+                    [0.0, "0%"],
+                )
             self.queue_draw()
 
     def feed(self, level: float) -> None:
@@ -125,6 +145,18 @@ class Meter(Gtk.DrawingArea):
         self._shown += (target - self._shown) * 0.35
         if self._shown < 0.002:
             self._shown = 0.0
+        # A live meter changes every frame; round its accessible value to 5%
+        # increments so screen readers get useful level changes without a
+        # burst of announcements at the animation rate.
+        accessible_percent = (
+            0 if self._muted or self._dead else max(0, min(100, int(round(self._shown * 20) * 5)))
+        )
+        if accessible_percent != self._accessible_percent:
+            self._accessible_percent = accessible_percent
+            self.update_property(
+                [Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT],
+                [float(accessible_percent), f"{accessible_percent}%"],
+            )
         now = time.monotonic()
         if self._shown >= self._peak:
             self._peak = self._shown
@@ -177,6 +209,17 @@ class Fader(Gtk.DrawingArea):
         self._value = 0
         self._hw = False
         self._dead = False
+        self.set_focusable(True)
+        self.set_accessible_role(Gtk.AccessibleRole.SLIDER)
+        self.update_property(
+            [
+                Gtk.AccessibleProperty.VALUE_MIN,
+                Gtk.AccessibleProperty.VALUE_MAX,
+                Gtk.AccessibleProperty.VALUE_NOW,
+                Gtk.AccessibleProperty.VALUE_TEXT,
+            ],
+            [0.0, float(VMAX), 0.0, "0%"],
+        )
         self.set_content_width(width)
         self.set_content_height(height)
         self.set_draw_func(self._draw)
@@ -196,6 +239,9 @@ class Fader(Gtk.DrawingArea):
         scroll = Gtk.EventControllerScroll(flags=Gtk.EventControllerScrollFlags.VERTICAL)
         scroll.connect("scroll", self._on_scroll)
         self.add_controller(scroll)
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_key_pressed)
+        self.add_controller(keys)
 
     @property
     def value(self) -> int:
@@ -206,6 +252,13 @@ class Fader(Gtk.DrawingArea):
         if value != self._value:
             self._value = value
             self.queue_draw()
+            # An unavailable slider is announced as unavailable, regardless
+            # of programmatic/internal values while its drawing is blank.
+            if not self._dead:
+                self.update_property(
+                    [Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT],
+                    [float(value), f"{value}%"],
+                )
 
     def set_hardware(self, touched: bool) -> None:
         if touched != self._hw:
@@ -215,7 +268,12 @@ class Fader(Gtk.DrawingArea):
     def set_dead(self, dead: bool) -> None:
         if dead != self._dead:
             self._dead = dead
+            self.set_sensitive(not dead)
             self.queue_draw()
+            self.update_property(
+                [Gtk.AccessibleProperty.VALUE_NOW, Gtk.AccessibleProperty.VALUE_TEXT],
+                [0.0, "Unavailable"] if dead else [float(self._value), f"{self._value}%"],
+            )
 
     def _emit_from_y(self, y: float) -> None:
         if self._dead:
@@ -245,8 +303,42 @@ class Fader(Gtk.DrawingArea):
             self._emit_from_y(sy + dy)
 
     def _on_scroll(self, _c: Gtk.EventControllerScroll, _dx: float, dy: float) -> bool:
+        if self._dead:
+            return False
+        previous = self._value
         self.set_value(self._value + (-2 if dy > 0 else 2))
-        self.emit("moved", self._value)
+        if self._value != previous:
+            self.emit("moved", self._value)
+        return True
+
+    def _on_key_pressed(
+        self,
+        _controller: Gtk.EventControllerKey,
+        keyval: int,
+        _keycode: int,
+        _state: Gdk.ModifierType,
+    ) -> bool:
+        """Make the focused vertical fader usable with standard slider keys."""
+        if self._dead:
+            return False
+        if keyval in (Gdk.KEY_Up, Gdk.KEY_Right):
+            value = self._value + 1
+        elif keyval in (Gdk.KEY_Down, Gdk.KEY_Left):
+            value = self._value - 1
+        elif keyval == Gdk.KEY_Page_Up:
+            value = self._value + 10
+        elif keyval == Gdk.KEY_Page_Down:
+            value = self._value - 10
+        elif keyval == Gdk.KEY_Home:
+            value = 0
+        elif keyval == Gdk.KEY_End:
+            value = VMAX
+        else:
+            return False
+        previous = self._value
+        self.set_value(value)
+        if self._value != previous:
+            self.emit("moved", self._value)
         return True
 
     def _draw(self, _area: Gtk.DrawingArea, cr, w: int, h: int) -> None:
@@ -284,6 +376,10 @@ class Scale(Gtk.DrawingArea):
     def __init__(self, palette: dict[str, str], height: int) -> None:
         super().__init__()
         self._pal = palette
+        # The tick labels are a purely visual ruler for the adjacent semantic
+        # Meter widget; exposing this Cairo drawing area as another generic
+        # object would add an unlabeled, non-interactive stop to the AT tree.
+        self.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
         self.set_content_width(self.WIDTH)
         self.set_content_height(height)
         self.set_draw_func(self._draw)
@@ -312,8 +408,8 @@ class Scale(Gtk.DrawingArea):
             cr.show_text(text)
 
 
-class Sliver(Gtk.DrawingArea):
-    """A minimised channel in the right rail: name on its side, one state dot."""
+class Sliver(Gtk.Button):
+    """A minimized channel represented by a native, accessible GTK button."""
 
     def __init__(
         self,
@@ -328,15 +424,22 @@ class Sliver(Gtk.DrawingArea):
         self._level = 0.0
         self._muted = False
         self._horizontal = horizontal
-        # ``length`` is the long axis either way: a rail along the bottom of
-        # the window wants wide, short slivers, not rotated tall ones.
-        self.set_content_width(length if horizontal else 24)
-        self.set_content_height(24 if horizontal else length)
-        self.set_draw_func(self._draw)
+        # Keep the custom drawing inside a native button. GTK then supplies
+        # the actual accessible button action and standard Space/Enter behavior
+        # rather than asking assistive technology to operate a DrawingArea.
+        canvas = Gtk.DrawingArea()
+        canvas.set_content_width(length if horizontal else 24)
+        canvas.set_content_height(24 if horizontal else length)
+        canvas.set_draw_func(self._draw)
+        canvas.set_can_target(False)
+        canvas.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
+        self._canvas = canvas
+        self.set_child(canvas)
+        self.update_property([Gtk.AccessibleProperty.LABEL], [f"Restore {name}"])
 
     def feed(self, level: float, muted: bool) -> None:
         self._level, self._muted = level, muted
-        self.queue_draw()
+        self._canvas.queue_draw()
 
     def _draw(self, _area: Gtk.DrawingArea, cr, w: int, h: int) -> None:
         cr.set_source_rgb(*parse_rgb(self._pal["view-alt"]))

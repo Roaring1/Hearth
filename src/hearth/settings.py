@@ -22,7 +22,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
+import stat
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -60,9 +63,23 @@ def _valid(key: str, value: Any) -> bool:
     if isinstance(default, bool):
         return isinstance(value, bool)
     if isinstance(default, int):
-        return isinstance(value, int) and not isinstance(value, bool)
+        if not isinstance(value, int) or isinstance(value, bool):
+            return False
+        if key == "latency_msec":
+            return 1 <= value <= 200
+        if key == "win_w":
+            return 320 <= value <= 16384
+        if key == "win_h":
+            return 240 <= value <= 16384
+        return True
     if isinstance(default, float):
-        return isinstance(value, int | float) and not isinstance(value, bool)
+        if not isinstance(value, int | float) or isinstance(value, bool):
+            return False
+        try:
+            return math.isfinite(value)
+        except OverflowError:
+            # A huge JSON integer cannot be represented as a finite float.
+            return False
     return isinstance(value, type(default))
 
 
@@ -110,11 +127,36 @@ def save(values: dict[str, Any], path: Path | None = None) -> None:
     and the guarantee this function exists for would be lost.
     """
     target = paths.settings_file() if path is None else path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(f"{target.name}.tmp.{os.getpid()}")
+    paths.ensure_private_dir(target.parent)
+    payload = json.dumps(values, indent=2)
+
+    # Settings must stay private even if an older version created them under
+    # a permissive umask. Refuse symlinks/non-regular paths instead of
+    # following or replacing a file outside the intended settings path.
     try:
-        tmp.write_text(json.dumps(values, indent=2))
+        existing = target.lstat()
+    except FileNotFoundError:
+        existing = None
+    if existing is not None:
+        if not stat.S_ISREG(existing.st_mode):
+            raise OSError(f"refusing to replace non-regular settings path: {target}")
+        if existing.st_uid != os.getuid():
+            raise PermissionError(f"settings file is not owned by this user: {target}")
+
+    # mkstemp makes each concurrent write independent and private.
+    fd, tmp_name = tempfile.mkstemp(prefix=f"{target.name}.tmp.", dir=target.parent)
+    tmp = Path(tmp_name)
+    try:
+        os.fchmod(fd, 0o600)
+        stream = os.fdopen(fd, "w", encoding="utf-8")
+        fd = -1
+        with stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
         tmp.replace(target)  # atomic within one filesystem
-    except OSError:
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
         tmp.unlink(missing_ok=True)
         raise

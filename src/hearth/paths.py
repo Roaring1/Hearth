@@ -19,6 +19,7 @@ locations still readable so an existing install keeps working.
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -92,10 +93,12 @@ def runtime_dir() -> Path:
     directory.
     """
     raw = os.environ.get("XDG_RUNTIME_DIR", "")
-    base = Path(raw) if raw and Path(raw).is_absolute() else Path(tempfile.gettempdir())
-    if not raw:
-        return base / f"{APP_NAME}-{os.getuid()}"
-    return base / APP_NAME
+    candidate = Path(raw) if raw else None
+    if candidate is not None and candidate.is_absolute():
+        return candidate / APP_NAME
+    # An invalid relative value is equivalent to an unset variable. Keep the
+    # fallback unique per UID; never collapse all users into /tmp/hearth.
+    return Path(tempfile.gettempdir()) / f"{APP_NAME}-{os.getuid()}"
 
 
 def legacy_config_dir() -> Path:
@@ -133,13 +136,41 @@ def dumps_dir() -> Path:
     return state_dir() / "dumps"
 
 
-def ensure_dirs() -> None:
-    """Create every directory Hearth writes to.
+def ensure_private_dir(path: Path) -> Path:
+    """Create a Hearth-owned directory with owner-only access.
 
-    The runtime directory is created with 0700 because it holds a control
-    socket that can mute the machine's audio.
+    Config, state and diagnostic files can reveal details about the local rig.
+    Repair existing directories even if an older release created them under a
+    permissive umask. Intentional directory symlinks are resolved before
+    checking ownership and permissions.
+    """
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    resolved = path.resolve(strict=True)
+    metadata = resolved.stat()
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise NotADirectoryError(f"private path must be a directory: {path}")
+    if metadata.st_uid != os.getuid():
+        raise PermissionError(f"private directory is not owned by this user: {resolved}")
+    resolved.chmod(0o700)
+    return resolved
+
+
+def ensure_dirs() -> None:
+    """Create Hearth directories with private permissions.
+
+    The runtime directory holds a control socket that can mute the machine's
+    audio. Config, state, cache and dump directories can reveal local rig
+    details, so they are owner-only as well.
     """
     for path in (config_dir(), state_dir(), cache_dir(), dumps_dir()):
-        path.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(path)
     runtime = runtime_dir()
     runtime.mkdir(parents=True, exist_ok=True, mode=0o700)
+    metadata = runtime.lstat()
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise NotADirectoryError(f"runtime path must be a real directory: {runtime}")
+    if metadata.st_uid != os.getuid():
+        raise PermissionError(f"runtime directory is not owned by this user: {runtime}")
+    # mkdir(mode=...) does not change the permissions of an existing path.
+    # Repair an overly broad mode before creating a control socket in it.
+    runtime.chmod(0o700)

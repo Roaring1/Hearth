@@ -120,6 +120,23 @@ window.hearth {{
               color 140ms ease-out, opacity 160ms ease-out;
 }}
 
+button.sliver {{
+  background: transparent;
+  background-image: none;
+  box-shadow: none;
+  border: 1px solid {pal["win-alt"]};
+  border-radius: 3px;
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+}}
+button.sliver:hover {{ background: transparent; background-image: none; box-shadow: none; }}
+.hearth button.sliver:focus, .hearth button.sliver:focus-visible {{
+  border-color: {pal["button"]};
+  outline: 1px solid {pal["button"]};
+  outline-offset: -2px;
+}}
+
 /* ---- routing popover --------------------------------------------- */
 .outbtn {{
   background: {pal["view-alt"]};
@@ -167,6 +184,10 @@ window.hearth {{
 .strip.ghost {{
   background: transparent;
   border: 1px dashed {pal["button"]};
+  opacity: 0.78;
+}}
+.strip.ghost .value, .strip.ghost .device, .strip.ghost .listener {{
+  color: {pal["fg-dim"]};
 }}
 .strip-name {{
   font-size: 10px;
@@ -273,6 +294,36 @@ button.mute:checked {{
 .mark.vlc {{ background: #e8792a; }}
 .mark.more {{ background: {pal["view-alt"]}; color: {pal["fg-dim"]}; }}
 .listener {{ font-size: 9.5px; color: {pal["fg-dim"]}; }}
+.app-volume {{
+  min-height: 12px;
+  min-width: 42px;
+  padding: 0;
+  margin: 0;
+}}
+.app-volume trough {{
+  min-height: 3px;
+  background: {pal["win-alt"]};
+  border-radius: 2px;
+}}
+.app-volume highlight {{
+  min-height: 3px;
+  background: {pal["accent"]};
+  border-radius: 2px;
+}}
+.app-volume slider {{
+  min-width: 8px;
+  min-height: 8px;
+  margin: -3px;
+  border: none;
+  box-shadow: none;
+  background: {pal["fg"]};
+}}
+.app-volume-value {{
+  font-size: 8px;
+  color: {pal["fg-dim"]};
+  font-family: "Andale Mono", monospace;
+  min-width: 25px;
+}}
 .appmute {{
   font-size: 8px;
   color: {pal["fg-dim"]};

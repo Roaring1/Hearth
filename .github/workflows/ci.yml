@@ -36,10 +36,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y desktop-file-utils appstream shellcheck
-          find . -name '*.desktop' -not -path './.git/*' -print0 \
-            | xargs -0 -r -n1 desktop-file-validate
-          find data -name '*.metainfo.xml' -print0 2>/dev/null \
-            | xargs -0 -r -n1 appstreamcli validate --pedantic
+          find . -name '*.desktop' -not -path './.git/*' -print0 | xargs -0 -r -n1 desktop-file-validate
+          find data -name '*.metainfo.xml' -print0 2>/dev/null | xargs -0 -r -n1 appstreamcli validate --pedantic
           find . -name '*.sh' -not -path './.git/*' -print0 | xargs -0 -r -n1 shellcheck
 
   test:
@@ -56,20 +54,47 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Install GTK and PyGObject from the distro
+      - run: pip install -e '.[dev]'
+      # GTK is distro-provided. The GTK-specific smoke test runs in the
+      # gui-smoke job with the matching system Python and Gtk 4 introspection.
+      - run: pytest -m "not gui"
+
+  gui-smoke:
+    name: GTK4 GUI import smoke
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK4 introspection and a virtual display
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            python3-gi python3-gi-cairo gir1.2-gtk-3.0 \
-            gir1.2-ayatanaappindicator3-0.1 xvfb
-      - run: pip install -e '.[dev]'
-      - name: Run tests (GUI tests under a virtual display)
-        run: xvfb-run -a pytest
+          sudo apt-get install -y python3-venv python3-gi python3-gi-cairo python3-pil gir1.2-gtk-4.0 xvfb
+      - name: Create a test environment that can see distro PyGObject
+        run: |
+          /usr/bin/python3 -m venv --system-site-packages .venv-gui
+          .venv-gui/bin/python -m pip install 'pytest>=8.0'
+      - name: Render production GTK4 windows and assert visual states
+        env:
+          HEARTH_UI_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/gui
+        run: |
+          mkdir -p "$HEARTH_UI_ARTIFACT_DIR"
+          # Use a real X11 root at a stable size. Tests run from a scratch
+          # directory so the legacy hearth.py shim cannot shadow src/hearth.
+          cd "$(mktemp -d)"
+          PYTHONPATH="${GITHUB_WORKSPACE}/src" xvfb-run -a -s "-screen 0 1600x1200x24" "${GITHUB_WORKSPACE}/.venv-gui/bin/python" -m pytest -q --rootdir "${GITHUB_WORKSPACE}" -c "${GITHUB_WORKSPACE}/pyproject.toml" "${GITHUB_WORKSPACE}/tests" -m gui
+      - name: Upload GTK visual audit screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hearth-gtk-visual-audit
+          path: artifacts/gui/
+          if-no-files-found: warn
+          retention-days: 14
 
   package:
     name: Install smoke test
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, gui-smoke]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -78,3 +103,16 @@ jobs:
       # Proves the built artifact is usable, not just the working tree.
       - run: pip install .
       - run: hearth --version
+      - name: Verify bundled action SVGs survive wheel installation
+        run: |
+          # Avoid the compatibility shim at the repository root shadowing the installed package.
+          cd "$(mktemp -d)"
+          python - <<'PY'
+          from importlib.resources import files
+
+          assets = files("hearth.ui.gtk4").joinpath("art")
+          expected = {"collapse.svg", "refresh.svg", "save.svg", "sliders.svg"}
+          missing = sorted(name for name in expected if not assets.joinpath(name).is_file())
+          assert not missing, f"Installed wheel is missing SVG action icons: {missing}"
+          print(f"Verified {len(expected)} installed action SVGs")
+          PY

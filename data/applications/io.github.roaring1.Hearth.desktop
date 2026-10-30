@@ -18,7 +18,7 @@ Keywords=audio;mixer;pipewire;volume;fader;routing;mic;
 StartupNotify=true
 # Must match the window's WM class so Plasma groups the window with this
 # launcher instead of showing a second task entry.
-StartupWMClass=hearth
+StartupWMClass=io.github.roaring1.Hearth
 SingleMainWindow=true
 Actions=show;unmute;dump;quit;
 

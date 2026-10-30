@@ -10,6 +10,7 @@ still ends at the real audio graph.
 
 import subprocess
 import sys
+from pathlib import Path
 
 import gi
 
@@ -17,7 +18,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib, Gtk
 
-sys.path.insert(0, "/home/roaring/Documents/GitHub/Hearth/src")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from hearth.ui.gtk4 import app as mixer
 from hearth.ui.gtk4 import style as style_mod
@@ -31,17 +32,56 @@ def check(label: str, ok: bool, detail: str = "") -> None:
         FAILURES.append(label)
 
 
+def volumes(sink: str = "vm_game") -> list[int]:
+    """Read every channel volume so asymmetric stereo levels can be restored."""
+    try:
+        result = subprocess.run(
+            ["pactl", "get-sink-volume", sink],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+    return [
+        int(token[:-1])
+        for token in result.stdout.split()
+        if token.endswith("%") and token[:-1].isdigit()
+    ]
+
+
 def vol(sink: str = "vm_game") -> int:
-    out = subprocess.run(["pactl", "get-sink-volume", sink], capture_output=True, text=True).stdout
-    for token in out.split():
-        if token.endswith("%"):
-            return int(token[:-1])
-    return -1
+    levels = volumes(sink)
+    return levels[0] if levels else -1
 
 
 def muted(sink: str = "vm_game") -> str:
-    out = subprocess.run(["pactl", "get-sink-mute", sink], capture_output=True, text=True).stdout
-    return out.strip().split()[-1] if out.strip() else "?"
+    try:
+        result = subprocess.run(
+            ["pactl", "get-sink-mute", sink],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "?"
+    if result.returncode != 0:
+        return "?"
+    return result.stdout.strip().split()[-1] if result.stdout.strip() else "?"
+
+
+def can_restore_audio_state(levels: list[int], mute: str) -> bool:
+    """True only when cleanup can put every original volume and mute back."""
+    return bool(levels) and mute in ("yes", "no")
+
+
+def disable_settings_persistence(window) -> None:
+    """Keep the functional check's temporary layout interactions in memory."""
+    window._save = lambda: None
 
 
 class FuncApp(Gtk.Application):
@@ -49,6 +89,11 @@ class FuncApp(Gtk.Application):
         super().__init__(application_id="co.roaring.HearthFunc2")
         self.pal = style_mod.palette()
         self.win = None
+        # The functional check temporarily changes the real vm_game volume
+        # and mute state. Preserve the user's values so a test never leaves
+        # the machine louder or unmuted than it was before the test started.
+        self._original_volumes = volumes()
+        self._original_mute = muted()
 
     def do_startup(self):
         Gtk.Application.do_startup(self)
@@ -62,6 +107,9 @@ class FuncApp(Gtk.Application):
 
     def do_activate(self):
         self.win = mixer.MixerWindow(self)
+        # This check exercises layout gestures, not persistence. In particular,
+        # minimise()/restore() would otherwise overwrite the user's rail state.
+        disable_settings_persistence(self.win)
         self.win.present()
         GLib.timeout_add(2500, self.run_checks)
 
@@ -70,6 +118,16 @@ class FuncApp(Gtk.Application):
         strip = win.strips.get("vm_game")
         if strip is None:
             check("game strip exists", False)
+            return self.finish()
+
+        # Refuse to modify the live sink unless its original state was read,
+        # otherwise cleanup could only guess at the user's prior settings.
+        if not can_restore_audio_state(self._original_volumes, self._original_mute):
+            check(
+                "original audio state can be restored",
+                False,
+                "could not read vm_game state; refusing to change live audio",
+            )
             return self.finish()
 
         # --- single press somewhere down the fader lowers the volume ---
@@ -155,14 +213,62 @@ class FuncApp(Gtk.Application):
         GLib.timeout_add(400, self.finish)
         return False
 
+    def restore_audio_state(self) -> None:
+        """Restore the sink state captured before the test touched the graph."""
+        commands: list[list[str]] = []
+        if self._original_volumes:
+            commands.append(
+                [
+                    "pactl",
+                    "set-sink-volume",
+                    "vm_game",
+                    *[f"{level}%" for level in self._original_volumes],
+                ]
+            )
+        if self._original_mute in ("yes", "no"):
+            mute_arg = "1" if self._original_mute == "yes" else "0"
+            commands.append(["pactl", "set-sink-mute", "vm_game", mute_arg])
+
+        for command in commands:
+            try:
+                result = subprocess.run(
+                    command, capture_output=True, text=True, timeout=3, check=False
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                message = f"could not restore original vm_game state: {exc}"
+                print(f"FAIL: {message}")
+                if message not in FAILURES:
+                    FAILURES.append(message)
+                continue
+            if result.returncode != 0:
+                detail = result.stderr.strip() or f"exit {result.returncode}"
+                message = f"could not restore original vm_game state: {detail}"
+                print(f"FAIL: {message}")
+                if message not in FAILURES:
+                    FAILURES.append(message)
+
     def finish(self, *_a):
-        subprocess.run(["pactl", "set-sink-volume", "vm_game", "100%"], check=False)
-        subprocess.run(["pactl", "set-sink-mute", "vm_game", "0"], check=False)
-        self.win.shutdown()
-        self.quit()
+        try:
+            if self.win is not None:
+                self.win.shutdown()
+        finally:
+            self.quit()
         return False
 
 
-FuncApp().run([])
-print("FAILURES:", ", ".join(FAILURES) if FAILURES else "none")
-raise SystemExit(1 if FAILURES else 0)
+def main() -> int:
+    app = FuncApp()
+    try:
+        app.run([])
+    finally:
+        # Also restore on exceptions, Ctrl+C, or an ordinary window close.
+        # Invalid snapshots (e.g. vm_game absent) are skipped rather than
+        # applying a guessed default to a sink that may have appeared later.
+        app.restore_audio_state()
+
+    print("FAILURES:", ", ".join(FAILURES) if FAILURES else "none")
+    return 1 if FAILURES else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 
 from hearth import proc, services
+from hearth.errors import CommandError
 
 
 def _runner(stdout: str, returncode: int = 0):
@@ -81,6 +82,19 @@ def test_memory_bytes_handles_not_set():
         assert services.memory_bytes("a.service") == 153092096
     finally:
         proc.set_runner(None)
+
+
+def test_actions_report_systemctl_launch_failures(monkeypatch):
+    def fail(argv, **_kwargs):
+        raise CommandError(argv, stderr="systemctl is not executable")
+
+    monkeypatch.setattr(proc, "spawn", fail)
+
+    assert services.start("hearth-ui.service") is False
+    assert services.stop("hearth-ui.service") is False
+    assert services.restart("hearth-ui.service") is False
+    assert services.reset_failed("hearth-ui.service") is False
+    assert services.daemon_reload() is False
 
 
 def test_actions_are_argv(monkeypatch):

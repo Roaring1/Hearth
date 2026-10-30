@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from hearth import share
-from hearth.errors import AudioError
+from hearth.errors import AudioError, CommandError
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -120,3 +120,19 @@ def test_view_degrades_when_the_script_fails(monkeypatch: pytest.MonkeyPatch) ->
     v = share.view()
     assert v.installed is True
     assert "nope" in v.error
+
+
+def test_view_degrades_when_the_controller_cannot_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(share, "available", lambda: True)
+
+    def cannot_run(*_args, **_kwargs):
+        raise CommandError(["/fake/roaring_share_ctl.py", "status"], timed_out=True)
+
+    monkeypatch.setattr(share.proc, "run", cannot_run)
+    v = share.view()
+
+    assert v.installed is True
+    assert "could not run" in v.error
+    assert "timed out" in v.error

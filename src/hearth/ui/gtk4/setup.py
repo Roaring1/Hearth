@@ -39,6 +39,7 @@ from hearth import lpd8map  # noqa: E402
 from hearth import mic_routes  # noqa: E402
 from hearth import services as services_mod  # noqa: E402
 from hearth import units as units_mod  # noqa: E402
+from hearth.ui.gtk4 import action_icons  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +100,8 @@ class SetupWindow(Gtk.Window):
 
         self._poll_id = 0
         self._scanning = False
+        self._moonlight_updating = False
+        self._device_save_pending = False
         self._units: list[units_mod.Unit] = []
         self._fault_rows: dict[str, Gtk.Widget] = {}
 
@@ -129,6 +132,7 @@ class SetupWindow(Gtk.Window):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
 
         self.verdict = Gtk.Label(label="", xalign=0.0)
+        self.verdict.set_accessible_role(Gtk.AccessibleRole.STATUS)
         self.verdict.add_css_class("setup-verdict")
         self.verdict.set_wrap(True)
         # Nothing to say when nothing is wrong. A standing line that only
@@ -140,7 +144,8 @@ class SetupWindow(Gtk.Window):
         self.faults = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         box.append(self.faults)
 
-        self.reset_failed = Gtk.Button(label="Clear the failed state")
+        self.reset_failed = Gtk.Button()
+        action_icons.button(self.reset_failed, "refresh", "Clear the failed state")
         self.reset_failed.add_css_class("setup-act")
         self.reset_failed.set_halign(Gtk.Align.START)
         self.reset_failed.set_tooltip_text(
@@ -153,14 +158,23 @@ class SetupWindow(Gtk.Window):
 
         return box
 
-    def _on_reset_failed(self, _button: Gtk.Button) -> None:
+    def _on_reset_failed(self, button: Gtk.Button) -> None:
         failed = [u.name for u in self._units if u.failed]
         if failed:
-            services_mod.reset_failed(*failed)
+            if not services_mod.reset_failed(*failed):
+                button.set_tooltip_text("Could not start systemctl; check the user session")
+                return
+            button.set_tooltip_text(
+                "systemctl --user reset-failed. Use after a unit has been fixed\n"
+                "but systemd still refuses to start it."
+            )
             GLib.timeout_add_seconds(2, self._refresh_once)
 
-    def _on_restart(self, _button: Gtk.Button, unit: str) -> None:
-        services_mod.restart(unit)
+    def _on_restart(self, button: Gtk.Button, unit: str) -> None:
+        if not services_mod.restart(unit):
+            button.set_tooltip_text("Could not start systemctl; check the user session")
+            return
+        button.set_tooltip_text(None)
         # systemd is asynchronous, so re-read rather than claim success.
         GLib.timeout_add_seconds(3, self._refresh_once)
 
@@ -175,7 +189,13 @@ class SetupWindow(Gtk.Window):
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         self.astro_chat = Gtk.CheckButton(label="Chat")
+        action_icons.accessible_label(
+            self.astro_chat, "Use Astro A50 Chat endpoint for bus routing"
+        )
         self.astro_game = Gtk.CheckButton(label="Game")
+        action_icons.accessible_label(
+            self.astro_game, "Use Astro A50 Game endpoint for bus routing"
+        )
         self.astro_game.set_group(self.astro_chat)
         is_game = "game" in conf.get("ASTRO_TARGET", "")
         self.astro_game.set_active(is_game)
@@ -193,6 +213,7 @@ class SetupWindow(Gtk.Window):
         lat_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         lat_row.append(Gtk.Label(label="Latency", xalign=0.0))
         self.latency = Gtk.SpinButton.new_with_range(1, 200, 1)
+        action_icons.accessible_label(self.latency, "Routing latency in milliseconds")
         try:
             self.latency.set_value(int(conf.get("LATENCY_MSEC", "12")))
         except ValueError:
@@ -201,7 +222,8 @@ class SetupWindow(Gtk.Window):
         lat_row.append(Gtk.Label(label="ms"))
         box.append(lat_row)
 
-        self.save_devices = Gtk.Button(label="Save")
+        self.save_devices = Gtk.Button()
+        self.save_devices_label = action_icons.button(self.save_devices, "save", "Save")
         self.save_devices.set_tooltip_text("Write the config and restart routing")
         self.save_devices.add_css_class("setup-act")
         self.save_devices.set_halign(Gtk.Align.START)
@@ -211,16 +233,88 @@ class SetupWindow(Gtk.Window):
         return box
 
     def _on_save_devices(self, _button: Gtk.Button) -> None:
+        if self._device_save_pending:
+            return
         core = self._core
         target = core.ASTRO_GAME if self.astro_game.get_active() else core.ASTRO_CHAT
-        core.write_conf_key(core.MXCONF, "ASTRO_TARGET", target)
-        core.write_conf_key(core.MXCONF, "LATENCY_MSEC", str(int(self.latency.get_value())))
-        services_mod.restart(ROUTES_UNIT)
-        self.save_devices.set_label("Saved")
+        updates = {
+            "ASTRO_TARGET": target,
+            "LATENCY_MSEC": str(int(self.latency.get_value())),
+        }
+        self._device_save_pending = True
+        self.save_devices.set_sensitive(False)
+        self.astro_chat.set_sensitive(False)
+        self.astro_game.set_sensitive(False)
+        self.latency.set_sensitive(False)
+        action_icons.set_label(
+            self.save_devices, getattr(self, "save_devices_label", None), "Saving…"
+        )
+        self.save_devices.set_tooltip_text(
+            "Writing mixer configuration and requesting routing restart"
+        )
+        try:
+            threading.Thread(
+                target=self._save_devices_worker,
+                args=(updates,),
+                name="hearth-headset-config-save",
+                daemon=True,
+            ).start()
+        except RuntimeError as exc:
+            self._finish_save_devices(False, False, f"Could not start config save: {exc}")
+
+    def _save_devices_worker(self, updates: dict[str, str]) -> None:
+        saved = False
+        restart_started = False
+        error = ""
+        try:
+            saved = bool(self._core.write_conf_keys(self._core.MXCONF, updates))
+            if not saved:
+                error = "Could not save mixer configuration; the previous file was preserved."
+            else:
+                restart_started = bool(services_mod.restart(ROUTES_UNIT))
+        except Exception as exc:  # pragma: no cover - surfaced, not raised
+            log.warning("setup: headset config save/restart failed: %s", exc)
+            if saved:
+                error = f"Configuration was saved, but routing restart failed: {exc}"
+            else:
+                error = f"Could not save mixer configuration: {exc}"
+        GLib.idle_add(self._finish_save_devices, saved, restart_started, error)
+
+    def _finish_save_devices(self, saved: bool, restart_started: bool, error: str = "") -> bool:
+        self._device_save_pending = False
+        self.save_devices.set_sensitive(True)
+        self.astro_chat.set_sensitive(True)
+        self.astro_game.set_sensitive(True)
+        self.latency.set_sensitive(True)
+        if not saved:
+            action_icons.set_label(
+                self.save_devices, getattr(self, "save_devices_label", None), "Save failed"
+            )
+            self.save_devices.set_tooltip_text(
+                error or "Could not save mixer configuration; the previous file was preserved"
+            )
+        elif not restart_started:
+            action_icons.set_label(
+                self.save_devices, getattr(self, "save_devices_label", None), "Saved*"
+            )
+            self.save_devices.set_tooltip_text(
+                error
+                or "Configuration was saved, but routing could not be restarted. "
+                "Restart the routing service manually to apply it."
+            )
+        else:
+            action_icons.set_label(
+                self.save_devices, getattr(self, "save_devices_label", None), "Saved"
+            )
+            self.save_devices.set_tooltip_text(
+                "Configuration was saved; routing restart was requested"
+            )
         GLib.timeout_add_seconds(4, self._devices_settled)
+        return False
 
     def _devices_settled(self) -> bool:
-        self.save_devices.set_label("Save")
+        action_icons.set_label(self.save_devices, getattr(self, "save_devices_label", None), "Save")
+        self.save_devices.set_tooltip_text("Write the config and restart routing")
         return False
 
     # -- where the mic ends up -------------------------------------------
@@ -240,7 +334,9 @@ class SetupWindow(Gtk.Window):
         sends = _section("MOONLIGHT SENDS")
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         self.ml_stream = Gtk.CheckButton(label="Stream")
+        action_icons.accessible_label(self.ml_stream, "Send B1 microphone to Moonlight Stream")
         self.ml_chat = Gtk.CheckButton(label="Chat")
+        action_icons.accessible_label(self.ml_chat, "Send B2 microphone to Moonlight Chat")
         self.ml_chat.set_group(self.ml_stream)
         source = self._core.moonlight_mic_source()
         self.ml_stream.set_active(source == "b1_mic")
@@ -263,22 +359,50 @@ class SetupWindow(Gtk.Window):
         return both
 
     def _on_moonlight(self, button: Gtk.CheckButton, source: str) -> None:
-        if not button.get_active():
+        if not button.get_active() or self._moonlight_updating:
             return
-        self.ml_note.set_text("Restarting the Moonlight mic\u2026")
-        # daemon-reload plus a restart is a second or two of blocking work;
-        # doing it on the main loop freezes the window mid-click.
-        threading.Thread(target=self._set_moonlight, args=(source,), daemon=True).start()
-
-    def _set_moonlight(self, source: str) -> None:
+        previous = "b2_mic" if source == "b1_mic" else "b1_mic"
+        self._moonlight_updating = True
+        self.ml_stream.set_sensitive(False)
+        self.ml_chat.set_sensitive(False)
+        self.ml_note.set_text("Saving Moonlight mic source…")
+        # Unit-file I/O and the queued daemon-reload/restart work stay off GTK.
         try:
-            self._core.set_moonlight_mic(source)
-        except Exception as exc:  # pragma: no cover - a missing unit is not a crash
-            log.warning("setup: could not point moonlight at %s: %s", source, exc)
-        GLib.idle_add(self._moonlight_done)
+            threading.Thread(
+                target=self._set_moonlight,
+                args=(source, previous),
+                name="hearth-moonlight-mic-save",
+                daemon=True,
+            ).start()
+        except RuntimeError as exc:
+            self._moonlight_done(previous, f"Could not save Moonlight mic source: {exc}")
 
-    def _moonlight_done(self) -> bool:
-        self.ml_note.set_text("")
+    def _set_moonlight(self, source: str, previous: str) -> None:
+        error = ""
+        restart_queued = False
+        try:
+            saved, restart_queued = self._core.set_moonlight_mic(source)
+            if not saved:
+                error = "Could not save Moonlight mic source; previous setting was preserved."
+        except Exception as exc:  # pragma: no cover - surfaced, not raised
+            log.warning("setup: could not point moonlight at %s: %s", source, exc)
+            error = f"Could not save Moonlight mic source: {exc}"
+        GLib.idle_add(self._moonlight_done, previous, error, restart_queued)
+
+    def _moonlight_done(self, previous: str, error: str = "", restart_queued: bool = True) -> bool:
+        if error:
+            self.ml_stream.set_active(previous == "b1_mic")
+            self.ml_chat.set_active(previous == "b2_mic")
+            self.ml_note.set_text(error)
+        elif restart_queued:
+            self.ml_note.set_text("Saved; routing restart requested")
+        else:
+            self.ml_note.set_text(
+                "Saved, but could not queue a routing restart. Restart the service manually."
+            )
+        self._moonlight_updating = False
+        self.ml_stream.set_sensitive(True)
+        self.ml_chat.set_sensitive(True)
         self._refresh_flow()
         return False
 
@@ -298,26 +422,28 @@ class SetupWindow(Gtk.Window):
         self.lpd8_state = Gtk.Label(label="\u2026", xalign=0.0)
         self.lpd8_state.set_hexpand(True)
         self.lpd8_state.set_tooltip_text(
-            "Pad lamps only follow the mixer while the LPD8 is in NOTE "
-            "TOGGLE mode. In CC mode the device owns its lights and ignores "
-            "what Hearth sends."
+            "This classic LPD8 sends MIDI notes but does not accept incoming "
+            "notes for pad-light feedback, so its physical lamps cannot mirror "
+            "Hearth's mixer mute state."
         )
         row.append(self.lpd8_state)
-        reconnect = Gtk.Button(label="Reconnect")
-        reconnect.add_css_class("setup-act")
-        reconnect.set_tooltip_text(
+        self.reconnect_lpd8 = Gtk.Button()
+        action_icons.button(self.reconnect_lpd8, "refresh", "Reconnect")
+        self.reconnect_lpd8.add_css_class("setup-act")
+        self.reconnect_lpd8.set_tooltip_text(
             "Restart lpd8-mixer. Plugging the pad back in restarts it on its "
             "own; this is for when it did not."
         )
-        reconnect.connect("clicked", self._on_restart, LPD8_UNIT)
-        row.append(reconnect)
-        remap = Gtk.Button(label="Remap\u2026")
-        remap.add_css_class("setup-act")
-        remap.set_tooltip_text(
+        self.reconnect_lpd8.connect("clicked", self._on_restart, LPD8_UNIT)
+        row.append(self.reconnect_lpd8)
+        self.remap_lpd8 = Gtk.Button()
+        action_icons.button(self.remap_lpd8, "sliders", "Remap\u2026")
+        self.remap_lpd8.add_css_class("setup-act")
+        self.remap_lpd8.set_tooltip_text(
             "Open the LPD8 window: which knob moves which bus, and what each pad does."
         )
-        remap.connect("clicked", self._on_remap)
-        row.append(remap)
+        self.remap_lpd8.connect("clicked", self._on_remap)
+        row.append(self.remap_lpd8)
         box.append(row)
 
         # The map is read from the running script rather than printed from a
@@ -426,7 +552,13 @@ class SetupWindow(Gtk.Window):
         if self._scanning:
             return False
         self._scanning = True
-        threading.Thread(target=self._scan, daemon=True).start()
+        try:
+            threading.Thread(target=self._scan, daemon=True, name="hearth-setup-scan").start()
+        except RuntimeError as exc:
+            # If Python cannot create the worker, don't wedge Setup in the
+            # in-progress state forever. The next normal poll can retry.
+            self._scanning = False
+            log.warning("setup: could not queue unit scan: %s", exc)
         return False
 
     def _scan(self) -> None:
@@ -445,7 +577,7 @@ class SetupWindow(Gtk.Window):
         # closed the mixer once and started it by hand, and the unit is
         # allowed to be dead. It stays in the full list, honestly, but it
         # never counts as something wrong.
-        problems = [u for u in units_mod.problems(found) if not u.name.startswith("hearth")]
+        problems = units_mod.problems(found)
 
         if not found:
             self.verdict.set_text("systemd did not answer")
@@ -475,6 +607,8 @@ class SetupWindow(Gtk.Window):
                 row.append(text)
                 button = Gtk.Button(label="Restart")
                 button.add_css_class("setup-act")
+                action_icons.accessible_label(button, f"Restart {name}")
+                button.set_tooltip_text(f"Restart {name}")
                 button.connect("clicked", self._on_restart, name)
                 row.append(button)
                 row._text = text  # type: ignore[attr-defined]

@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 from hearth import services
 from hearth.audio import pactl
+from hearth.errors import CommandError
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +70,8 @@ class Snapshot:
     server_version: str = ""
     default_sink: str = ""
     taken_at: float = 0.0
+    #: None means the route query failed; an empty dict is a verified empty graph.
+    routes: dict[str, set[str]] | None = None
 
     def volume(self, sink: str, default: int = 0) -> int:
         entry = self.sinks.get(sink)
@@ -208,14 +211,39 @@ def parse_source_states(text: str) -> dict[str, str]:
 
 
 def collect(units: Sequence[str]) -> Snapshot:
-    """Take one snapshot of the audio graph and the service stack."""
-    sinks = parse_sinks(pactl.raw("list", "sinks"))
-    streams = parse_streams(pactl.raw("list", "sink-inputs"), index_map(sinks))
+    """Take one snapshot of the audio graph and the service stack.
+
+    Core graph queries are checked: if the audio server did not answer, raise
+    rather than emitting an empty snapshot that would make every strip look
+    unplugged. Routes are optional; failure to read the module table marks them
+    unknown so the UI can keep its last verified route graph.
+    """
+    sinks = parse_sinks(pactl.raw_checked("list", "sinks"))
+    streams = parse_streams(
+        pactl.raw_checked("list", "sink-inputs"),
+        index_map(sinks),
+    )
+    sources = parse_source_states(pactl.raw_checked("list", "short", "sources"))
+    routes: dict[str, set[str]] | None
+    try:
+        # The module list is optional route metadata, so don't let a
+        # degraded Pulse compatibility server hold up otherwise valid mixer
+        # snapshots for the full interactive route-operation timeout.
+        modules = pactl.modules(strict=True, timeout=0.75)
+    except CommandError as exc:
+        log.warning("collector route query failed; retaining last known routes: %s", exc)
+        routes = None
+    else:
+        routes = {}
+        for loop in pactl.select_loopbacks(modules):
+            routes.setdefault(loop.source, set()).add(loop.sink)
+
     return Snapshot(
         sinks=sinks,
         streams=streams,
         units=services.states(units),
-        sources=parse_source_states(pactl._text("list", "short", "sources")),
+        sources=sources,
+        routes=routes,
         server_version=pactl.server_version(),
         default_sink=pactl.default_sink(),
         taken_at=time.time(),

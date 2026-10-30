@@ -21,7 +21,9 @@ TIMEOUT = 2.0
 
 #: Commands the server understands. Anything else gets a clear error back
 #: instead of being silently treated as a no-op.
-COMMANDS: frozenset[str] = frozenset({"show", "quit", "unmute", "dump", "get_sinks"})
+COMMANDS: frozenset[str] = frozenset(
+    {"show", "quit", "unmute", "dump", "get_sinks", "remap", "padfire_status"}
+)
 
 #: Reply sent when a handler returns nothing.
 OK = "ok"
@@ -42,25 +44,34 @@ def encode(message: str) -> bytes:
 
 
 def read_line(sock: socket.socket, limit: int = MAX_MSG) -> str:
-    """Read up to the first newline (or EOF) and return it as text.
+    """Read one bounded newline-terminated message.
 
-    Handles the case the old code got wrong: a reply split across several
-    TCP-style reads is reassembled instead of being cut at the first chunk.
+    Chunks are reassembled as they arrive, but the read never consumes more
+    than the limit. Hitting it without seeing a newline is a protocol error,
+    rather than a silently truncated command or reply.
     """
+    if limit < 1:
+        raise ValueError("limit must be positive")
+
     chunks: list[bytes] = []
     total = 0
-    while True:
-        buf = sock.recv(4096)
+    terminated = False
+    while total < limit:
+        buf = sock.recv(min(4096, limit - total))
         if not buf:
             break
         newline = buf.find(b"\n")
         if newline != -1:
             chunks.append(buf[:newline])
+            terminated = True
             break
         chunks.append(buf)
         total += len(buf)
-        if total >= limit:
-            break
+    else:
+        raise IpcError(f"IPC message exceeds {limit} bytes without a newline")
+
+    if not terminated:
+        raise IpcError("IPC message ended before its newline terminator")
     return b"".join(chunks).decode(errors="replace").strip()
 
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import io
 import math
 import struct
+import time
 
 from hearth import meters
 
@@ -98,3 +100,71 @@ def test_cooldown_prevents_a_respawn_loop(monkeypatch):
     assert starts["n"] == 1
     poller._ensure("ghost.monitor", 100.0 + meters.RESTART_COOLDOWN + 0.1)
     assert starts["n"] == 2
+
+
+def test_discarding_a_source_clears_stale_level_and_partial_frame(monkeypatch):
+    poller = meters.PeakPoller(["vm_game.monitor"])
+    pipe = io.BytesIO(b"partial")
+    child = type("Child", (), {"stdout": pipe})()
+    poller._procs["vm_game.monitor"] = child
+    poller._levels["vm_game.monitor"] = 0.8
+    poller._leftover["vm_game.monitor"] = bytes([1])
+    terminated = []
+    monkeypatch.setattr(meters.proc, "terminate", lambda child, **_kw: terminated.append(child))
+
+    poller._discard_source("vm_game.monitor")
+
+    assert poller.level("vm_game.monitor") == 0.0
+    assert poller.levels() == {}
+    assert poller._leftover == {}
+    assert poller._dead_at == {}
+    assert pipe.closed
+    assert terminated == [child]
+
+
+def test_eof_retires_stream_instead_of_busy_looping(monkeypatch):
+    poller = meters.PeakPoller(["vm_game.monitor"])
+    monkeypatch.setattr(poller, "available", True)
+    pipe = io.BytesIO(b"")
+    child_state = {"running": True, "terminations": 0}
+
+    class Child:
+        stdout = pipe
+
+        def poll(self):
+            return None if child_state["running"] else 0
+
+    child = Child()
+
+    def stream(_argv, **_kwargs):
+        return child
+
+    def terminate(_child, **_kwargs):
+        child_state["running"] = False
+        child_state["terminations"] += 1
+
+    monkeypatch.setattr(meters.proc, "stream", stream)
+    monkeypatch.setattr(meters.proc, "terminate", terminate)
+    # A readable pipe that returns EOF remains readable forever unless retired.
+    monkeypatch.setattr(meters.select, "select", lambda reads, _w, _x, _t: (reads, [], []))
+
+    poller.start()
+    try:
+        assert _wait_until(lambda: child_state["terminations"] == 1)
+        poller.set_sources([])
+        assert _wait_until(lambda: poller._procs == {})
+    finally:
+        poller.stop()
+    assert not poller.is_alive()
+    assert poller.level("vm_game.monitor") == 0.0
+    assert pipe.closed
+
+
+def _wait_until(predicate, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    # Yield briefly instead of reading thread-owned state in a tight loop.
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()

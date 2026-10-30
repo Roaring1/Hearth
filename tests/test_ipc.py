@@ -7,8 +7,12 @@ truncated ``get_sinks`` JSON into something that would not parse.
 from __future__ import annotations
 
 import json
+import os
 import socket
+import subprocess
+import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -49,6 +53,41 @@ def test_reply_larger_than_the_old_256_byte_recv(running, sock_path):
     reply = client.send("get_sinks", socket_path=sock_path)
     assert reply == payload
     assert json.loads(reply)["vm_bus_19"]["volume"] == 55
+
+
+def test_unterminated_command_is_not_dispatched(running, sock_path):
+    calls: list[str] = []
+    running[1]["handler"] = lambda request: calls.append(request) or "ok"
+    peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    peer.settimeout(1.0)
+    try:
+        peer.connect(str(sock_path))
+        peer.sendall(b"quit")  # Deliberately omit the required newline.
+        peer.shutdown(socket.SHUT_WR)
+        assert peer.recv(64) == b""
+    finally:
+        peer.close()
+    assert calls == []
+
+
+def test_client_treats_malformed_unterminated_reply_as_unavailable(sock_path):
+    sock_path.parent.mkdir(parents=True, exist_ok=True)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(sock_path))
+    listener.listen(1)
+
+    def close_without_reply() -> None:
+        conn, _ = listener.accept()
+        conn.close()
+        listener.close()
+
+    worker = threading.Thread(target=close_without_reply, daemon=True)
+    worker.start()
+    try:
+        assert client.send("show", socket_path=sock_path) is None
+    finally:
+        worker.join(timeout=1.0)
+        listener.close()
 
 
 def test_handler_exception_does_not_kill_the_listener(running, sock_path):
@@ -92,15 +131,318 @@ def test_live_socket_is_never_removed(running, sock_path):
     assert sock_path.exists()
 
 
-def test_bind_replaces_a_leftover_socket_file(sock_path):
+def test_stale_cleanup_preserves_connected_socket_with_malformed_reply(running, sock_path):
+    running[1]["handler"] = lambda _request: (_ for _ in ()).throw(RuntimeError("no reply"))
+    assert client.clear_stale_socket(sock_path) is False
+    assert sock_path.exists()
+
+
+def test_stale_cleanup_preserves_a_live_socket_when_reply_is_slow(running, sock_path):
+    def slow_handler(_request):
+        time.sleep(0.75)
+        return "still alive"
+
+    running[1]["handler"] = slow_handler
+    assert client.clear_stale_socket(sock_path) is False
+    assert sock_path.exists()
+
+
+def test_stale_cleanup_never_removes_a_regular_file(sock_path):
     sock_path.parent.mkdir(parents=True, exist_ok=True)
     sock_path.write_text("not a socket")
+
+    assert client.clear_stale_socket(sock_path) is False
+    assert sock_path.read_text() == "not a socket"
+
+
+def test_socket_path_lock_file_is_owner_only(running, sock_path):
+    lock_path = sock_path.with_name(f".{sock_path.name}.lock")
+    metadata = lock_path.stat()
+    assert metadata.st_mode & 0o777 == 0o600
+    assert metadata.st_nlink == 1
+
+
+def test_bind_refuses_a_hard_linked_lock_file(sock_path):
+    sock_path.parent.mkdir(parents=True, exist_ok=True)
+    victim = sock_path.parent / "unrelated.txt"
+    victim.write_text("keep this file")
+    lock_path = sock_path.with_name(f".{sock_path.name}.lock")
+    os.link(victim, lock_path)
+
+    srv = server.Server(lambda _request: "ok", socket_path=sock_path)
+    with pytest.raises(OSError, match="hard-linked"):
+        srv.bind()
+
+    assert not sock_path.exists()
+    assert victim.read_text() == "keep this file"
+    assert victim.stat().st_nlink == 2
+
+
+def test_bind_refuses_a_symlinked_lock_file(sock_path):
+    sock_path.parent.mkdir(parents=True, exist_ok=True)
+    victim = sock_path.parent / "unrelated.txt"
+    victim.write_text("keep this file")
+    sock_path.with_name(f".{sock_path.name}.lock").symlink_to(victim)
+
+    srv = server.Server(lambda _request: "ok", socket_path=sock_path)
+    with pytest.raises(OSError):
+        srv.bind()
+
+    assert not sock_path.exists()
+    assert victim.read_text() == "keep this file"
+
+
+def test_concurrent_starts_of_a_stale_socket_leave_one_live_listener(sock_path):
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale.bind(str(sock_path))
+    stale.close()
+
+    barrier = threading.Barrier(3)
+    servers = [
+        server.Server(lambda _request, reply=f"listener-{i}": reply, socket_path=sock_path)
+        for i in range(2)
+    ]
+    outcomes: list[tuple[server.Server, OSError | None]] = []
+    outcome_lock = threading.Lock()
+
+    def launch(candidate: server.Server) -> None:
+        barrier.wait()
+        try:
+            candidate.start()
+        except OSError as exc:
+            result = (candidate, exc)
+        else:
+            result = (candidate, None)
+        with outcome_lock:
+            outcomes.append(result)
+
+    workers = [threading.Thread(target=launch, args=(item,), daemon=True) for item in servers]
+    for worker in workers:
+        worker.start()
+    barrier.wait()
+    for worker in workers:
+        worker.join(timeout=2.0)
+        assert not worker.is_alive()
+
+    successful = [candidate for candidate, error in outcomes if error is None]
+    failed = [error for _candidate, error in outcomes if error is not None]
+    assert len(successful) == 1
+    assert len(failed) == 1
+    assert failed[0] is not None
+    assert "already has a listener" in str(failed[0])
+    assert sock_path.exists()
+    assert client.send("show", socket_path=sock_path) in {"listener-0", "listener-1"}
+    successful[0].stop()
+
+
+def test_separate_process_starts_of_a_stale_socket_leave_one_live_listener(sock_path):
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale.bind(str(sock_path))
+    stale.close()
+
+    gate = sock_path.parent / "start-together"
+    release = sock_path.parent / "release-listener"
+    child_code = r"""
+import sys
+import time
+from pathlib import Path
+from hearth.ipc.server import Server
+
+socket_path, index, gate_name, ready_name, result_name, release_name = sys.argv[1:]
+socket_path = Path(socket_path)
+gate = Path(gate_name)
+ready = Path(ready_name)
+result = Path(result_name)
+release = Path(release_name)
+ready.touch()
+deadline = time.monotonic() + 12.0
+while not gate.exists() and time.monotonic() < deadline:
+    time.sleep(0.005)
+if not gate.exists():
+    raise SystemExit("parent did not release startup gate")
+server = Server(lambda _request: f"listener-{index}", socket_path=socket_path)
+try:
+    server.start()
+except OSError as exc:
+    outcome = f"failed:{exc}"
+else:
+    outcome = f"started:listener-{index}"
+temporary = result.with_suffix(".tmp")
+temporary.write_text(outcome, encoding="utf-8")
+temporary.replace(result)
+if outcome.startswith("started:"):
+    while not release.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    server.stop()
+"""
+    env = os.environ.copy()
+    source_root = str(Path(__file__).resolve().parents[1] / "src")
+    env["PYTHONPATH"] = os.pathsep.join(
+        item for item in (source_root, env.get("PYTHONPATH", "")) if item
+    )
+    processes: list[subprocess.Popen[bytes]] = []
+    try:
+        for index in range(2):
+            processes.append(
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        child_code,
+                        str(sock_path),
+                        str(index),
+                        str(gate),
+                        str(sock_path.parent / f"ready-{index}"),
+                        str(sock_path.parent / f"result-{index}"),
+                        str(release),
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                    # The checkout's legacy hearth.py shim shadows src/hearth
+                    # when child Python inherits the repository root as cwd.
+                    cwd=sock_path.parent,
+                )
+            )
+
+        ready_paths = [sock_path.parent / f"ready-{index}" for index in range(2)]
+        deadline = time.monotonic() + 5.0
+        while not all(path.exists() for path in ready_paths) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        if not all(path.exists() for path in ready_paths):
+            failures = {}
+            for index, process in enumerate(processes):
+                if process.poll() is not None:
+                    _stdout, stderr = process.communicate()
+                    failures[index] = {
+                        "exit_code": process.returncode,
+                        "stderr": (stderr or b"").decode(errors="replace")[-2000:],
+                    }
+            assert all(path.exists() for path in ready_paths), (
+                f"both child processes must reach the gate; child failures={failures}"
+            )
+        gate.touch()
+
+        result_paths = [sock_path.parent / f"result-{index}" for index in range(2)]
+        deadline = time.monotonic() + 5.0
+        while not all(path.exists() for path in result_paths) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert all(path.exists() for path in result_paths), "both child starts must finish"
+        outcomes = [path.read_text(encoding="utf-8") for path in result_paths]
+        started = [value for value in outcomes if value.startswith("started:")]
+        failed = [value for value in outcomes if value.startswith("failed:")]
+        assert len(started) == 1
+        assert len(failed) == 1
+        assert "already has a listener" in failed[0]
+        assert sock_path.exists()
+        assert client.send("show", socket_path=sock_path) == started[0].split(":", 1)[1]
+    finally:
+        release.touch()
+        for process in processes:
+            try:
+                process.communicate(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                process.communicate(timeout=2.0)
+
+
+def test_stale_cleanup_refuses_a_symlinked_lock_file(sock_path):
+    sock_path.parent.mkdir(parents=True, exist_ok=True)
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale.bind(str(sock_path))
+    stale.close()
+    victim = sock_path.parent / "unrelated.txt"
+    victim.write_text("keep this file")
+    sock_path.with_name(f".{sock_path.name}.lock").symlink_to(victim)
+
+    assert client.clear_stale_socket(sock_path) is False
+    assert sock_path.exists()
+    assert victim.read_text() == "keep this file"
+
+
+def test_bind_replaces_a_stale_unix_socket(sock_path):
+    sock_path.parent.mkdir(parents=True, exist_ok=True)
+    stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    stale.bind(str(sock_path))
+    stale.close()  # filesystem entry remains, but no process is listening
+
     srv = server.Server(lambda _r: "ok", socket_path=sock_path)
     srv.start()
     try:
         assert client.send("show", socket_path=sock_path) == "ok"
     finally:
         srv.stop()
+
+
+def test_bind_refuses_to_replace_a_regular_file(sock_path):
+    sock_path.parent.mkdir(parents=True, exist_ok=True)
+    sock_path.write_text("keep this file")
+    srv = server.Server(lambda _r: "ok", socket_path=sock_path)
+
+    with pytest.raises(FileExistsError, match="non-socket"):
+        srv.bind()
+
+    assert sock_path.read_text() == "keep this file"
+
+
+def test_bind_preserves_live_socket_when_its_handler_returns_no_reply(running, sock_path):
+    running[1]["handler"] = lambda _request: (_ for _ in ()).throw(RuntimeError("handler failed"))
+    competing = server.Server(lambda _request: "second", socket_path=sock_path)
+
+    with pytest.raises(OSError, match="already has a listener"):
+        competing.bind()
+
+    assert sock_path.exists()
+    assert client.clear_stale_socket(sock_path) is False
+
+
+def test_bind_does_not_unlink_a_live_server_socket(running, sock_path):
+    active, _state = running
+    original = sock_path.stat()
+    competing = server.Server(lambda _r: "second", socket_path=sock_path)
+
+    with pytest.raises(OSError, match="already has a listener"):
+        competing.bind()
+
+    current = sock_path.stat()
+    assert (current.st_dev, current.st_ino) == (original.st_dev, original.st_ino)
+    assert client.send("show", socket_path=sock_path) == "echo:show"
+    assert active.path.exists()
+
+
+def test_listener_thread_start_failure_closes_socket_and_removes_owned_path(
+    monkeypatch: pytest.MonkeyPatch, sock_path: Path
+) -> None:
+    srv = server.Server(lambda _r: "ok", socket_path=sock_path)
+
+    class ThreadThatCannotStart:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("thread limit reached")
+
+    monkeypatch.setattr(server.threading, "Thread", ThreadThatCannotStart)
+
+    with pytest.raises(OSError, match="could not start the IPC listener thread"):
+        srv.start()
+
+    assert not sock_path.exists()
+    assert srv._sock is None
+    assert srv._owns_path is False
+    assert srv._path_identity is None
+
+
+def test_stop_does_not_unlink_a_replacement_path(sock_path):
+    srv = server.Server(lambda _r: "unused", socket_path=sock_path)
+    srv.bind()
+    sock_path.unlink()
+    sock_path.write_text("replacement file")
+
+    srv.stop()
+
+    assert sock_path.read_text() == "replacement file"
 
 
 def test_stop_removes_the_socket_and_joins(sock_path):
@@ -120,15 +462,50 @@ def test_encode_rejects_embedded_newline():
         protocol.encode("two\nlines")
 
 
-def test_read_line_stops_at_the_limit():
+def test_read_line_rejects_an_oversized_unterminated_frame():
     left, right = socket.socketpair()
     try:
         blob = b"x" * 9000  # no newline at all
         threading.Thread(target=lambda: (left.sendall(blob), left.close()), daemon=True).start()
-        got = protocol.read_line(right, limit=4096)
+        with pytest.raises(IpcError, match="exceeds 4096 bytes"):
+            protocol.read_line(right, limit=4096)
     finally:
         right.close()
-    assert 0 < len(got) <= 9000
+
+
+def test_read_line_limit_is_strict_even_for_non_aligned_limits():
+    left, right = socket.socketpair()
+    try:
+        threading.Thread(
+            target=lambda: (left.sendall(b"x" * 1200 + b"\n"), left.close()),
+            daemon=True,
+        ).start()
+        with pytest.raises(IpcError, match="exceeds 1000 bytes"):
+            protocol.read_line(right, limit=1000)
+    finally:
+        right.close()
+
+
+def test_read_line_rejects_eof_before_newline_terminator():
+    left, right = socket.socketpair()
+    try:
+        left.sendall(b"quit")
+        left.shutdown(socket.SHUT_WR)
+        with pytest.raises(IpcError, match="ended before its newline"):
+            protocol.read_line(right)
+    finally:
+        left.close()
+        right.close()
+
+
+def test_read_line_rejects_a_non_positive_limit():
+    left, right = socket.socketpair()
+    try:
+        with pytest.raises(ValueError, match="limit must be positive"):
+            protocol.read_line(right, limit=0)
+    finally:
+        left.close()
+        right.close()
 
 
 def test_read_line_reassembles_chunks():
@@ -146,9 +523,13 @@ def test_read_line_reassembles_chunks():
         right.close()
 
 
-def test_is_known_filters_unsupported_commands():
+def test_is_known_matches_the_full_server_command_vocabulary():
     assert protocol.is_known("get_sinks")
     assert protocol.is_known("dump now")
+    # These two verbs are used by the LPD8/Padfire integration and are
+    # registered by MixerApp even though they were missing from COMMANDS.
+    assert protocol.is_known("remap")
+    assert protocol.is_known('padfire_status {"connected":true}')
     assert not protocol.is_known("rm -rf /")
     assert not protocol.is_known("")
 
@@ -156,7 +537,7 @@ def test_is_known_filters_unsupported_commands():
 def test_pid_helpers(tmp_path):
     pid_path = tmp_path / "hearth.pid"
     server.write_pid(pid_path)
-    assert server.read_pid(pid_path) == __import__("os").getpid()
+    assert server.read_pid(pid_path) == os.getpid()
     assert server.pid_alive(server.read_pid(pid_path)) is True
 
     pid_path.write_text("not a number")
@@ -169,3 +550,54 @@ def test_pid_helpers(tmp_path):
     pid_max_file = Path("/proc/sys/kernel/pid_max")
     pid_max = int(pid_max_file.read_text()) if pid_max_file.exists() else 32768
     assert server.pid_alive(pid_max + 1) is False
+
+
+def test_write_pid_is_private_and_leaves_no_temporary_file(tmp_path):
+    pid_path = tmp_path / "hearth.pid"
+
+    server.write_pid(pid_path)
+
+    assert server.read_pid(pid_path) == os.getpid()
+    assert pid_path.stat().st_mode & 0o777 == 0o600
+    assert list(tmp_path.glob("hearth.pid.tmp.*")) == []
+
+
+def test_write_pid_refuses_a_symlink_without_touching_its_target(tmp_path):
+    pid_path = tmp_path / "hearth.pid"
+    target = tmp_path / "keep.txt"
+    target.write_text("not a pid")
+
+    pid_path.symlink_to(target)
+
+    with pytest.raises(OSError, match="non-regular PID path"):
+        server.write_pid(pid_path)
+
+    assert pid_path.is_symlink()
+    assert target.read_text() == "not a pid"
+
+
+def test_remove_pid_deletes_only_our_pid_file(tmp_path):
+    pid_path = tmp_path / "hearth.pid"
+    server.write_pid(pid_path)
+
+    assert server.remove_pid(pid_path) is True
+    assert not pid_path.exists()
+
+
+def test_remove_pid_preserves_a_replaced_or_unrelated_pid(tmp_path):
+    pid_path = tmp_path / "hearth.pid"
+    pid_path.write_text("1234567" + chr(10))
+
+    assert server.remove_pid(pid_path, expected_pid=os.getpid()) is False
+    assert pid_path.read_text() == "1234567" + chr(10)
+
+
+def test_remove_pid_does_not_unlink_a_symlink(tmp_path):
+    pid_path = tmp_path / "hearth.pid"
+    target = tmp_path / "keep.txt"
+    target.write_text(str(os.getpid()))
+    pid_path.symlink_to(target)
+
+    assert server.remove_pid(pid_path) is False
+    assert pid_path.is_symlink()
+    assert target.exists()
