@@ -142,6 +142,7 @@ def test_app_mute_cache_reconciles_a_stale_backend_snapshot(
     monkeypatch.setattr(mixer.Gtk, "Box", FakeWidget)
     monkeypatch.setattr(mixer.Gtk, "Label", FakeWidget)
     monkeypatch.setattr(mixer.Gtk, "Button", FakeWidget)
+    monkeypatch.setattr(mixer.Gtk, "DrawingArea", FakeWidget)
     monkeypatch.setattr(mixer.Gtk, "Scale", FakeScale)
     monkeypatch.setattr(mixer.Gtk, "DragSource", FakeWidget)
     monkeypatch.setattr(
@@ -152,7 +153,7 @@ def test_app_mute_cache_reconciles_a_stale_backend_snapshot(
 
     initial = mixer.Listener(name="Firefox", muted=False, index="42", volume=63)
     strip = SimpleNamespace(
-        channel=SimpleNamespace(group="audio"),
+        channel=SimpleNamespace(group="audio", name="Game"),
         listeners=FakeWidget(),
         _listener_signature=None,
         _listener_volume_controls={},
@@ -167,16 +168,20 @@ def test_app_mute_cache_reconciles_a_stale_backend_snapshot(
 
     mixer.Strip._fill_listeners(strip, [initial])
     original_row = strip.listeners.children[0]
-    volume_slider = original_row.children[2]
-    mute_button = original_row.children[4]
-    name_label = original_row.children[1]
-    assert volume_slider.accessible_label == "Firefox volume"
-    assert mute_button.accessible_label == "Mute Firefox"
+    move_handle = original_row.children[1]
+    name_label = original_row.children[2]
+    volume_slider = original_row.children[3]
+    mute_button = original_row.children[5]
+    assert move_handle.accessible_label == (
+        "Move Firefox from Game between mixer buses; press Left or Right to move"
+    )
+    assert volume_slider.accessible_label == "Firefox volume in Game"
+    assert mute_button.accessible_label == "Mute Firefox in Game"
 
     mixer.Strip._on_app_mute(strip, mute_button, initial)
     assert initial.muted is True
     assert strip._listener_signature == (("42", "Firefox", True),)
-    assert mute_button.accessible_label == "Unmute Firefox"
+    assert mute_button.accessible_label == "Unmute Firefox in Game"
     assert "muted" in name_label.classes
 
     # A stale backend snapshot must rebuild the row to its observed state.
@@ -185,8 +190,8 @@ def test_app_mute_cache_reconciles_a_stale_backend_snapshot(
     assert len(cleared) == 2
     assert strip._listener_signature == (("42", "Firefox", False),)
     assert strip.listeners.children[0] is not original_row
-    assert strip.listeners.children[0].children[4].accessible_label == "Mute Firefox"
-    assert "muted" not in strip.listeners.children[0].children[1].classes
+    assert strip.listeners.children[0].children[5].accessible_label == "Mute Firefox in Game"
+    assert "muted" not in strip.listeners.children[0].children[2].classes
 
 
 def test_rail_dock_button_accessible_name_describes_its_action(
@@ -324,6 +329,7 @@ def test_per_app_volume_callback_queues_stream_not_bus(
     label = FakeLabel()
     collector = FakeCollector()
     strip = SimpleNamespace(
+        channel=SimpleNamespace(name="Game"),
         _listener_volume_held={},
         _listener_volume_controls={"42": (scale, label, 1)},
         win=SimpleNamespace(collector=collector, queue_volume=queue_volume),
@@ -334,7 +340,7 @@ def test_per_app_volume_callback_queues_stream_not_bus(
 
     assert calls == [("stream", "42", 73)]
     assert label.text == "73%"
-    assert scale.tooltip == "Firefox: 73%"
+    assert scale.tooltip == "Firefox volume in Game: 73%"
     assert strip._listener_volume_held["42"] > 0
     assert collector.refreshes == 0
 
@@ -488,6 +494,7 @@ def test_listener_volume_snapshot_sync_respects_drag_hold_and_blocks_signal() ->
 
     scale, label = FakeScale(40), FakeLabel()
     strip = SimpleNamespace(
+        channel=SimpleNamespace(name="Game"),
         _listener_volume_controls={"42": (scale, label, 4)},
         _listener_volume_held={},
     )
@@ -498,7 +505,7 @@ def test_listener_volume_snapshot_sync_respects_drag_hold_and_blocks_signal() ->
     assert scale.value == 72
     assert scale.blocked is False
     assert label.text == "72%"
-    assert scale.tooltip == "Firefox: 72%"
+    assert scale.tooltip == "Firefox volume in Game: 72%"
 
     scale.value = 88
     strip._listener_volume_held["42"] = 10**12

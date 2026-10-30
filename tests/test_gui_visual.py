@@ -34,14 +34,29 @@ def test_production_windows_render_and_capture(
     # GTK property writes, so the test checks named controls rather than a
     # tooltip or neighboring visible text.
     accessible_labels: dict[int, list[str]] = {}
+    accessible_label_records: list[tuple[Gtk.Widget, list[str]]] = []
     accessible_updates: dict[int, list[tuple[tuple[object, ...], tuple[object, ...]]]] = {}
     original_update_property = Gtk.Accessible.update_property
 
     def record_accessible_label(widget, properties, values):
         accessible_updates.setdefault(id(widget), []).append((tuple(properties), tuple(values)))
         if Gtk.AccessibleProperty.LABEL in properties:
-            accessible_labels.setdefault(id(widget), []).append(str(values[0]))
+            label = str(values[0])
+            accessible_labels.setdefault(id(widget), []).append(label)
+            for recorded_widget, labels in accessible_label_records:
+                if recorded_widget is widget or recorded_widget == widget:
+                    labels.append(label)
+                    break
+            else:
+                accessible_label_records.append((widget, [label]))
         return original_update_property(widget, properties, values)
+
+    def labels_for(widget: Gtk.Widget) -> list[str]:
+        widget_hash = hash(widget)
+        for recorded_widget, labels in accessible_label_records:
+            if hash(recorded_widget) == widget_hash:
+                return labels
+        return []
 
     monkeypatch.setattr(Gtk.Accessible, "update_property", record_accessible_label)
 
@@ -257,11 +272,17 @@ def test_production_windows_render_and_capture(
     mic_in_name = f"Choose what feeds {window.strips['mic_b1'].channel.name}"
     assert game_out_name in accessible_labels[id(game_out)]
     assert mic_in_name in accessible_labels[id(mic_in)]
+    for route_button, route_name in ((game_out, game_out_name), (mic_in, mic_in_name)):
+        focus_child = route_button.get_first_child()
+        assert isinstance(focus_child, Gtk.ToggleButton)
+        assert route_name in labels_for(focus_child)
     assert f"Mute {game_strip.channel.name}" in accessible_labels[id(game_strip.mute)]
 
-    # The popover's short visible captions remain intact, while each
-    # checkbox announces its own route action and the bus it affects.
-    game_strip._fill_outputs()
+    # Open each production route popover under synthetic state. This only
+    # presents the checkbox lists; no checkbox is toggled and no route job runs.
+    game_strip.out_button.set_active(True)
+    pump(0.02)
+    assert game_strip.out_popover.get_visible()
     output_label, output_sink = next(
         (label, sink) for label, sink in app_mod.OUTPUTS if sink != game_strip.channel.sink
     )
@@ -269,8 +290,19 @@ def test_production_windows_render_and_capture(
     assert (
         f"Send {game_strip.channel.name} to {output_label}" in accessible_labels[id(output_check)]
     )
+    assert output_check.get_focusable()
+    assert output_check.get_accessible_role() == Gtk.AccessibleRole.CHECKBOX
+    for check in game_strip._out_checks.values():
+        labels = labels_for(check)
+        assert labels and labels[-1].strip()
+    game_strip.out_popover.popdown()
+    pump(0.02)
+
     mic_strip = window.strips["mic_b1"]
-    mic_strip._fill_inputs()
+    assert mic_strip.in_button is not None
+    mic_strip.in_button.set_active(True)
+    pump(0.02)
+    assert mic_strip.in_popover.get_visible()
     assert mic_strip._carla_check is not None
     assert (
         f"Route SM7B via Carla into {mic_strip.channel.name}"
@@ -279,10 +311,15 @@ def test_production_windows_render_and_capture(
     raw_label, raw_source = next(
         (label, source) for label, source in app_mod.MIC_SOURCES if source == "sm7b_mono"
     )
-    assert (
-        f"Route {raw_label} into {mic_strip.channel.name}"
-        in accessible_labels[id(mic_strip._in_checks[raw_source])]
-    )
+    raw_check = mic_strip._in_checks[raw_source]
+    assert f"Route {raw_label} into {mic_strip.channel.name}" in accessible_labels[id(raw_check)]
+    assert raw_check.get_focusable()
+    assert raw_check.get_accessible_role() == Gtk.AccessibleRole.CHECKBOX
+    for check in (mic_strip._carla_check, *mic_strip._in_checks.values()):
+        labels = labels_for(check)
+        assert labels and labels[-1].strip()
+    mic_strip.in_popover.popdown()
+    pump(0.02)
     assert game_strip.bind_button is not None
     bind_name = (
         f"Open LPD8 remapping for {game_strip.channel.name} (knob {game_strip.channel.bind})"
@@ -355,6 +392,98 @@ def test_production_windows_render_and_capture(
     window._sources_present = {"sm7b_mono", "astro_mic_48k"}
     window.apply_states()
     pump(0.45)
+
+    # The same process may play into multiple buses. Name its controls with
+    # both app and bus context so the screen reader can distinguish each one.
+    for sink, stream_id, bus, action in (
+        ("vm_game", "fixture-102", "Game", "Unmute"),
+        ("vm_chat", "fixture-103", "Chat", "Mute"),
+    ):
+        strip = window.strips[sink]
+        volume = strip._listener_volume_controls[stream_id][0]
+        move_handle = strip._listener_move_controls[stream_id]
+        row = move_handle.get_parent()
+        mute = row.get_last_child() if row is not None else None
+        assert f"Vesktop volume in {bus}" in accessible_labels[id(volume)]
+        assert mute is not None
+        assert f"{action} Vesktop in {bus}" in accessible_labels[id(mute)]
+
+    # Exercise GTK's native Tab focus traversal over the complete, ready
+    # mixer window. This is deliberately focus-only: no button activation,
+    # slider adjustment, route mutation, or backend command is sent.
+    def tab_transitions(
+        target: Gtk.Window,
+        direction: Gtk.DirectionType,
+        *,
+        start: Gtk.Widget | None = None,
+    ) -> list[Gtk.Widget]:
+        target.set_focus(start)
+        transitions: list[Gtk.Widget] = []
+        stop_at = start
+        for _ in range(128):
+            if not target.child_focus(direction):
+                break
+            focused = target.get_focus()
+            assert focused is not None, "GTK reported a focus move but no widget owns focus"
+            if stop_at is not None and focused is stop_at:
+                break
+            if stop_at is None:
+                stop_at = focused
+            assert all(focused is not prior for prior in transitions), (
+                "GTK focus traversal repeated a stop before completing the cycle: "
+                f"{type(focused).__name__}"
+            )
+            transitions.append(focused)
+        else:
+            raise AssertionError("GTK focus traversal exceeded 128 stops without terminating")
+        return transitions
+
+    window.present()
+    pump(0.02)
+    tab_forward = tab_transitions(window, Gtk.DirectionType.TAB_FORWARD)
+    assert len(tab_forward) >= 20, f"Only {len(tab_forward)} mixer Tab stops found"
+    for sink, stream_id in (
+        ("vm_game", "fixture-101"),
+        ("vm_game", "fixture-102"),
+        ("vm_chat", "fixture-103"),
+    ):
+        move_handle = window.strips[sink]._listener_move_controls[stream_id]
+        assert any(hash(widget) == hash(move_handle) for widget in tab_forward), (
+            f"app move handle for {sink}/{stream_id} is missing from the Tab sequence"
+        )
+    # Begin at the forward endpoint so Shift+Tab can be compared against the
+    # exact reverse sequence, independent of GTK's initial-focus convention.
+    tab_backward = [
+        tab_forward[-1],
+        *tab_transitions(window, Gtk.DirectionType.TAB_BACKWARD, start=tab_forward[-1]),
+    ]
+
+    def current_name(widget: Gtk.Widget) -> str:
+        labels = labels_for(widget)
+        return labels[-1] if labels else "<unnamed>"
+
+    forward_names = [current_name(widget) for widget in tab_forward]
+    backward_names = [current_name(widget) for widget in tab_backward]
+    assert [id(widget) for widget in tab_backward] == [
+        id(widget) for widget in reversed(tab_forward)
+    ], (
+        "Shift+Tab does not reverse the Tab sequence: "
+        f"forward={forward_names!r}; backward={backward_names!r}"
+    )
+    focus_names: list[str] = []
+    for widget in tab_forward:
+        labels = labels_for(widget)
+        assert labels and labels[-1].strip(), (
+            "a keyboard focus stop has no explicit accessible label: "
+            f"{type(widget).__name__}, role={widget.get_accessible_role()}"
+        )
+        focus_names.append(labels[-1])
+    assert len(set(focus_names)) == len(focus_names), (
+        f"keyboard focus stops have duplicate accessible names: {focus_names!r}"
+    )
+    print("GTK4 Tab order: " + " -> ".join(focus_names))
+    window.set_focus(None)
+
     assert game_fader.get_sensitive()
     assert accessible_updates[id(game_fader)][-1] == (fader_value_property, (76.0, "76%"))
     # Disappearance clears the stale accessible percentage just as it clears
@@ -375,7 +504,7 @@ def test_production_windows_render_and_capture(
     assert firefox_move_handle.get_focusable()
     assert firefox_move_handle.get_accessible_role() == Gtk.AccessibleRole.GROUP
     assert (
-        "Move Firefox between mixer buses; press Left or Right to move"
+        "Move Firefox from Game between mixer buses; press Left or Right to move"
         in accessible_labels[id(firefox_move_handle)]
     )
     assert window.strips["vm_game"].listeners.get_first_child() is not None
@@ -482,6 +611,9 @@ def test_production_windows_render_and_capture(
         for widget, label in accessible_names
     )
     assert setup_window.latency.get_accessible_role() == Gtk.AccessibleRole.SPIN_BUTTON
+    latency_editor = setup_window.latency.get_first_child()
+    assert isinstance(latency_editor, Gtk.Text)
+    assert "Routing latency in milliseconds" in labels_for(latency_editor)
     setup_window.flow.set_text("SM7B → Carla → Mic B1\nMic B1 → voice apps\nMic B2 → spare input")
     setup_window.lpd8_state.set_text("Controller status is checked when Setup opens")
     setup_window.lpd8_map.set_text("K5 · Music    K6 · Chat    K7 · Game    K8 · Microphone")
@@ -516,6 +648,7 @@ def test_production_windows_render_and_capture(
     # accessible name identifies the exact unit it will restart.
     failed_unit = setup_mod.units_mod.Unit("roaring-vm-share.service", "daemon", "failed", "failed")
     setup_window._apply([failed_unit])
+    pump(0.05)  # Let GTK rebuild the mapped focus chain for the newly added fault row.
     assert setup_window.verdict.get_accessible_role() == Gtk.AccessibleRole.STATUS
     assert setup_window.verdict.get_text() == "1 thing is wrong"
     assert setup_window.verdict.get_visible()
@@ -527,6 +660,33 @@ def test_production_windows_render_and_capture(
         for widget, label in accessible_names
     )
     assert restart_button.get_tooltip_text() == f"Restart {failed_unit.name}"
+
+    # Setup is a separate window with its own focus chain. Exercise it under
+    # the same isolated GTK/Xvfb harness; no save, reset, or restart is invoked.
+    setup_forward = tab_transitions(setup_window, Gtk.DirectionType.TAB_FORWARD)
+    assert len(setup_forward) >= 8, f"Setup exposes only {len(setup_forward)} keyboard focus stops"
+    setup_backward = [
+        setup_forward[-1],
+        *tab_transitions(setup_window, Gtk.DirectionType.TAB_BACKWARD, start=setup_forward[-1]),
+    ]
+    setup_forward_names = [current_name(widget) for widget in setup_forward]
+    setup_backward_names = [current_name(widget) for widget in setup_backward]
+    assert [hash(widget) for widget in setup_backward] == [
+        hash(widget) for widget in reversed(setup_forward)
+    ], (
+        "Setup Shift+Tab does not reverse the forward focus sequence: "
+        f"forward={setup_forward_names!r}; backward={setup_backward_names!r}"
+    )
+    setup_names: list[str] = []
+    for widget in setup_forward:
+        labels = labels_for(widget)
+        assert labels and labels[-1].strip(), (
+            "Setup focus stop has no explicit accessible name: "
+            f"{type(widget).__name__}, role={widget.get_accessible_role()}"
+        )
+        setup_names.append(labels[-1])
+    assert len(set(setup_names)) == len(setup_names), "Setup focus names are not unique"
+    print("Setup Tab order: " + " -> ".join(setup_names))
 
     setup_window.set_visible(False)
     remap_window = remap_mod.RemapWindow(window)
@@ -540,6 +700,103 @@ def test_production_windows_render_and_capture(
     remap_window._fill_choice(remap_window._knobs[5])
     assert "Choose assignment for LPD8 knob 5" in accessible_labels[id(remap_window.choice)]
     capture("lpd8-controls")
+
+    def assert_choice_focus(label: str) -> None:
+        assert remap_window.choice.grab_focus()
+        pump(0.02)
+
+        def descendants(widget: Gtk.Widget) -> list[Gtk.Widget]:
+            items = [widget]
+            child = widget.get_first_child()
+            while child is not None:
+                items.extend(descendants(child))
+                child = child.get_next_sibling()
+            return items
+
+        root = remap_window.choice.get_root()
+        get_focus = getattr(root, "get_focus", None)
+        focus_owner = get_focus() if callable(get_focus) else None
+        tree = descendants(remap_window.choice)
+        state = [
+            (type(item).__name__, item.get_focusable(), item.has_focus(), labels_for(item))
+            for item in tree
+        ]
+        assert focus_owner is not None, (
+            f"LPD8 assignment root {type(root).__name__} has no focus owner; {state!r}"
+        )
+        assert any(hash(focus_owner) == hash(item) for item in tree), (
+            f"LPD8 assignment focus belongs to {type(focus_owner).__name__}, "
+            f"not the dropdown subtree; {state!r}"
+        )
+        assert label in labels_for(focus_owner), (
+            f"the focused {type(focus_owner).__name__} lacks {label!r}; {state!r}"
+        )
+        assert isinstance(focus_owner, Gtk.ToggleButton)
+        selected = remap_window.choice.get_selected()
+        model = remap_window.choice.get_model()
+        options = [model.get_item(index).get_string() for index in range(model.get_n_items())]
+        assert options and all(option.strip() for option in options)
+        focus_owner.set_active(True)
+        pump(0.02)
+        option_popovers = [
+            item for item in descendants(remap_window.choice) if isinstance(item, Gtk.Popover)
+        ]
+        assert any(popover.get_visible() for popover in option_popovers)
+        assert remap_window.choice.get_selected() == selected
+        assert not remap_window._write_pending
+        focus_owner.set_active(False)
+        pump(0.02)
+
+    # Open the real assignment popover for a pad and knob. The dropdown is
+    # focused and named, but no assignment is changed or written to disk.
+    remap_window._open_menu(remap_window._pads[3])
+    pump(0.02)
+    assert remap_window.menu.get_visible()
+    assert remap_window._open is remap_window._pads[3]
+    assert remap_window.choice.get_focusable()
+    assert "Choose assignment for LPD8 pad 3" in labels_for(remap_window.choice)
+    assert_choice_focus("Choose assignment for LPD8 pad 3")
+    remap_window.menu.popdown()
+    pump(0.02)
+    remap_window._open_menu(remap_window._knobs[5])
+    pump(0.02)
+    assert remap_window.menu.get_visible()
+    assert remap_window._open is remap_window._knobs[5]
+    assert remap_window.choice.get_focusable()
+    assert "Choose assignment for LPD8 knob 5" in labels_for(remap_window.choice)
+    assert_choice_focus("Choose assignment for LPD8 knob 5")
+    remap_window.menu.popdown()
+    pump(0.02)
+
+    # Each physical pad/knob button has a distinct assignment name. Walk the
+    # window's real Tab chain without opening the assignment popover or changing
+    # any mapping; the dropdown is tested separately for its accessible name.
+    remap_forward = tab_transitions(remap_window, Gtk.DirectionType.TAB_FORWARD)
+    assert len(remap_forward) == 16, (
+        f"LPD8 remap exposes {len(remap_forward)} focus stops, expected 16"
+    )
+    remap_backward = [
+        remap_forward[-1],
+        *tab_transitions(remap_window, Gtk.DirectionType.TAB_BACKWARD, start=remap_forward[-1]),
+    ]
+    remap_forward_names = [current_name(widget) for widget in remap_forward]
+    remap_backward_names = [current_name(widget) for widget in remap_backward]
+    assert [hash(widget) for widget in remap_backward] == [
+        hash(widget) for widget in reversed(remap_forward)
+    ], (
+        "LPD8 remap Shift+Tab does not reverse the forward focus sequence: "
+        f"forward={remap_forward_names!r}; backward={remap_backward_names!r}"
+    )
+    remap_names: list[str] = []
+    for widget in remap_forward:
+        labels = labels_for(widget)
+        assert labels and labels[-1].strip(), (
+            "LPD8 remap focus stop has no explicit accessible name: "
+            f"{type(widget).__name__}, role={widget.get_accessible_role()}"
+        )
+        remap_names.append(labels[-1])
+    assert len(set(remap_names)) == len(remap_names), "LPD8 control names are not unique"
+    print("LPD8 remap Tab order: " + " -> ".join(remap_names))
 
     # The minimized rail uses a custom-drawn control too. Include a focused
     # example in the artifact so the visual reviewer can inspect its focus ring.

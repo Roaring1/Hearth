@@ -57,6 +57,14 @@ def accessible_label(widget: Gtk.Widget, label: str) -> None:
     widget.update_property([Gtk.AccessibleProperty.LABEL], [label])
 
 
+def menu_button_accessible_label(button: Gtk.MenuButton, label: str) -> None:
+    """Name both the menu button and GTK's focusable toggle implementation child."""
+    accessible_label(button, label)
+    child = button.get_first_child()
+    if isinstance(child, Gtk.ToggleButton):
+        accessible_label(child, label)
+
+
 def set_label(button: Gtk.Button, text_widget: Gtk.Label | None, label: str) -> None:
     """Update a visible child label and accessible name, with a stub fallback.
 

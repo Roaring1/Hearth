@@ -44,7 +44,7 @@ from gi.repository import GLib, Gtk  # noqa: E402 - must follow require_version
 from hearth import leds as leds_mod  # noqa: E402
 from hearth import lpd8map  # noqa: E402
 from hearth import services as services_mod  # noqa: E402
-from hearth.ui.gtk4 import style as style_mod  # noqa: E402
+from hearth.ui.gtk4 import action_icons, style as style_mod  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -398,6 +398,10 @@ class RemapWindow(Gtk.Window):
         self.menu_name.add_css_class("lpd8-sel")
         box.append(self.menu_name)
         self.choice = Gtk.DropDown.new_from_strings([""])
+        # The selector lives in a popover rather than the normal window
+        # hierarchy; make its keyboard focusability explicit so Tab and a
+        # screen reader can reach the assignment without a pointer.
+        self.choice.set_focusable(True)
         self.choice_handler = self.choice.connect("notify::selected", self._on_choice)
         box.append(self.choice)
         self.menu.set_child(box)
@@ -584,10 +588,14 @@ class RemapWindow(Gtk.Window):
         """Put that control's job list in the dropdown."""
         number = widget.number
         kind = "pad" if widget.kind == "pad" else "knob"
-        self.choice.update_property(
-            [Gtk.AccessibleProperty.LABEL],
-            [f"Choose assignment for LPD8 {kind} {number}"],
-        )
+        choice_label = f"Choose assignment for LPD8 {kind} {number}"
+        action_icons.accessible_label(self.choice, choice_label)
+        # Gtk.DropDown is a composite widget. GTK moves keyboard focus to its
+        # internal toggle button, so that real focus target needs the same
+        # control-specific name as the outer dropdown.
+        focus_child = self.choice.get_first_child()
+        if isinstance(focus_child, Gtk.ToggleButton):
+            action_icons.accessible_label(focus_child, choice_label)
         if widget.kind == "pad":
             self.menu_name.set_text(f"Pad {number} does")
             names = [s.label for s in lpd8map.PAD_SLOTS]
