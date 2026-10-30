@@ -389,9 +389,9 @@ Note LED feedback.
 Test cleanup stopped Orca, restored the original toolkit-accessibility GSettings
 value, unloaded temporary KWin scripts, removed temporary debug files, and
 restored Minecraft to the foreground. No audio route or mixer control was
-activated during the live accessibility test. The fresh GUI remains up in the
-session under the transient user unit `hearth-accessibility-smoke.service` so
-the current checkout stays available without another desktop restart. This
-session-only unit adds one healthy `hearth*` entry to the service inventory and
-will be collected when the app exits; no persistent service definition was
-installed.
+activated during the live accessibility test. During that test, the fresh GUI
+was kept alive under the transient user unit `hearth-accessibility-smoke.service`;
+no persistent service definition was installed. The user later reported that
+Hearth was closed. The post-closure systemd state was not queried, so the
+transient unit's current state is not asserted here; it is expected to be
+collected after its process exits.
