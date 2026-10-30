@@ -395,3 +395,19 @@ no persistent service definition was installed. The user later reported that
 Hearth was closed. The post-closure systemd state was not queried, so the
 transient unit's current state is not asserted here; it is expected to be
 collected after its process exits.
+
+
+## Hosted GTK keyboard-focus regression follow-up — 2026-10-29
+
+Draft stacked PR [#6](https://github.com/Roaring1/Hearth/pull/6) extends the production-window test coverage without changing the live desktop or audio graph:
+
+- Walks native GTK Tab and Shift+Tab traversal in the mixer, Setup, and LPD8 remapper, and requires the reverse traversal to be the exact reverse of the forward sequence.
+- Requires every reachable stop to expose a unique, non-empty accessible name. Covers all 16 physical LPD8 pad/knob controls and all currently reachable Setup controls.
+- Requires the app-stream movement grip to appear in the actual Tab chain. Gives the focused internal toggle child of route OUT/IN menu buttons contextual labels and gives duplicated app-stream controls bus-specific names.
+- Opens production output and microphone-input route popovers and verifies named checkbox controls/roles without toggling them.
+- Opens LPD8 pad and knob assignment popovers, focuses the dropdown's actual internal GTK toggle, and opens its inner option-list popover. The test verifies the list is visible and that the selected assignment and pending-write state remain unchanged.
+
+The tests use synthetic fixtures under hosted Xvfb. They do not activate route checkboxes, adjust sliders, save Setup, restart services, select a mapping, write the LPD8 map, or send MIDI/audio commands. Hosted CI [run #221](https://github.com/Roaring1/Hearth/actions/runs/41000328696) passed all six jobs; its GUI suite reported **56 passed, 450 deselected**. The visual artifact is [available here](https://api.github.com/repos/Roaring1/Hearth/actions/artifacts/12953261181/zip) through **2026-11-13**.
+
+The live follow-up is intentionally narrower than the automated coverage: one earlier real Plasma/Orca session spoke several named controls and observed a Tab-related focus event, but full spoken traversal and a normal-theme Plasma focus-ring review were not completed. The maintainer has deprioritized that manual review; it is not a release gate. This is a prioritization decision, not a claim that complete live screen-reader coverage was achieved. The stacked PR remains draft and must follow PR #1.
+
