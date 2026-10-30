@@ -389,4 +389,9 @@ Note LED feedback.
 Test cleanup stopped Orca, restored the original toolkit-accessibility GSettings
 value, unloaded temporary KWin scripts, removed temporary debug files, and
 restored Minecraft to the foreground. No audio route or mixer control was
-activated during the live accessibility test.
+activated during the live accessibility test. The fresh GUI remains up in the
+session under the transient user unit `hearth-accessibility-smoke.service` so
+the current checkout stays available without another desktop restart. This
+session-only unit adds one healthy `hearth*` entry to the service inventory and
+will be collected when the app exits; no persistent service definition was
+installed.
