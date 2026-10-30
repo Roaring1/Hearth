@@ -362,3 +362,31 @@ Setup's visually compact Chat/Game endpoint choices announce the Astro A50
 routing function, while the Moonlight Stream/Chat choices identify both source
 microphone and destination. The production GTK test verifies the actual
 accessible LABEL updates without changing any routing selections or saved state.
+
+
+## Live Plasma / Orca accessibility pass — 2026-10-29
+
+A fresh current-checkout instance was launched in the normal KDE/Wayland session
+with `GTK_A11Y=atspi`. Orca's debug log confirmed speech for the window title
+(`Hearth`), the reorder grouping (`Reorder Music; press Left or Right to move`)
+and the action-named minimize control (`Minimise Music to the rail button`).
+Orca also received a real Tab key event while the reorder grouping owned focus;
+the later focus event was announced by name. This proves a narrow real-session
+screen-reader/focus path, not complete coverage of every control or the entire
+Tab sequence. Broad AT-SPI tree enumeration stalled on unrelated desktop
+applications, and no live focus-ring screenshot was captured under Plasma.
+Automated Xvfb screenshots/tests still provide the focus-ring regression layer.
+
+The user also completed a physical LPD8 unplug/reconnect. After reconnection,
+USB device enumeration changed from device 18 to 23 and ALSA again listed
+`hw:6,0,0 LPD8 MIDI 1`; Hearth reported its controls connected and
+`lpd8-mixer.service` was active. The short watcher did not preserve the
+intermediate disconnect sample, so record this as user-confirmed replug plus
+post-replug detection, not a continuously captured USB transition. This is
+separate from pad-lamp feedback: the original/classic LPD8 cannot receive MIDI
+Note LED feedback.
+
+Test cleanup stopped Orca, restored the original toolkit-accessibility GSettings
+value, unloaded temporary KWin scripts, removed temporary debug files, and
+restored Minecraft to the foreground. No audio route or mixer control was
+activated during the live accessibility test.
