@@ -365,9 +365,7 @@ def apply_windows_titlebar(window_title: str, desktop: Theme | None = None) -> b
                             f"accent-caption HRESULT=0x{caption_result & 0xFFFFFFFF:08X}"
                         )
                     if text_result < 0:
-                        failures.append(
-                            f"caption-text HRESULT=0x{text_result & 0xFFFFFFFF:08X}"
-                        )
+                        failures.append(f"caption-text HRESULT=0x{text_result & 0xFFFFFFFF:08X}")
                 else:
                     failures.append(f"invalid accent colour {colour!r}")
 
