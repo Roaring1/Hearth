@@ -124,3 +124,45 @@ def test_describe_avoids_internal_names(tmp_path: Path) -> None:
     assert "kdeglobals" not in text
     assert "Plasma" not in text
     assert text[0].isupper()
+
+
+def test_windows_accent_dword_is_decoded_from_abgr() -> None:
+    assert theme.parse_windows_accent_dword(0xFF8200E9) == "#e90082"
+    assert theme.parse_windows_accent_dword(-1) is None
+    assert theme.parse_windows_accent_dword(0x1_0000_0000) is None
+
+
+def test_windows_theme_uses_dark_mode_and_system_accent() -> None:
+    result = theme.windows_theme_from_values(
+        accent_dword=0xFF8200E9,
+        apps_use_light_theme=0,
+        color_prevalence=1,
+    )
+    assert result.from_desktop is True
+    assert result.is_dark is True
+    assert result.accent == "#e90082"
+    assert result.tokens["selection-bg"] == "#e90082"
+    assert result.accent_titlebar is True
+    assert result.icon_theme == "windows"
+
+
+def test_windows_theme_uses_light_palette_when_selected() -> None:
+    result = theme.windows_theme_from_values(
+        accent_dword=0xFF8200E9,
+        apps_use_light_theme=1,
+        color_prevalence=0,
+    )
+    assert result.is_dark is False
+    assert result.background == theme.WINDOWS_LIGHT["window-bg"]
+    assert result.accent == "#e90082"
+    assert result.accent_titlebar is False
+
+
+def test_windows_theme_without_registry_values_is_a_fallback() -> None:
+    result = theme.windows_theme_from_values(
+        accent_dword=None,
+        apps_use_light_theme=None,
+        color_prevalence=None,
+    )
+    assert result.from_desktop is False
+    assert result.tokens == theme.FALLBACK

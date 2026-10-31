@@ -1,9 +1,15 @@
 """Regression tests for privacy-sensitive defaults in the debug bundle script."""
 
+import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "roaring_audio_debug_dump.sh"
+
+
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="Linux debug-dump shell script")
 
 
 def test_remote_windows_collection_is_explicitly_opt_in() -> None:

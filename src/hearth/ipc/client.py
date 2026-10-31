@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import logging
+import os
 import socket
 import stat
 from pathlib import Path
@@ -30,7 +31,7 @@ def send(command: str, *, socket_path: Path | None = None, timeout: float = 0.5)
     path = socket_path or paths.socket_file()
     if not path.exists():
         return None
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # type: ignore[attr-defined]
     sock.settimeout(timeout)
     try:
         sock.connect(str(path))
@@ -78,7 +79,7 @@ def _clear_stale_socket_locked(path: Path) -> bool:
     if not stat.S_ISSOCK(initial.st_mode):
         return False
 
-    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # type: ignore[attr-defined]
     connected = False
     try:
         probe.settimeout(protocol.TIMEOUT)
@@ -122,3 +123,20 @@ def _clear_stale_socket_locked(path: Path) -> bool:
         log.warning("could not remove stale socket %s: %s", path, exc)
         return False
     return True
+
+
+# Windows named pipes are authenticated and have kernel-managed lifetimes.
+if os.name == "nt":
+    from hearth.ipc.windows_pipe import (
+        clear_stale_socket as _windows_clear_stale,
+    )
+    from hearth.ipc.windows_pipe import (
+        is_running as _windows_is_running,
+    )
+    from hearth.ipc.windows_pipe import (
+        send as _windows_pipe_send,
+    )
+
+    send = _windows_pipe_send
+    is_running = _windows_is_running
+    clear_stale_socket = _windows_clear_stale

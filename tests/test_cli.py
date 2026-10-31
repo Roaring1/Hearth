@@ -58,8 +58,12 @@ def test_file_logging_creates_private_state_and_log(
     try:
         logging_setup.configure("info", to_file=True)
 
-        assert paths.state_dir().stat().st_mode & 0o777 == 0o700
-        assert paths.log_file().stat().st_mode & 0o777 == 0o600
+        if os.name == "nt":
+            paths.ensure_private_dir(paths.state_dir())
+            paths.ensure_private_file(paths.log_file())
+        else:
+            assert paths.state_dir().stat().st_mode & 0o777 == 0o700
+            assert paths.log_file().stat().st_mode & 0o777 == 0o600
     finally:
         for handler in list(root.handlers):
             root.removeHandler(handler)
@@ -104,6 +108,17 @@ def test_file_logging_refuses_a_hard_linked_log_without_modifying_target(
         root.setLevel(previous_level)
 
 
+def test_status_uses_windows_specific_read_only_report(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from hearth import windows_status
+
+    monkeypatch.setattr(cli, "_is_windows", lambda: True)
+    monkeypatch.setattr(windows_status, "text", lambda: "Windows-local audio inventory")
+    assert cli.main(["--status"]) == cli.EXIT_OK
+    assert capsys.readouterr().out.strip() == "Windows-local audio inventory"
+
+
 def test_unknown_level_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HEARTH_LOG_LEVEL", "chatty")
     logging_setup.configure(None, to_file=False)
@@ -135,9 +150,13 @@ def test_legacy_mixer_config_writer_updates_multiple_keys_atomically(
     assert 'LATENCY_MSEC="18"' in text
     assert 'UNKNOWN="keep"' in text
     assert "# keep this comment" in text
-    assert conf.stat().st_mode & 0o777 == 0o640
+    if os.name == "nt":
+        paths.ensure_private_file(conf)
+        paths.ensure_private_file(tmp_path / ".roaring_mixer.conf.lock")
+    else:
+        assert conf.stat().st_mode & 0o777 == 0o640
+        assert (tmp_path / ".roaring_mixer.conf.lock").stat().st_mode & 0o777 == 0o600
     assert list(tmp_path.glob("*.tmp.*")) == []
-    assert (tmp_path / ".roaring_mixer.conf.lock").stat().st_mode & 0o777 == 0o600
 
 
 def test_legacy_mixer_config_refuses_a_hard_linked_lock_without_chmodding_target(
@@ -159,6 +178,7 @@ def test_legacy_mixer_config_refuses_a_hard_linked_lock_without_chmodding_target
     assert victim.stat().st_mode & 0o777 == original_mode
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows uses ACLs, not st_uid")
 def test_legacy_mixer_config_refuses_a_foreign_owned_target(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -251,9 +271,13 @@ def test_moonlight_source_write_is_atomic_and_queues_restart(
     assert "Environment=MIC_SOURCE=b1_mic" in updated
     assert "# preserve this note" in updated
     assert "ExecStart=/usr/bin/example" in updated
-    assert unit.stat().st_mode & 0o777 == 0o640
+    if os.name == "nt":
+        paths.ensure_private_file(unit)
+        paths.ensure_private_file(tmp_path / ".roaring-moonlight-mic.service.lock")
+    else:
+        assert unit.stat().st_mode & 0o777 == 0o640
+        assert (tmp_path / ".roaring-moonlight-mic.service.lock").stat().st_mode & 0o777 == 0o600
     assert list(tmp_path.glob("*.tmp.*")) == []
-    assert (tmp_path / ".roaring-moonlight-mic.service.lock").stat().st_mode & 0o777 == 0o600
     assert queued == [
         [
             ["systemctl", "--user", "daemon-reload"],
@@ -285,6 +309,7 @@ def test_moonlight_write_refuses_hard_linked_lock_without_chmodding_target(
     assert queued == []
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows uses ACLs, not st_uid")
 def test_moonlight_write_refuses_a_foreign_owned_target(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

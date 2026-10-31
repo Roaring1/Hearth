@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
+
+import pytest
 
 from hearth import proc, services
 from hearth.errors import CommandError
@@ -15,6 +18,7 @@ def _runner(stdout: str, returncode: int = 0):
     return fake
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux systemd commands; Windows fail-closed tests")
 def test_states_maps_lines_to_units_in_order():
     proc.set_runner(_runner("active\ninactive\nfailed\n", returncode=3))
     try:
@@ -24,6 +28,7 @@ def test_states_maps_lines_to_units_in_order():
     assert got == {"a.service": "active", "b.service": "inactive", "c.service": "failed"}
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux systemd commands; Windows fail-closed tests")
 def test_short_reply_degrades_to_unknown_instead_of_shifting():
     proc.set_runner(_runner("active\n"))
     try:
@@ -70,6 +75,7 @@ def test_timer_summary_handles_no_timers():
     assert services.parse_timer_summary("") == ""
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux systemd commands; Windows fail-closed tests")
 def test_memory_bytes_handles_not_set():
     proc.set_runner(_runner("MemoryCurrent=[not set]\n"))
     try:
@@ -97,6 +103,7 @@ def test_actions_report_systemctl_launch_failures(monkeypatch):
     assert services.daemon_reload() is False
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux systemd commands; Windows fail-closed tests")
 def test_actions_are_argv(monkeypatch):
     calls: list[list[str]] = []
     monkeypatch.setattr(proc, "spawn", lambda argv, **_k: calls.append(list(argv)))

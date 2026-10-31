@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from collections.abc import Sequence
 from importlib import metadata
 
@@ -22,6 +23,11 @@ from hearth.errors import HearthError
 __all__ = ["build_parser", "main", "version"]
 
 log = logging.getLogger(__name__)
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -160,11 +166,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             return EXIT_OK
 
         if args.status:
-            # Imported here, not at module scope: the report only needs the
-            # new GTK-free modules, and must not pay for the legacy core.
-            from hearth import status
+            # Windows has a distinct native endpoint/session backend. Do not
+            # run the Linux/PipeWire, systemd, or desktop-portal health probes.
+            if _is_windows():
+                from hearth import windows_status
 
-            print(status.text())
+                report = windows_status.text()
+            else:
+                # Imported lazily: the Linux report does not need GTK or the
+                # legacy core's import-time PipeWire probes.
+                from hearth import status
+
+                report = status.text()
+            print(report)
             return EXIT_OK
 
         return _dispatch(args)

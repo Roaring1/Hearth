@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import io
 import math
+import os
 import struct
 import time
+
+import pytest
 
 from hearth import meters
 
@@ -67,6 +70,7 @@ def test_parec_argv_latency_is_an_int():
     assert "--latency-msec=45" in meters.parec_argv("x.monitor", latency_msec=45)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux parec poller; Windows Core Audio meter tests")
 def test_poller_reports_levels_and_stops_cleanly(monkeypatch):
     monkeypatch.setattr(meters.proc, "have", lambda _p: False)
     poller = meters.PeakPoller(["vm_game.monitor"])
@@ -122,6 +126,7 @@ def test_discarding_a_source_clears_stale_level_and_partial_frame(monkeypatch):
     assert terminated == [child]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux parec poller; Windows Core Audio meter tests")
 def test_eof_retires_stream_instead_of_busy_looping(monkeypatch):
     poller = meters.PeakPoller(["vm_game.monitor"])
     monkeypatch.setattr(poller, "available", True)
