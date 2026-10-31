@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from hearth import lpd8map
@@ -83,7 +85,12 @@ def test_set_pad_moves_every_mode_table(script):
 
 def test_set_pad_keeps_the_script_executable(script):
     lpd8map.set_pad(2, 5, script)
-    assert script.stat().st_mode & 0o111
+    if os.name == "nt":
+        from hearth import paths
+
+        paths.ensure_private_file(script)
+    else:
+        assert script.stat().st_mode & 0o111
 
 
 def test_setting_the_same_pad_twice_is_a_no_op(script):

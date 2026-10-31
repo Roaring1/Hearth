@@ -8,6 +8,7 @@ systemd is reported as ``unknown`` and the UI shows that honestly.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Sequence
 
 from hearth import proc
@@ -19,6 +20,10 @@ UNKNOWN = "unknown"
 
 
 def _run(args: Sequence[str]) -> str:
+    # systemd user units are a Linux service manager, not a Windows service
+    # contract. Treat them as unknown instead of trying a PATH lookup.
+    if os.name == "nt":
+        return ""
     try:
         # is-active exits non-zero for inactive units, which is information,
         # not an error, so failures are inspected rather than raised.
@@ -70,6 +75,9 @@ def _spawn_action(*args: str) -> bool:
     systemd handles the action asynchronously. This return value only confirms
     launch, not that the requested unit transition has completed.
     """
+    if os.name == "nt":
+        return False
+
     try:
         proc.spawn(["systemctl", "--user", *args])
     except CommandError as exc:

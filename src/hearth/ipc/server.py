@@ -65,7 +65,7 @@ class Server:
                     str(self.path),
                 )
 
-            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # type: ignore[attr-defined]
             connected = False
             try:
                 probe.settimeout(0.25)
@@ -112,7 +112,7 @@ class Server:
                     )
                 self.path.unlink()
 
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # type: ignore[attr-defined]
         try:
             sock.bind(str(self.path))
             created_stat = self.path.lstat()
@@ -223,21 +223,27 @@ def write_pid(pid_path: Path | None = None) -> Path:
     """Write a private PID fallback file atomically without following symlinks."""
     path = pid_path or paths.pid_file()
     path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        paths.ensure_private_dir(path.parent)
     try:
         metadata = path.lstat()
     except FileNotFoundError:
         metadata = None
-    if metadata is not None and not stat.S_ISREG(metadata.st_mode):
-        raise OSError(f"refusing to replace non-regular PID path: {path}")
+    if metadata is not None:
+        if not stat.S_ISREG(metadata.st_mode):
+            raise OSError(f"refusing to replace non-regular PID path: {path}")
+        paths.ensure_private_file(path)
 
     fd, tmp_name = tempfile.mkstemp(prefix=f"{path.name}.tmp.", dir=path.parent)
     tmp = Path(tmp_name)
     try:
-        os.fchmod(fd, 0o600)
+        if os.name != "nt":
+            os.fchmod(fd, 0o600)  # type: ignore[attr-defined]
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             stream.write(f"{os.getpid()}\n")
             stream.flush()
             os.fsync(stream.fileno())
+        paths.ensure_private_file(tmp)
         tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)
@@ -261,6 +267,7 @@ def remove_pid(pid_path: Path | None = None, *, expected_pid: int | None = None)
         before = path.lstat()
         if not stat.S_ISREG(before.st_mode):
             return False
+        paths.ensure_private_file(path)
         actual = int(path.read_text().strip())
     except FileNotFoundError:
         return False
@@ -296,3 +303,11 @@ def pid_alive(pid: int | None) -> bool:
     except PermissionError:
         return True  # exists, owned by someone else
     return True
+
+
+# Windows uses an authenticated named pipe; keep the POSIX implementation
+# unchanged on Linux, where its stale-socket/inode protections are exercised.
+if os.name == "nt":
+    from hearth.ipc.windows_pipe import Server as _WindowsPipeServer
+
+    Server = _WindowsPipeServer  # type: ignore[misc, assignment]

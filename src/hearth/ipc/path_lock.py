@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import fcntl
 import os
-import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+
+from hearth import paths
+from hearth.platform.locking import lock_file, unlock_file
 
 
 @contextmanager
@@ -24,18 +25,12 @@ def socket_path_lock(path: Path) -> Iterator[None]:
     flags |= getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(lock_path, flags, 0o600)
     try:
-        metadata = os.fstat(fd)
-        if not stat.S_ISREG(metadata.st_mode):
-            raise OSError(f"IPC path lock is not a regular file: {lock_path}")
-        if metadata.st_uid != os.getuid():
-            raise PermissionError(f"IPC path lock is not owned by this user: {lock_path}")
-        if metadata.st_nlink != 1:
-            raise OSError(f"IPC path lock must not be hard-linked: {lock_path}")
-        os.fchmod(fd, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        paths.ensure_private_fd(fd, lock_path)
+        os.fchmod(fd, 0o600)  # type: ignore[attr-defined]
+        lock_file(fd)
         try:
             yield
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            unlock_file(fd)
     finally:
         os.close(fd)
