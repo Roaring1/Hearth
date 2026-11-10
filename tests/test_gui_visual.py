@@ -278,40 +278,27 @@ def test_production_windows_render_and_capture(
     assert share_strip.share_mode_button is not None
     assert share_strip.share_mode_button.get_label() == "OUTPUTS"
     assert share_strip.listeners.get_visible()
-    assert share_strip._share_detail_signature == (
-        ("Vesktop", "Not configured"),
-        (
-            "note",
-            "Screen-share selection is Game, Music directly. "
-            "VM-SHARE is not selected; migration remains in #10.",
-        ),
-    )
-    # Switching views lists source BUSES, not applications. Switching back
-    # lists applications, not one row for each source bus.
+    assert share_strip._share_detail_signature == (("outputs", "Not routed"),)
+    assert share_strip.listeners.get_first_child().get_first_child().get_text() == "Not routed"
+    assert share_strip.device.get_visible() is False
+    assert share_strip.mute.get_size_request()[0] == 48
+    # Sources is a single concise summary, not a multi-row explanation.
     share_strip._on_share_view_clicked(share_strip.share_mode_button)
     assert share_strip.share_mode_button.get_label() == "SOURCES"
-    assert share_strip._share_detail_signature == (
-        ("Game", "Configured source"),
-        ("Music", "Configured source"),
-        (
-            "note",
-            "The VM-SHARE service is configured for Game + Music. "
-            "Live link state is not shown here yet.",
-        ),
-    )
+    assert share_strip._share_detail_signature == (("sources", "GAME + MUSIC"),)
+    assert share_strip.listeners.get_first_child().get_first_child().get_text() == "GAME + MUSIC"
+    # When the bus is selected for the capture app, show its icon and name.
     monkeypatch.setattr(app_mod.share_mod, "selection", lambda: ["share"])
     share_strip._on_share_view_clicked(share_strip.share_mode_button)
     assert share_strip.share_mode_button.get_label() == "OUTPUTS"
-    assert share_strip._share_detail_signature == (
-        ("Vesktop", "Configured"),
-        ("note", "Vesktop is configured to receive VM-SHARE."),
-    )
+    assert share_strip._share_detail_signature == (("outputs", "Vesktop"),)
+    assert share_strip.listeners.get_first_child().get_first_child() is not None
     assert share_strip.meter.get_accessible_role() == Gtk.AccessibleRole.METER
     assert share_strip.fader.get_accessible_role() == Gtk.AccessibleRole.SLIDER
-    assert "Share audio level" in accessible_labels[id(share_strip.meter)]
-    assert "Share volume" in accessible_labels[id(share_strip.fader)]
-    assert "Mute Share" in accessible_labels[id(share_strip.mute)]
-    assert "Minimise Share to the rail" in accessible_labels[id(share_strip.minimise_button)]
+    assert "Screen Share audio level" in accessible_labels[id(share_strip.meter)]
+    assert "Screen Share volume" in accessible_labels[id(share_strip.fader)]
+    assert "Mute Screen Share" in accessible_labels[id(share_strip.mute)]
+    assert "Minimise Screen Share to the rail" in accessible_labels[id(share_strip.minimise_button)]
 
     # The popover's short visible captions remain intact, while each
     # checkbox announces its own route action and the bus it affects.
@@ -389,7 +376,7 @@ def test_production_windows_render_and_capture(
         "laptop_audio": "Laptop output",
         "mic_b1": "Carla / SM7B",
         "mic_b2": "Spare microphone",
-        "vm_share": "screen-share mix",
+        "vm_share": "",
     }
     for sink, state in window.states.items():
         state.seen = True
@@ -422,7 +409,7 @@ def test_production_windows_render_and_capture(
     assert "vm_share" not in window.absent
     assert "vm_share" in window.strips
     window._update_banner()
-    assert window.banner_text.get_text() == "Share missing - the audio graph is not fully up"
+    assert window.banner_text.get_text() == "Screen Share missing - the audio graph is not fully up"
     assert window.banner_units == ("roaring-vm-share.service",)
     window.states["vm_share"].present = True
     window._update_banner()
@@ -432,7 +419,7 @@ def test_production_windows_render_and_capture(
     assert accessible_updates[id(game_fader)][-1] == (fader_value_property, (76.0, "76%"))
     assert share_strip.fader.get_sensitive()
     assert share_strip.value.get_text() == "88"
-    assert share_strip.device.get_text() == "screen-share mix"
+    assert share_strip.device.get_text() == "—"
     assert share_strip.mute.get_sensitive()
 
     # The new fader writes only the VM-SHARE sink master, not Game/Music inputs.

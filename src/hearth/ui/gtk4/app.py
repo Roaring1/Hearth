@@ -110,7 +110,7 @@ CHANNELS: tuple[Channel, ...] = (
     # VM-SHARE sits with the normal output buses but is a master destination:
     # it gets the ordinary fader/meter/mute/collapse controls, not OUT or app
     # move controls. Its source routing remains a separately guarded operation.
-    Channel("Share", "vm_share", "headset", master=True),
+    Channel("Screen Share", "vm_share", "headset", master=True),
 )
 
 #: The systemd user unit that creates each bus. A banner that names a
@@ -362,7 +362,9 @@ class Strip(Gtk.Box):
         brow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         self.mute = Gtk.ToggleButton(label="MUTE")
         self.mute.add_css_class("mute")
-        self.mute.set_hexpand(True)
+        self.mute.set_hexpand(not channel.master)
+        if channel.master:
+            self.mute.set_size_request(48, -1)
         action_icons.accessible_label(self.mute, f"Mute {channel.name}")
         self._mute_handler = self.mute.connect("toggled", self._on_mute)
         brow.append(self.mute)
@@ -411,9 +413,11 @@ class Strip(Gtk.Box):
             self.device.set_tooltip_text(f"Where {channel.name} lands")
         self.device.add_css_class("device")
         self.device.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
+        self.device.set_visible(not channel.master)
         self.append(self.device)
 
-        # Share's view switch sits above its read-only endpoint list.
+        # Share's compact view switch shares the mute row; the line below it
+        # is reserved for one concise source or destination preview.
         self.share_mode_button: Gtk.Button | None = None
         self.share_view = "outputs"
         self._share_detail_signature: tuple[tuple[str, str], ...] = ()
@@ -426,9 +430,10 @@ class Strip(Gtk.Box):
                 self.share_mode_button, "Currently showing outputs. Switch to sources."
             )
             self.share_mode_button.set_hexpand(True)
-            self.share_mode_button.set_tooltip_text("Show source buses feeding Share")
+            self.share_mode_button.set_size_request(0, -1)
+            self.share_mode_button.set_tooltip_text("Show source buses feeding Screen Share")
             self.share_mode_button.connect("clicked", self._on_share_view_clicked)
-            self.append(self.share_mode_button)
+            brow.append(self.share_mode_button)
 
         self.listeners = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.append(self.listeners)
@@ -766,60 +771,40 @@ class Strip(Gtk.Box):
         self._fill_share_details()
 
     def _fill_share_details(self) -> None:
-        """Show hard-coded Share graph endpoints without changing any routes."""
+        """Show one compact source or destination preview without changing routes."""
         if self.channel.sink != "vm_share":
             return
 
         if self.share_view == "sources":
-            rows = (
-                ("Game", "Configured source"),
-                ("Music", "Configured source"),
-            )
-            note = (
-                "The VM-SHARE service is configured for Game + Music. "
-                "Live link state is not shown here yet."
-            )
+            preview = "GAME + MUSIC"
+            configured = True
         else:
-            selected = [item.strip() for item in share_mod.selection() if item.strip()]
-            using_share = any(item.lower() in {"share", "bus:share"} for item in selected)
-            rows = (("Vesktop", "Configured" if using_share else "Not configured"),)
-            if using_share:
-                note = "Vesktop is configured to receive VM-SHARE."
-            elif selected:
-                names = ", ".join(share_mod.BUSES.get(item.lower(), item) for item in selected)
-                note = (
-                    f"Screen-share selection is {names} directly. "
-                    "VM-SHARE is not selected; migration remains in #10."
-                )
-            else:
-                note = "No screen-share source is selected for Vesktop. VM-SHARE is not configured."
+            selected = [item.strip().lower() for item in share_mod.selection() if item.strip()]
+            configured = any(item in {"share", "bus:share"} for item in selected)
+            preview = "Vesktop" if configured else "Not routed"
 
-        signature = tuple(rows) + (("note", note),)
+        signature = ((self.share_view, preview),)
         if signature == self._share_detail_signature:
             return
         self._share_detail_signature = signature
         self._clear(self.listeners)
 
-        for name_text, detail_text in rows:
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-            name = Gtk.Label(label=name_text, xalign=0.0)
-            name.add_css_class("listener")
-            name.set_hexpand(True)
-            name.set_tooltip_text(name_text)
-            detail = Gtk.Label(label=detail_text, xalign=1.0)
-            detail.add_css_class("device")
-            detail.set_ellipsize(3)
-            detail.set_tooltip_text(detail_text)
-            row.append(name)
-            row.append(detail)
-            self.listeners.append(row)
-
-        note_label = Gtk.Label(label=note, xalign=0.0)
-        note_label.add_css_class("device")
-        note_label.set_wrap(True)
-        note_label.set_max_width_chars(22)
-        note_label.set_tooltip_text(note)
-        self.listeners.append(note_label)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        if self.share_view == "outputs" and configured:
+            row.append(self._mark("Vesktop", 16))
+        name = Gtk.Label(label=preview, xalign=0.0)
+        name.add_css_class("listener")
+        name.set_hexpand(True)
+        name.set_ellipsize(3)
+        name.set_tooltip_text(
+            "Vesktop is configured to receive Screen Share"
+            if configured and self.share_view == "outputs"
+            else "Game and Music feed Screen Share"
+            if self.share_view == "sources"
+            else "No application is configured to receive Screen Share"
+        )
+        row.append(name)
+        self.listeners.append(row)
 
     def _fill_outputs(self) -> None:
         """Build routing controls from the latest background snapshot.
@@ -2146,7 +2131,7 @@ class MixerWindow(Gtk.ApplicationWindow):
     def _device_label(self, channel: Channel, snapshot) -> str:
         """Where this bus lands. Short, real, and never a routing path."""
         if channel.master:
-            return "VM-SHARE bus"
+            return ""
         if channel.group == "mic":
             # The mic is never raw here: the 2i2 goes through Carla's
             # chain first, so what this bus carries is the processed
