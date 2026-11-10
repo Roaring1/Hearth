@@ -1340,7 +1340,7 @@ class Strip(Gtk.Box):
         if getattr(getattr(self, "channel", None), "master", False):
             # The Share drawer is static between deliberate view changes.
             # Do not rebuild it for every normal mixer snapshot.
-            self.listeners.set_visible(True)
+            self.listeners.set_visible(self.win.expanded)
             return
         # A snapshot arrives every 250-500 ms. Recreating these rows on each
         # poll is unnecessary GTK churn and can disturb pointer/keyboard focus.
