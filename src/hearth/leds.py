@@ -13,7 +13,8 @@ For compatible hardware:
 
 * pad *n* (1-8) is note ``59 + n``;
 * the message is a Note On on :data:`DEFAULT_CHANNEL`;
-* velocity 127 requests a lit pad, velocity 0 requests a dark pad.
+* velocity 127 requests a lit pad, velocity 0 requests a dark pad;
+* state pads use lit = muted and dark = normal/unmuted.
 
 A failed/unavailable feedback write must never interrupt audio mixing. The
 mixer UI is the source of truth for mute state regardless of physical LEDs.
@@ -35,14 +36,20 @@ DEFAULT_CHANNEL = 9
 #: device is contiguous and a table would just be eight ways to be wrong.
 FIRST_NOTE = 60
 
-#: Which pad watches which bus, mirroring the pad handlers in
-#: ``~/bin/lpd8_mixer.sh``. Pads 3, 5 and 8 are action pads -- they fire
-#: something rather than holding a state -- so nothing maps to them.
+#: Which state pad watches which target, mirroring
+#: ``~/bin/lpd8_mixer.sh``. The headset entry is an aggregate of its game
+#: and chat output endpoints. Pads 3 and 8 are one-shot actions.
 PAD_FOR_SINK: dict[str, int] = {
-    "vm_music": 1,
-    "vm_chat": 2,
-    "vm_game": 7,
+    "mic_b1": 1,
+    "astro_headset": 2,
 }
+
+#: Both physical A50 output endpoints must be muted for the headset to count
+#: as muted. They are kept together so the app and shell mapping agree.
+HEADSET_SINKS: tuple[str, str] = (
+    "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat",
+    "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game",
+)
 
 #: Where the truth lives, so a later edit to the script is known to need a
 #: matching edit here.
@@ -52,6 +59,11 @@ MAP_SOURCE = "~/bin/lpd8_mixer.sh"
 def pad_for_sink(sink: str) -> int | None:
     """The pad that shows this sink's mute state, if any."""
     return PAD_FOR_SINK.get(sink)
+
+
+def headset_is_muted(chat_muted: bool, game_muted: bool) -> bool:
+    """Treat either muted A50 endpoint as a muted/abnormal headset state."""
+    return chat_muted or game_muted
 
 
 def note_for_pad(pad: int) -> int:
@@ -154,8 +166,8 @@ def set_pad(port: str, pad: int, lit: bool, channel: int = DEFAULT_CHANNEL) -> b
 
 
 def set_sink_mute(port: str, sink: str, muted: bool, channel: int = DEFAULT_CHANNEL) -> bool:
-    """Push one bus's mute state to its pad. False when nothing was sent."""
+    """Push mute state to its pad: lit means muted, dark means normal."""
     pad = pad_for_sink(sink)
     if pad is None:
         return False
-    return set_pad(port, pad, not muted, channel)
+    return set_pad(port, pad, muted, channel)

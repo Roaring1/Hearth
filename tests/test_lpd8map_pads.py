@@ -62,27 +62,27 @@ def test_pad_numbers_match_what_the_hardware_sends():
         lpd8map.pad_to_note(9)
 
 
-def test_read_pad_map_is_one_to_one_by_default(script):
-    assert lpd8map.read_pad_map(script) == {n: n for n in range(1, 9)}
+def test_read_pad_map_contains_only_the_four_active_actions(script):
+    assert lpd8map.read_pad_map(script) == {1: 1, 2: 2, 3: 3, 8: 8}
 
 
 def test_read_pad_map_survives_a_missing_script(tmp_path):
     assert lpd8map.read_pad_map(tmp_path / "gone.sh") == {}
 
 
-def test_set_pad_moves_every_mode_table(script):
-    assert lpd8map.set_pad(1, 4, script) is True
+def test_set_pad_moves_every_mode_table_to_a_toggle_compatible_pad(script):
+    assert lpd8map.set_pad(1, 2, script) is True
     text = script.read_text()
-    assert "NOTE_PAD1=63" in text
-    assert "CC_PAD1=12" in text
-    assert "PROG_1=3" in text
+    assert "NOTE_PAD1=61" in text
+    assert "CC_PAD1=10" in text
+    assert "PROG_1=1" in text
     # Nothing else moved.
     assert "NOTE_PAD2=61" in text
-    assert lpd8map.read_pad_map(script)[1] == 4
+    assert lpd8map.read_pad_map(script)[1] == 2
 
 
 def test_set_pad_keeps_the_script_executable(script):
-    lpd8map.set_pad(2, 5, script)
+    lpd8map.set_pad(2, 1, script)
     assert script.stat().st_mode & 0o111
 
 
@@ -93,6 +93,29 @@ def test_setting_the_same_pad_twice_is_a_no_op(script):
 def test_unknown_slot_is_refused(script):
     with pytest.raises(ValueError):
         lpd8map.set_pad(99, 1, script)
+
+
+def test_latching_mute_actions_cannot_move_to_momentary_pads(script):
+    with pytest.raises(ValueError, match="requires a physical Toggle pad"):
+        lpd8map.set_pad(1, 3, script)
+    with pytest.raises(ValueError, match="requires a physical Toggle pad"):
+        lpd8map.set_pad(2, 8, script)
+    assert lpd8map.read_pad_map(script) == {1: 1, 2: 2, 3: 3, 8: 8}
+
+
+def test_momentary_actions_cannot_move_to_toggle_pads(script):
+    with pytest.raises(ValueError, match="requires a physical Momentary pad"):
+        lpd8map.set_pad(3, 1, script)
+    with pytest.raises(ValueError, match="requires a physical Momentary pad"):
+        lpd8map.set_pad(8, 2, script)
+    assert lpd8map.read_pad_map(script) == {1: 1, 2: 2, 3: 3, 8: 8}
+
+
+def test_compatible_pad_choices_match_the_saved_hardware_modes():
+    assert [slot.slot for slot in lpd8map.compatible_pad_slots(1)] == [1, 2]
+    assert [slot.slot for slot in lpd8map.compatible_pad_slots(2)] == [1, 2]
+    for pad in range(3, 9):
+        assert [slot.slot for slot in lpd8map.compatible_pad_slots(pad)] == [3, 8]
 
 
 def test_missing_note_constant_fails_loudly(tmp_path):
@@ -121,3 +144,12 @@ def test_every_advertised_slot_exists_in_the_real_script():
         assert f"{pad_slot.note_const}=" in text
         assert f"{pad_slot.cc_const}=" in text
         assert f"{pad_slot.prog_const}=" in text
+
+
+def test_the_advertised_assignments_match_the_requested_pad_layout():
+    assert [(slot.slot, slot.label, slot.latching) for slot in lpd8map.PAD_SLOTS] == [
+        (1, "Mute or unmute the B1 microphone", True),
+        (2, "Mute or unmute the headset", True),
+        (3, "Show Hearth", False),
+        (8, "Toggle desktop speakers", False),
+    ]

@@ -2277,16 +2277,16 @@ def test_led_updates_run_off_gtk_thread_and_coalesce_latest_state(
     window._drain_led_updates = drain_and_signal
     window._push_led = lambda sink, muted: mixer.MixerWindow._push_led(window, sink, muted)
 
-    window._push_led("vm_game", True)
+    window._push_led("mic_b1", True)
     assert port_lookup_started.wait(timeout=2)
     # The worker is blocked on port discovery. These two updates should be
     # coalesced into the next batch, with the most recent game state winning.
-    window._push_led("vm_game", False)
-    window._push_led("vm_chat", True)
+    window._push_led("mic_b1", False)
+    window._push_led("astro_headset", True)
     allow_port_lookup_to_finish.set()
 
     assert worker_finished.wait(timeout=3)
-    assert sent == [("vm_game", True), ("vm_game", False), ("vm_chat", True)]
+    assert sent == [("mic_b1", True), ("mic_b1", False), ("astro_headset", True)]
     assert worker_ids and all(worker_id != caller for worker_id in worker_ids)
     assert window._led_worker_active is False
 
@@ -2330,9 +2330,9 @@ def test_led_worker_invalidates_disappeared_port_and_reprobes_next_update(
 
     first = threading.Event()
     completions.append(first)
-    window._push_led("vm_game", True)
+    window._push_led("mic_b1", True)
     assert first.wait(timeout=2)
-    assert writes == [("vm_game", True)]
+    assert writes == [("mic_b1", True)]
     assert window._led_port is None
     assert window._led_worker_active is False
     assert window._led_pending == {}
@@ -2341,10 +2341,10 @@ def test_led_worker_invalidates_disappeared_port_and_reprobes_next_update(
     # the batch and returns to idle instead of retrying a stale port forever.
     second = threading.Event()
     completions.append(second)
-    window._push_led("vm_chat", False)
+    window._push_led("astro_headset", False)
     assert second.wait(timeout=2)
     assert len(port_lookups) == 1
-    assert writes == [("vm_game", True)]
+    assert writes == [("mic_b1", True)]
     assert window._led_worker_active is False
     assert window._led_pending == {}
 
@@ -2371,10 +2371,10 @@ def test_led_queue_recovers_if_worker_thread_cannot_start(
         _drain_led_updates=lambda: None,
     )
 
-    mixer.MixerWindow._push_led(window, "vm_game", True)
+    mixer.MixerWindow._push_led(window, "mic_b1", True)
 
     assert window._led_worker_active is False
-    assert window._led_pending == {"vm_game": True}
+    assert window._led_pending == {"mic_b1": True}
 
 
 def _fake_remap_window(remap):

@@ -1381,6 +1381,8 @@ class MixerWindow(Gtk.ApplicationWindow):
         self._sources_known = False
         #: destinations that are muted at the device itself
         self._muted_outs: set[str] = set()
+        self._headset_pad_state = ChannelState()
+        self._headset_pad_last_mute: bool | None = None
         #: in-flight window resize, if any
         self._size_target: tuple[int, int] | None = None
         self._size_tick: int | None = None
@@ -1788,6 +1790,23 @@ class MixerWindow(Gtk.ApplicationWindow):
             for label, name in OUTPUTS
             if (output := snapshot.sinks.get(name)) is not None and output.muted
         }
+        headset_outputs = [snapshot.sinks.get(name) for name in leds.HEADSET_SINKS]
+        headset_present = all(item is not None for item in headset_outputs)
+        headset_muted = (
+            leds.headset_is_muted(bool(headset_outputs[0].muted), bool(headset_outputs[1].muted))
+            if headset_present
+            else False
+        )
+        self._headset_pad_state = ChannelState(
+            muted=headset_muted,
+            present=headset_present,
+            seen=True,
+        )
+        if self._headset_pad_state.present:
+            headset_muted = self._headset_pad_state.muted
+            if self._headset_pad_last_mute is None or headset_muted != self._headset_pad_last_mute:
+                self._push_led("astro_headset", headset_muted)
+                self._headset_pad_last_mute = headset_muted
         # Snapshot keeps both of these as dicts keyed by sink name.
         sinks = dict(snapshot.sinks)
         streams: dict[str, list[Listener]] = {
@@ -2173,7 +2192,9 @@ class MixerWindow(Gtk.ApplicationWindow):
             return
         feed = getattr(window, "apply_live", None)
         if feed is not None:
-            feed(self.states)
+            live = dict(self.states)
+            live["astro_headset"] = self._headset_pad_state
+            feed(live)
 
     def _tick_laptop_idle(self) -> None:
         """Fold the laptop strip away once it has been quiet long enough.
