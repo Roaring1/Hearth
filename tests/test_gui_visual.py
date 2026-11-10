@@ -57,7 +57,15 @@ def test_production_windows_render_and_capture(
         lambda: {
             "mixer_hidden": ["mic_b2"],
             "mixer_minimised": [],
-            "mixer_order": ["vm_game", "vm_chat", "vm_music", "laptop_audio", "mic_b1", "mic_b2"],
+            "mixer_order": [
+                "vm_game",
+                "vm_chat",
+                "vm_music",
+                "laptop_audio",
+                "mic_b1",
+                "mic_b2",
+                "vm_share",
+            ],
             "mixer_rail_dock": "right",
         },
     )
@@ -213,6 +221,7 @@ def test_production_windows_render_and_capture(
 
     game_strip = window.strips["vm_game"]
     chat_strip = window.strips["vm_chat"]
+    share_strip = window.strips["vm_share"]
     game_out = game_strip.out_button
     game_meter = game_strip.meter
     game_fader = game_strip.fader
@@ -258,10 +267,26 @@ def test_production_windows_render_and_capture(
     assert game_out_name in accessible_labels[id(game_out)]
     assert mic_in_name in accessible_labels[id(mic_in)]
     assert f"Mute {game_strip.channel.name}" in accessible_labels[id(game_strip.mute)]
+    # VM-SHARE reuses the production strip widget, but is a master destination:
+    # one fader, one VU, one mute, and the normal minimise control. It does not
+    # expose an OUT/IN popover or arbitrary per-app move controls.
+    assert share_strip.channel.sink == "vm_share"
+    assert share_strip.out_button is None
+    assert share_strip.in_button is None
+    assert not share_strip.listeners.get_visible()
+    assert share_strip.meter.get_accessible_role() == Gtk.AccessibleRole.METER
+    assert share_strip.fader.get_accessible_role() == Gtk.AccessibleRole.SLIDER
+    assert "Share audio level" in accessible_labels[id(share_strip.meter)]
+    assert "Share volume" in accessible_labels[id(share_strip.fader)]
+    assert "Mute Share" in accessible_labels[id(share_strip.mute)]
+    assert "Minimise Share to the rail" in accessible_labels[id(share_strip.minimise_button)]
 
     # The popover's short visible captions remain intact, while each
     # checkbox announces its own route action and the bus it affects.
     game_strip._fill_outputs()
+    # Share is fed by the existing dedicated direct-link owner; the legacy
+    # module-loopback OUT menu must not create another path into that master.
+    assert "vm_share" not in game_strip._out_checks
     output_label, output_sink = next(
         (label, sink) for label, sink in app_mod.OUTPUTS if sink != game_strip.channel.sink
     )
@@ -323,6 +348,7 @@ def test_production_windows_render_and_capture(
         "laptop_audio": 42,
         "mic_b1": 83,
         "mic_b2": 61,
+        "vm_share": 88,
     }
     devices = {
         "vm_game": "A50 game",
@@ -331,6 +357,7 @@ def test_production_windows_render_and_capture(
         "laptop_audio": "Laptop output",
         "mic_b1": "Carla / SM7B",
         "mic_b2": "Spare microphone",
+        "vm_share": "screen-share mix",
     }
     for sink, state in window.states.items():
         state.seen = True
@@ -355,8 +382,59 @@ def test_production_windows_render_and_capture(
     window._sources_present = {"sm7b_mono", "astro_mic_48k"}
     window.apply_states()
     pump(0.45)
+    # A missing VM-SHARE service must not make the master control vanish.
+    # It stays in the strip area, disabled, with a targeted repair action.
+    window._track_absent()
+    window.states["vm_share"].present = False
+    assert window._track_absent() is False
+    assert "vm_share" not in window.absent
+    assert "vm_share" in window.strips
+    window._update_banner()
+    assert window.banner_text.get_text() == "Share missing - the audio graph is not fully up"
+    assert window.banner_units == ("roaring-vm-share.service",)
+    window.states["vm_share"].present = True
+    window._update_banner()
+    assert not window.banner_units
+
     assert game_fader.get_sensitive()
     assert accessible_updates[id(game_fader)][-1] == (fader_value_property, (76.0, "76%"))
+    assert share_strip.fader.get_sensitive()
+    assert share_strip.value.get_text() == "88"
+    assert share_strip.device.get_text() == "screen-share mix"
+    assert share_strip.mute.get_sensitive()
+
+    # The new fader writes only the VM-SHARE sink master, not Game/Music inputs.
+    queued_share: list[tuple[str, str, int]] = []
+    monkeypatch.setattr(window, "quicken", lambda: None)
+    monkeypatch.setattr(
+        window,
+        "queue_volume",
+        lambda kind, target, value, _failed: queued_share.append((kind, target, value)) or True,
+    )
+    share_strip._on_moved(share_strip.fader, 73)
+    assert queued_share == [("sink", "vm_share", 73)]
+    monkeypatch.setattr(window, "queue_volume", lambda *_args: True)
+    share_strip._held_until = 0.0
+    share_strip.apply(window.states["vm_share"])
+
+    # Mute is local to the share master. It does not mute the source buses.
+    mute_calls: list[tuple[str, bool]] = []
+    monkeypatch.setattr(
+        app_mod.pactl, "set_mute", lambda sink, muted: mute_calls.append((sink, muted)) or True
+    )
+    share_strip.mute.set_active(True)
+    share_strip.mute.set_active(False)
+    assert mute_calls == [("vm_share", True), ("vm_share", False)]
+
+    # An app row cannot use generic drag/drop to bypass #10's guarded route model.
+    move_calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        app_mod.pactl,
+        "move_sink_input",
+        lambda index, sink: move_calls.append((index, sink)) or True,
+    )
+    assert share_strip._move_app_to("fixture-999") is False
+    assert move_calls == []
     # Disappearance clears the stale accessible percentage just as it clears
     # the visible cap. Programmatic changes during absence must not announce a
     # fictitious live volume; recovery republishes the current actual value.
@@ -566,7 +644,9 @@ def test_production_windows_render_and_capture(
     pump(0.05)
     unfocused_rail = rendered_frame("mixer-rail-unfocused-reference")
     assert focused_sliver.grab_focus()
-    pump(0.02)
+    # The mixer now has an additional independent group/strip; allow GTK's
+    # focus CSS transition and redraw to settle before checking actual pixels.
+    pump(0.2)
     assert focused_sliver.has_focus()
     rail_focus_path = capture("mixer-rail-focus", settle=0.0)
     assert_focus_changes_pixels(unfocused_rail, rail_focus_path, "minimized rail")
@@ -582,10 +662,18 @@ def test_production_windows_render_and_capture(
     pump(0.05)
     unfocused_grip = rendered_frame("mixer-reorder-grip-unfocused-reference")
     assert reorder_grip.grab_focus()
-    pump(0.02)
+    pump(0.2)
     assert reorder_grip.has_focus()
     grip_focus_path = capture("mixer-reorder-grip-focus", settle=0.0)
     assert_focus_changes_pixels(unfocused_grip, grip_focus_path, "strip reorder grip")
+
+    # Share uses the same persistent collapse/restore rail as every bus.
+    window.set_focus(None)
+    window.minimise("vm_share")
+    assert "vm_share" in window.slivers
+    window.restore("vm_share")
+    pump(0.4)
+    assert "vm_share" in window.strips
 
     # Stable evidence: the artifacts are all raster screenshots from the Xvfb
     # root window and contain the expected sample of production GUI states.
