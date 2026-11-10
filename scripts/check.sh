@@ -54,7 +54,10 @@ if "$PY" -c 'import pytest' >/dev/null 2>&1; then
     (
         cd "$(mktemp -d)" || exit 1
         if command -v xvfb-run >/dev/null 2>&1; then
-            PYTHONPATH="$ROOT/src" xvfb-run -a "$PY" -m pytest -q \
+            # Match the GTK CI job's stable 1600x1200 root. A 640px default
+            # framebuffer clips the normal seven-strip mixer and hides focus
+            # cues at the right edge, producing false visual-regression fails.
+            PYTHONPATH="$ROOT/src" xvfb-run -a -s "-screen 0 1600x1200x24" "$PY" -m pytest -q \
                 --rootdir "$ROOT" -c "$ROOT/pyproject.toml" "$ROOT/tests"
         else
             PYTHONPATH="$ROOT/src" "$PY" -m pytest -q \

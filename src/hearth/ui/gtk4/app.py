@@ -1,10 +1,10 @@
 """The Hearth mixer, GTK4.
 
-This is the round-10 design as a running window and nothing else: six channel
-strips in two groups, the share destination, a rail for minimised channels and
-a drawer for per-app listeners. The hardware panel, services list, quick
-actions, pad grid and log viewer are deliberately absent; they can come back as
-separate windows once this one is right.
+This is the round-10 design as a running window and nothing else: the
+headset and microphone strips, a separate VM-SHARE master strip, a rail for
+minimised channels and a drawer for per-app listeners. The hardware panel,
+services list, quick actions, pad grid and log viewer are deliberately absent;
+they can come back as separate windows once this one is right.
 
 All audio work is delegated to the toolkit-free modules:
 
@@ -46,6 +46,7 @@ from hearth import meters as meters_mod  # noqa: E402
 from hearth import mic_routes  # noqa: E402
 from hearth import services as services_mod  # noqa: E402
 from hearth import settings as settings_mod  # noqa: E402
+from hearth import share as share_mod  # noqa: E402
 from hearth.audio import pactl  # noqa: E402
 
 from hearth.ui.gtk4 import action_icons, icons as icons_mod  # noqa: E402
@@ -90,10 +91,11 @@ class Channel:
     group: str
     bind: str = ""
     pad: str = ""
+    master: bool = False
 
 
-#: The mixer's channels, in the order the design shows them. Stream is a mic
-#: bus that is hidden by default because it is set once and left alone.
+#: The mixer's strips in logical order. Share is a master destination; B2 is
+#: the spare microphone bus and remains hidden by default until used.
 CHANNELS: tuple[Channel, ...] = (
     Channel("Game", "vm_game", "headset", "K7", "P7"),
     Channel("Chat", "vm_chat", "headset", "K6", "P2"),
@@ -105,6 +107,10 @@ CHANNELS: tuple[Channel, ...] = (
     # else. B2 is the spare bus, hidden until it is used.
     Channel("Mic B1", "mic_b1", "mic", "K8", "P6"),
     Channel("Mic B2", "mic_b2", "mic"),
+    # VM-SHARE sits with the normal output buses but is a master destination:
+    # it gets the ordinary fader/meter/mute/collapse controls, not OUT or app
+    # move controls. Its source routing remains a separately guarded operation.
+    Channel("Screen Share", "vm_share", "headset", master=True),
 )
 
 #: The systemd user unit that creates each bus. A banner that names a
@@ -116,6 +122,7 @@ UNIT_FOR_SINK: dict[str, str] = {
     "mic_b1": "roaring-mic-busses.service",
     "mic_b2": "roaring-mic-busses.service",
     "laptop_audio": "roaring-laptop-audio.service",
+    "vm_share": "roaring-vm-share.service",
 }
 
 #: Everywhere a bus can be sent. A bus is a null sink, so "output" means
@@ -145,7 +152,6 @@ OUTPUTS: tuple[tuple[str, str], ...] = (
         "Scarlett",
         "alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00.Direct__Direct__sink",
     ),
-    ("Share", "vm_share"),
 )
 
 #: The A50 presents two endpoints of one pair of speakers. Sending a bus
@@ -275,7 +281,7 @@ class Strip(Gtk.Box):
         header.append(grip)
         # Single-word bus names shout; a two-word name like "Discord mic"
         # reads better as typed and would not fit the strip uppercased.
-        label = channel.name.upper() if " " not in channel.name else channel.name
+        label = channel.name.upper() if " " not in channel.name or channel.master else channel.name
         name = Gtk.Label(label=label, xalign=0.0)
         name.add_css_class("strip-name")
         # No ellipsize: a strip should grow to fit its own name rather
@@ -356,25 +362,31 @@ class Strip(Gtk.Box):
         brow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         self.mute = Gtk.ToggleButton(label="MUTE")
         self.mute.add_css_class("mute")
-        self.mute.set_hexpand(True)
+        self.mute.set_hexpand(not channel.master)
+        if channel.master:
+            self.mute.set_size_request(48, -1)
         action_icons.accessible_label(self.mute, f"Mute {channel.name}")
         self._mute_handler = self.mute.connect("toggled", self._on_mute)
         brow.append(self.mute)
         self.append(brow)
 
-        # outputs: where this bus is sent, and for a mic bus, whether
-        # you can hear yourself. Both are the same mechanism.
-        self.out_button = Gtk.MenuButton()
-        self.out_button.set_label("OUT")
-        self.out_button.add_css_class("outbtn")
-        out_label = f"Choose where {channel.name} is sent"
-        action_icons.accessible_label(self.out_button, out_label)
-        self.out_button.set_tooltip_text(out_label)
-        self.out_popover = Gtk.Popover()
-        self.out_popover.add_css_class("outpop")
-        self.out_button.set_popover(self.out_popover)
-        self.out_popover.connect("show", lambda _p: self._fill_outputs())
-        brow.append(self.out_button)
+        # Source buses can be sent to destinations. VM-SHARE is itself the
+        # destination/master, so offering OUT here would permit a feedback
+        # path from the share mix back into another bus (or itself).
+        self.out_button: Gtk.MenuButton | None = None
+        self.out_popover: Gtk.Popover | None = None
+        if not channel.master:
+            self.out_button = Gtk.MenuButton()
+            self.out_button.set_label("OUT")
+            self.out_button.add_css_class("outbtn")
+            out_label = f"Choose where {channel.name} is sent"
+            action_icons.accessible_label(self.out_button, out_label)
+            self.out_button.set_tooltip_text(out_label)
+            self.out_popover = Gtk.Popover()
+            self.out_popover.add_css_class("outpop")
+            self.out_button.set_popover(self.out_popover)
+            self.out_popover.connect("show", lambda _p: self._fill_outputs())
+            brow.append(self.out_button)
 
         # A mic bus also needs to say what feeds it. Everything else in
         # this window routes sound outwards; a mic is the one direction
@@ -395,15 +407,39 @@ class Strip(Gtk.Box):
 
         # device line
         self.device = Gtk.Label(label="\u2026", xalign=0.0)
-        self.device.set_tooltip_text(f"Where {channel.name} lands")
+        if channel.master:
+            self.device.set_tooltip_text("Master level for the VM-SHARE virtual output bus")
+        else:
+            self.device.set_tooltip_text(f"Where {channel.name} lands")
         self.device.add_css_class("device")
         self.device.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
+        self.device.set_visible(not channel.master)
         self.append(self.device)
 
-        # listeners, expanded only
+        # Share's compact view switch shares the mute row; the line below it
+        # is reserved for one concise source or destination preview.
+        self.share_mode_button: Gtk.Button | None = None
+        self.share_view = "outputs"
+        self._share_detail_signature: tuple[tuple[str, str], ...] = ()
+        if channel.master:
+            # Read-only graph summary for now. #10 owns the guarded source
+            # editor and migration; these rows never mutate audio routing.
+            self.share_mode_button = Gtk.Button(label="OUTPUTS")
+            self.share_mode_button.add_css_class("outbtn")
+            action_icons.accessible_label(
+                self.share_mode_button, "Currently showing outputs. Switch to sources."
+            )
+            self.share_mode_button.set_hexpand(True)
+            self.share_mode_button.set_size_request(0, -1)
+            self.share_mode_button.set_tooltip_text("Show source buses feeding Screen Share")
+            self.share_mode_button.connect("clicked", self._on_share_view_clicked)
+            brow.append(self.share_mode_button)
+
         self.listeners = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.append(self.listeners)
         self.listeners.set_visible(window.expanded)
+        if channel.master:
+            self._fill_share_details()
 
         self._add_drag(grip)
 
@@ -497,6 +533,11 @@ class Strip(Gtk.Box):
 
     def _move_app_to(self, listener_index: str, *, restore_focus: bool = False) -> bool:
         """Move one application stream onto this bus, preserving drag behavior."""
+        if getattr(self.channel, "master", False):
+            self.set_tooltip_text(
+                "Direct app moves into VM-SHARE are disabled; use the guarded source-routing controls."
+            )
+            return False
         if not pactl.move_sink_input(listener_index, self.channel.sink):
             self.set_tooltip_text("Could not move this app; check pactl/PipeWire")
             return False
@@ -527,7 +568,12 @@ class Strip(Gtk.Box):
         move_control = self._listener_move_controls.get(listener_index)
         if move_control is None or not move_control.has_focus():
             return False
-        visible = [sink for sink in self.win.order if sink in self.win.strips]
+        visible = [
+            sink
+            for sink in self.win.order
+            if sink in self.win.strips
+            and not getattr(getattr(self.win.strips[sink], "channel", None), "master", False)
+        ]
         try:
             position = visible.index(self.channel.sink)
         except ValueError:
@@ -712,6 +758,54 @@ class Strip(Gtk.Box):
         icons_mod.warm_indexes(install_icon)
         return holder
 
+    def _on_share_view_clicked(self, _button: Gtk.Button) -> None:
+        self.share_view = "sources" if self.share_view == "outputs" else "outputs"
+        if self.share_mode_button is not None:
+            next_view = "outputs" if self.share_view == "sources" else "sources"
+            self.share_mode_button.set_label(self.share_view.upper())
+            action_icons.accessible_label(
+                self.share_mode_button,
+                f"Currently showing {self.share_view}. Switch to {next_view}.",
+            )
+            self.share_mode_button.set_tooltip_text(f"Show {next_view} for Share")
+        self._fill_share_details()
+
+    def _fill_share_details(self) -> None:
+        """Show one compact source or destination preview without changing routes."""
+        if self.channel.sink != "vm_share":
+            return
+
+        if self.share_view == "sources":
+            preview = "GAME + MUSIC"
+            configured = True
+        else:
+            selected = [item.strip().lower() for item in share_mod.selection() if item.strip()]
+            configured = any(item in {"share", "bus:share"} for item in selected)
+            preview = "Vesktop" if configured else "Not routed"
+
+        signature = ((self.share_view, preview),)
+        if signature == self._share_detail_signature:
+            return
+        self._share_detail_signature = signature
+        self._clear(self.listeners)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        if self.share_view == "outputs" and configured:
+            row.append(self._mark("Vesktop", 16))
+        name = Gtk.Label(label=preview, xalign=0.0)
+        name.add_css_class("listener")
+        name.set_hexpand(True)
+        name.set_ellipsize(3)
+        name.set_tooltip_text(
+            "Vesktop is configured to receive Screen Share"
+            if configured and self.share_view == "outputs"
+            else "Game and Music feed Screen Share"
+            if self.share_view == "sources"
+            else "No application is configured to receive Screen Share"
+        )
+        row.append(name)
+        self.listeners.append(row)
+
     def _fill_outputs(self) -> None:
         """Build routing controls from the latest background snapshot.
 
@@ -720,6 +814,8 @@ class Strip(Gtk.Box):
         server is slow. While no verified graph is available, keep controls
         disabled rather than showing a guessed all-off state.
         """
+        if self.out_popover is None:
+            return
         if self._route_busy:
             # A popover may be opened while an earlier operation owns the
             # graph. Mark it dirty so worker completion re-renders it enabled.
@@ -1086,7 +1182,7 @@ class Strip(Gtk.Box):
         if self._route_busy:
             self._route_popover_dirty = dirty or routes_changed or sources_changed
             return
-        if routes_changed and self.out_popover.get_visible():
+        if routes_changed and self.out_popover is not None and self.out_popover.get_visible():
             self._fill_outputs()
         if (
             (routes_changed or sources_changed)
@@ -1226,6 +1322,11 @@ class Strip(Gtk.Box):
             scale.set_tooltip_text(f"{listener.name}: {percent}%")
 
     def _fill_listeners(self, listeners: list[Listener], *, loading: bool = False) -> None:
+        if getattr(getattr(self, "channel", None), "master", False):
+            # The Share drawer is static between deliberate view changes.
+            # Do not rebuild it for every normal mixer snapshot.
+            self.listeners.set_visible(self.win.expanded)
+            return
         # A snapshot arrives every 250-500 ms. Recreating these rows on each
         # poll is unnecessary GTK churn and can disturb pointer/keyboard focus.
         # The displayed list is capped at five, so cache only what is visible.
@@ -1354,8 +1455,21 @@ class Strip(Gtk.Box):
             self.listeners.append(empty)
 
 
+def _initial_hidden(cfg: dict[str, object]) -> set[str]:
+    """Existing B2 default plus the new Share strip until the user chooses."""
+    raw_hidden = cfg.get("mixer_hidden")
+    hidden = (
+        {item for item in raw_hidden if isinstance(item, str)}
+        if isinstance(raw_hidden, list) and raw_hidden
+        else {"mic_b2"}
+    )
+    if cfg.get("mixer_share_visibility_set") is not True:
+        hidden.add("vm_share")
+    return hidden
+
+
 class MixerWindow(Gtk.ApplicationWindow):
-    """The whole window. Groups on the left, share, then the minimise rail."""
+    """The whole window. Output and mic groups, then the minimise rail."""
 
     def __init__(self, app: Gtk.Application) -> None:
         super().__init__(application=app, title="Hearth")
@@ -1366,7 +1480,8 @@ class MixerWindow(Gtk.ApplicationWindow):
         # the drawer toggle that used to hide them is gone.
         self.expanded = True
         self.meter_h = METER_TALL
-        self.hidden = set(self.cfg.get("mixer_hidden") or ["mic_b2"])
+        self.share_visibility_set = self.cfg.get("mixer_share_visibility_set") is True
+        self.hidden = _initial_hidden(self.cfg)
         # A bus whose device is unplugged is not a fault, it is an
         # absence: the laptop is only here sometimes. Absent buses fold
         # away on their own and come back when the sink does, and they
@@ -1614,7 +1729,7 @@ class MixerWindow(Gtk.ApplicationWindow):
         return box
 
     def _group_tag(self, group: str) -> str:
-        if group != "headset":
+        if group == "mic":
             return "mic"
         target = self.states.get("vm_game", ChannelState()).device
         return f"headset \u00b7 {target}" if target else "headset"
@@ -1687,17 +1802,23 @@ class MixerWindow(Gtk.ApplicationWindow):
 
     # -- user actions ------------------------------------------------------
     def minimise(self, sink: str) -> None:
+        if sink == "vm_share":
+            self.share_visibility_set = True
         self.minimised.add(sink)
         self.rebuild()
         self._save()
 
     def restore(self, sink: str) -> None:
+        if sink == "vm_share":
+            self.share_visibility_set = True
         self.minimised.discard(sink)
         self.hidden.discard(sink)
         self.rebuild()
         self._save()
 
     def unhide(self, sink: str) -> None:
+        if sink == "vm_share":
+            self.share_visibility_set = True
         self.hidden.discard(sink)
         self.rebuild()
         self._save()
@@ -1729,6 +1850,7 @@ class MixerWindow(Gtk.ApplicationWindow):
             {
                 "mixer_hidden": sorted(self.hidden),
                 "mixer_minimised": sorted(self.minimised),
+                "mixer_share_visibility_set": self.share_visibility_set,
                 "mixer_order": list(self.order),
                 "mixer_rail_dock": self.rail_dock,
                 "win_w": int(width or values.get("win_w", 880)),
@@ -2008,6 +2130,8 @@ class MixerWindow(Gtk.ApplicationWindow):
 
     def _device_label(self, channel: Channel, snapshot) -> str:
         """Where this bus lands. Short, real, and never a routing path."""
+        if channel.master:
+            return ""
         if channel.group == "mic":
             # The mic is never raw here: the 2i2 goes through Carla's
             # chain first, so what this bus carries is the processed
@@ -2073,6 +2197,13 @@ class MixerWindow(Gtk.ApplicationWindow):
                 if sink in self.absent:
                     self.absent.discard(sink)
                     changed = True
+            elif channel.master:
+                # Unlike an optional laptop input, VM-SHARE is a first-class
+                # master control. Keep its disabled strip visible so the owner
+                # can see the missing bus and use the targeted repair banner.
+                if sink in self.absent:
+                    self.absent.discard(sink)
+                    changed = True
             elif sink not in self.absent:
                 self.absent.add(sink)
                 changed = True
@@ -2087,7 +2218,7 @@ class MixerWindow(Gtk.ApplicationWindow):
             for c in CHANNELS
             if not self.states[c.sink].present
             and c.sink not in self.hidden
-            and c.sink in self.ever_present
+            and (c.sink in self.ever_present or c.master)
         ]
         if missing:
             names = ", ".join(c.name for c in missing)
@@ -2399,6 +2530,10 @@ class MixerApp(Gtk.Application):
     def _ctl_unmute(self) -> str:
         def work() -> None:
             for channel in CHANNELS:
+                # A global "unmute all" is a listening recovery shortcut, not
+                # permission to unmute the remote screen-share master.
+                if channel.master:
+                    continue
                 if not pactl.set_mute(channel.sink, False):
                     log.warning("unmute %s: pactl could not be started", channel.sink)
 
@@ -2422,6 +2557,7 @@ class MixerApp(Gtk.Application):
         return control.sinks_payload(
             (c.sink, c.name, window.states[c.sink].volume, window.states[c.sink].muted)
             for c in CHANNELS
+            if not c.master  # Preserve the existing Padfire control-socket contract.
         )
 
     def _ctl_remap(self) -> str:
