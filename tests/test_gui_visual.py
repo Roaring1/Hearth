@@ -71,7 +71,8 @@ def test_production_windows_render_and_capture(
         },
     )
     monkeypatch.setattr(app_mod.settings_mod, "save", lambda _values: None)
-    monkeypatch.setattr(app_mod.share_mod, "selection", lambda: ["game", "music"])
+    share_selection = ["game", "music"]
+    monkeypatch.setattr(app_mod.share_mod, "selection", lambda: list(share_selection))
     # Keep the gallery deterministic and fast: app icon resolution has its
     # own tests; this suite is measuring the composition of UI widgets.
     icon_calls: dict[str, int] = {}
@@ -225,6 +226,49 @@ def test_production_windows_render_and_capture(
     chat_strip = window.strips["vm_chat"]
     share_strip = window.strips["vm_share"]
     game_out = game_strip.out_button
+    # The overview has two obvious, named launch points. The persistent main
+    # entry still works when Share is collapsed; the strip button opens the
+    # exact same lazy window when the strip is expanded.
+    assert window.capture_open_button.get_label() == "SCREEN SHARE"
+    assert (
+        "Open Screen Share setup and capture overview"
+        in accessible_labels[id(window.capture_open_button)]
+    )
+    assert share_strip.capture_setup_button is not None
+    assert share_strip.capture_setup_button.get_label() == "SET UP"
+    assert window._capture_window is None
+    window.capture_open_button.emit("clicked")
+    overview = window._capture_window
+    assert overview is not None and overview.get_title() == "Hearth Screen Share"
+    assert overview.get_hide_on_close()
+    assert overview.title_label.get_text() == "SCREEN SHARE"
+    assert (
+        overview.audio_selection_label.get_text() == "Saved Vesktop audio selection: Game + Music"
+    )
+    # The hidden overview refreshes saved intent on each open, including empty
+    # or newly introduced aliases. It never claims these values are live links.
+    share_selection.clear()
+    window.capture_open_button.emit("clicked")
+    assert (
+        overview.audio_selection_label.get_text()
+        == "Saved Vesktop audio selection: Nothing selected"
+    )
+    share_selection[:] = ["future_bus"]
+    window.capture_open_button.emit("clicked")
+    assert overview.audio_selection_label.get_text() == "Saved Vesktop audio selection: future_bus"
+    share_selection[:] = ["game", "music"]
+    assert [step.get_text() for step in overview.workflow_steps] == [
+        "Start capture in Hearth",
+        "Choose the window in Vesktop",
+        "Enable audio and start sharing",
+    ]
+    assert not hasattr(overview, "collector") and not hasattr(overview, "device_fd")
+    share_strip.capture_setup_button.emit("clicked")
+    assert window._capture_window is overview
+    capture("screen-share-overview")
+    overview.set_visible(False)
+    window.present()
+    pump(0.15)
     game_meter = game_strip.meter
     game_fader = game_strip.fader
     assert game_meter.get_accessible_role() == Gtk.AccessibleRole.METER
@@ -694,6 +738,12 @@ def test_production_windows_render_and_capture(
     window.set_focus(None)
     window.minimise("vm_share")
     assert "vm_share" in window.slivers
+    assert "vm_share" not in window.strips
+    # The persistent main-window entry remains usable with the Share strip folded.
+    window.capture_open_button.emit("clicked")
+    assert window._capture_window is overview
+    overview.set_visible(False)
+    window.present()
     window.restore("vm_share")
     pump(0.4)
     assert "vm_share" in window.strips
@@ -701,6 +751,7 @@ def test_production_windows_render_and_capture(
     # Stable evidence: the artifacts are all raster screenshots from the Xvfb
     # root window and contain the expected sample of production GUI states.
     assert {path.name for path in captures} == {
+        "screen-share-overview.png",
         "mixer-loading.png",
         "mixer-ready.png",
         "mixer-app-move-focus.png",

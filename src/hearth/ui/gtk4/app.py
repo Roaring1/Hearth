@@ -438,8 +438,22 @@ class Strip(Gtk.Box):
         self.listeners = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.append(self.listeners)
         self.listeners.set_visible(window.expanded)
+        self.capture_setup_button: Gtk.Button | None = None
         if channel.master:
             self._fill_share_details()
+            self.capture_setup_button = Gtk.Button(label="SET UP")
+            self.capture_setup_button.add_css_class("capture-setup")
+            action_icons.accessible_label(
+                self.capture_setup_button,
+                "Open Screen Share setup and capture overview",
+            )
+            self.capture_setup_button.set_tooltip_text(
+                "Set up the video friends see and the audio they hear"
+            )
+            self.capture_setup_button.connect(
+                "clicked", lambda _button: window.open_capture_overview()
+            )
+            self.append(self.capture_setup_button)
 
         self._add_drag(grip)
 
@@ -1567,6 +1581,25 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.banner.set_visible(False)
         self.root.append(self.banner)
 
+        # A persistent, plainly named entry point remains visible even when
+        # the Screen Share mixer strip is collapsed into the rail. A shortcut
+        # or right-click menu is never the only way to discover this feature.
+        capture_entry = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.capture_open_button = Gtk.Button(label="SCREEN SHARE")
+        self.capture_open_button.add_css_class("capture-launch")
+        action_icons.accessible_label(
+            self.capture_open_button,
+            "Open Screen Share setup and capture overview",
+        )
+        self.capture_open_button.set_tooltip_text("Set up what friends see and hear")
+        self.capture_open_button.connect("clicked", lambda _button: self.open_capture_overview())
+        capture_entry.append(self.capture_open_button)
+        capture_hint = Gtk.Label(label="Set up the video window and audio friends hear", xalign=0.0)
+        capture_hint.add_css_class("setup-note")
+        capture_hint.set_hexpand(True)
+        capture_entry.append(capture_hint)
+        self.root.append(capture_entry)
+
         self.body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
         self.body.set_vexpand(False)
         self.body.set_valign(Gtk.Align.START)
@@ -1596,6 +1629,7 @@ class MixerWindow(Gtk.ApplicationWindow):
         # matter.
         self._setup_window: Gtk.Window | None = None
         self._remap_window: Gtk.Window | None = None
+        self._capture_window: Gtk.Window | None = None
         self._menu: Gtk.Popover | None = None
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key)
@@ -2347,6 +2381,17 @@ class MixerWindow(Gtk.ApplicationWindow):
         if time.monotonic() - self._laptop_busy >= IDLE_COLLAPSE_S:
             self.minimise(sink)
 
+    # -- Screen Share overview ------------------------------------------
+    def open_capture_overview(self) -> None:
+        """Show the read-only overview without starting any capture work."""
+        if self._capture_window is None:
+            from hearth.ui.gtk4.capture import CaptureOverviewWindow
+
+            self._capture_window = CaptureOverviewWindow(self)
+        else:
+            self._capture_window.refresh()
+        self._capture_window.present()
+
     # -- setup -----------------------------------------------------------
     def open_setup(self) -> None:
         """Build the Setup window the first time it is wanted, then show it.
@@ -2431,6 +2476,10 @@ class MixerWindow(Gtk.ApplicationWindow):
         if remap_window is not None:
             remap_window.destroy()
             self._remap_window = None
+        capture_window = getattr(self, "_capture_window", None)
+        if capture_window is not None:
+            capture_window.destroy()
+            self._capture_window = None
         if getattr(self, "_frame_id", None):
             GLib.source_remove(self._frame_id)
             self._frame_id = 0
