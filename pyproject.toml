@@ -162,7 +162,13 @@ module = ["gi.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-# `exclude` only skips files mypy crawls; it still follows imports into them.
+# The Windows backend uses optional COM packages installed only on Windows.
+# Type-check this boundary as Any where those wheels are intentionally absent.
+module = ["comtypes", "comtypes.*", "pycaw", "pycaw.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Exclude only skips files mypy crawls; it still follows imports into them.
 # These are the same two legacy areas named in the exclude list above, and
 # both disappear from this list as Phase 4 rewrites them.
 module = ["hearth.ui", "hearth.ui.*", "hearth.legacy_core"]

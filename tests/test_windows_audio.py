@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import time
+from contextlib import nullcontext
 
 import pytest
 
@@ -18,7 +19,75 @@ from hearth.ui.gtk4.widgets import VMAX
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows Core Audio backend")
 
 
-def test_collector_maps_the_six_hearth_strips_to_active_endpoints() -> None:
+@pytest.fixture
+def fake_core_audio(monkeypatch: pytest.MonkeyPatch):
+    """Six deterministic logical endpoints; no physical speakers are required."""
+
+    class FakeEndpointVolume:
+        def GetMasterVolumeLevelScalar(self) -> float:
+            return 0.65
+
+        def GetMute(self) -> bool:
+            return False
+
+        def QueryInterface(self, _interface):
+            return self
+
+        def GetPeakValue(self) -> float:
+            return 0.25
+
+    class FakeEnumerator:
+        def GetCount(self) -> int:
+            return 0
+
+    class FakeSessionManager:
+        def GetSessionEnumerator(self):
+            return FakeEnumerator()
+
+    class FakeDevice:
+        def __init__(self, device_id: str, friendly_name: str) -> None:
+            self.id = device_id
+            self.FriendlyName = friendly_name
+            self.state = "Active"
+            self.EndpointVolume = FakeEndpointVolume()
+            self.AudioSessionManager = FakeSessionManager()
+
+    devices = [
+        FakeDevice(
+            f"{{0.0.{1 if index >= 4 else 0}.{index}}}",
+            friendly_name,
+        )
+        for index, friendly_name in enumerate(windows_audio.CHANNEL_ENDPOINTS.values())
+    ]
+
+    class FakeAudioUtilities:
+        @staticmethod
+        def GetAllDevices():
+            return devices
+
+        @staticmethod
+        def GetSpeakers():
+            return devices[3]
+
+    class FakeAudioSession:
+        pass
+
+    class FakeSessionControl:
+        pass
+
+    class FakeMeter:
+        pass
+
+    monkeypatch.setattr(
+        windows_audio,
+        "_pycaw",
+        lambda: (FakeAudioUtilities, FakeAudioSession, FakeSessionControl, FakeMeter),
+    )
+    monkeypatch.setattr(windows_audio, "_com_apartment", nullcontext)
+    return devices
+
+
+def test_collector_maps_the_six_hearth_strips_to_active_endpoints(fake_core_audio) -> None:
     snapshot = collector.collect(())
     assert snapshot.server_version == "Windows Core Audio"
     assert snapshot.routes is None
@@ -41,7 +110,7 @@ def test_collector_maps_the_six_hearth_strips_to_active_endpoints() -> None:
         assert 0 <= state.volume <= 100
 
 
-def test_default_sink_tracks_the_current_windows_default_endpoint() -> None:
+def test_default_sink_tracks_the_current_windows_default_endpoint(fake_core_audio) -> None:
     snapshot = collector.collect(())
     assert windows_audio.default_sink() == snapshot.default_sink
     assert (
@@ -56,7 +125,7 @@ def test_default_sink_tracks_the_current_windows_default_endpoint() -> None:
     )
 
 
-def test_pactl_compatibility_inventories_are_backed_by_core_audio() -> None:
+def test_pactl_compatibility_inventories_are_backed_by_core_audio(fake_core_audio) -> None:
     sinks = pactl.sinks()
     sources = pactl.sources()
     assert {entry.name for entry in sinks} >= {"vm_game", "vm_chat", "vm_music", "laptop_audio"}
@@ -65,7 +134,7 @@ def test_pactl_compatibility_inventories_are_backed_by_core_audio() -> None:
     assert pactl.server_version() == "Windows Core Audio"
 
 
-def test_endpoint_and_peak_reads_are_bounded_and_read_only() -> None:
+def test_endpoint_and_peak_reads_are_bounded_and_read_only(fake_core_audio) -> None:
     snapshot = collector.collect(())
     for key in snapshot.sinks:
         state = windows_audio.get_endpoint_state(key)
@@ -80,7 +149,7 @@ def test_endpoint_and_peak_reads_are_bounded_and_read_only() -> None:
     assert all(0.0 <= value <= 1.0 for value in levels.values())
 
 
-def test_meter_worker_publishes_core_audio_peak_levels_and_stops() -> None:
+def test_meter_worker_publishes_core_audio_peak_levels_and_stops(fake_core_audio) -> None:
     snapshot = collector.collect(())
     sources = [key + ".monitor" for key in snapshot.sinks]
     poller = meters.PeakPoller(sources=sources)
@@ -189,7 +258,7 @@ def test_meter_worker_removes_stale_levels_when_a_source_disappears(
     assert not poller.is_alive()
 
 
-def test_collector_limits_app_session_snapshot_volume_to_core_audio_range() -> None:
+def test_collector_limits_app_session_snapshot_volume_to_core_audio_range(fake_core_audio) -> None:
     snapshot = collector.collect(())
     for entries in snapshot.streams.values():
         for session in entries:
@@ -198,3 +267,21 @@ def test_collector_limits_app_session_snapshot_volume_to_core_audio_range() -> N
 
 def test_windows_gtk_endpoint_fader_uses_core_audio_range() -> None:
     assert VMAX == 100
+
+
+def test_default_sink_returns_empty_when_windows_has_no_default_render_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class NoEndpointAudioUtilities:
+        @staticmethod
+        def GetSpeakers():
+            raise OSError("no default render endpoint")
+
+    monkeypatch.setattr(
+        windows_audio,
+        "_pycaw",
+        lambda: (NoEndpointAudioUtilities, object, object, object),
+    )
+    monkeypatch.setattr(windows_audio, "_com_apartment", nullcontext)
+
+    assert windows_audio.default_sink() == ""

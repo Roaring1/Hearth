@@ -306,7 +306,6 @@ def apply_windows_titlebar(window_title: str, desktop: Theme | None = None) -> b
         target_pid = os.getpid()
         matches: list[int] = []
 
-        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)  # type: ignore[misc]
         def visit(hwnd: int, _data: int) -> bool:
             pid = wintypes.DWORD()
             get_pid(hwnd, ctypes.byref(pid))
@@ -317,7 +316,8 @@ def apply_windows_titlebar(window_title: str, desktop: Theme | None = None) -> b
                     matches.append(int(hwnd))
             return True
 
-        enum_windows(visit, 0)
+        visit_callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)(visit)
+        enum_windows(visit_callback, 0)
         if not matches:
             log.warning(
                 "theme: native Windows titlebar not applied; no HWND titled %r for pid %s",

@@ -611,3 +611,60 @@ This section supersedes the initial gap list above where the implementation belo
 - A clean-machine installer, pinned MSYS2 runtime manifest, signed distribution, and full Windows signal-path/visible-GUI acceptance remain open work.
 
 The test for named-pipe lifecycle uses a process-scoped test pipe so it can run while the real desktop Hearth application owns its stable per-user pipe. This preserves the production single-instance contract and avoids disrupting the live application during tests.
+
+## 22. Cross-machine Windows-port recovery checkpoint - 2026-11-09
+
+This checkpoint records the actual transfer state on the Nobara development PC and the Windows laptop. It supersedes the earlier statements that the Windows branch was local-only or that hosted CI had not yet been exercised.
+
+### Source and transfer state
+
+- Repository: Roaring1/Hearth
+- Windows-port branch head at the start of this checkpoint: 0db7ba2e6e0ff4204af736bcdcce06500cb4c41d
+- The Nobara checkout at /home/roaring/Documents/GitHub/Hearth has a clean local windows-port branch at that same commit. Its currently checked-out branch is a separate GTK4 review branch and was not switched or modified.
+- The Windows laptop checkout is %USERPROFILE%\Documents\GitHub\Hearth-Windows, on windows-port at the same commit. Its existing working changes were preserved and reviewed; no checkout reset, branch switch, or bundle import was performed.
+- An untracked windows-port.bundle exists in the laptop checkout. git bundle list-heads shows only refs/heads/windows-port at the same 0db7ba2 commit. It was left untouched and is not part of the source patch.
+- The existing pilot data root %LOCALAPPDATA%\Hearth is present. No Hearth process was running during the read-only session inventory.
+
+### Recovered five-file patch
+
+The laptop's pre-existing working diff contains five files:
+
+- .github/workflows/ci.yml: run the Linux-hosted Mypy executable with --platform win32, so it resolves Windows-specific standard-library APIs while checking the Windows branch.
+- pyproject.toml: tell Mypy that the optional comtypes and pycaw imports have no usable stubs and should be treated as missing-import boundaries.
+- src/hearth/theme.py: construct the EnumWindows callback explicitly with WINFUNCTYPE, rather than using a decorator on the Python callback.
+- src/hearth/windows_audio.py: return an empty default-sink identifier when Core Audio reports that no default render endpoint exists.
+- tests/test_windows_audio.py: use deterministic fake Core Audio endpoints for inventory/peak tests, and add coverage for the absent-default-endpoint case. CI no longer assumes a hosted runner has a physical playback endpoint.
+
+No audio routing, endpoint volume/mute setter, playback/capture, Windows service, driver, RoaringMic, Padfire, or MIDI operation was part of this patch.
+
+### Validation of the exact laptop diff
+
+The complete five-file diff was fetched from the Windows checkout and applied only to a disposable export of the Nobara windows-port commit. The real checkout on either machine was not changed by that cross-check.
+
+Windows laptop, MSYS2 UCRT64 Python 3.14.9:
+- Non-GUI suite: **398 passed, 85 skipped, 56 deselected**.
+- Ruff lint: passed.
+- Ruff formatting: **86 files already formatted**.
+- Strict Mypy: no issues in **40 source files**.
+- compileall and git diff --check: passed.
+- The tests used fake endpoints for the affected Core Audio checks; they did not alter a real device or stream.
+
+Nobara Linux, against the exact same five-file patch:
+- Non-GUI suite: **455 passed, 28 skipped, 56 deselected**.
+- Ruff lint and format: passed; **86 files already formatted**.
+- Mypy with --platform win32: no issues in **40 source files**.
+- compileall and git diff --check: passed.
+
+### Hosted CI diagnosis
+
+The existing hosted runs for the unpatched 0db7ba2 head failed for two specific reasons:
+- Linux Mypy used the Linux typeshed while traversing Windows-only code and reported 47 Windows API/missing-import/unused-ignore errors. The patched Windows-target command was tested on Nobara and passed.
+- The Windows workflow had three Core Audio test failures because the hosted runner exposed no default render endpoint. The patched deterministic fixture and no-default-endpoint behavior passed on the real laptop.
+
+The exact patched tree has passed local cross-platform checks, but a new hosted Actions run is still required to establish hosted CI status for the new commit.
+
+### Remaining boundary
+
+This does not turn the Windows pilot into a completed feature-parity port. The Windows build still has no implemented virtual-bus routing graph, per-app endpoint reassignment, microphone send/effects chain, Windows share-audio graph, LPD8 MIDI ownership, or signed clean-machine installer. The existing MSYS2 UCRT64 pilot and per-user launcher are not a general-purpose end-user installer. Real audio signal-path acceptance and visible UI acceptance remain separate tasks.
+
+Preserve the current safe boundary: keep RoaringMic and Padfire independent, leave real audio routing untouched, and do not advertise unsupported route operations as functional.

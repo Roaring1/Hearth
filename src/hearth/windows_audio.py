@@ -37,7 +37,7 @@ CAPTURE_CHANNELS = ("mic_b1", "mic_b2")
 @contextmanager
 def _com_apartment() -> Iterator[None]:
     """Initialize COM for this calling thread, respecting an existing apartment."""
-    import comtypes  # type: ignore[import-untyped]
+    import comtypes
 
     initialized = False
     try:
@@ -57,11 +57,11 @@ def _com_apartment() -> Iterator[None]:
 
 
 def _pycaw() -> tuple[Any, Any, Any, Any]:
-    from pycaw.pycaw import (  # type: ignore[import-untyped]
+    from pycaw.pycaw import (
         IAudioMeterInformation,
         IAudioSessionControl2,
     )
-    from pycaw.utils import AudioSession, AudioUtilities  # type: ignore[import-untyped]
+    from pycaw.utils import AudioSession, AudioUtilities
 
     return AudioUtilities, AudioSession, IAudioSessionControl2, IAudioMeterInformation
 
@@ -419,7 +419,11 @@ def short_entries(*, capture: bool = False) -> list[ShortEntry]:
 def default_sink() -> str:
     AudioUtilities, _AudioSession, _SessionControl, _Meter = _pycaw()
     with _com_apartment():
-        default_device = AudioUtilities.GetSpeakers()
+        try:
+            default_device = AudioUtilities.GetSpeakers()
+        except Exception as exc:
+            log.debug("could not read the default Windows render endpoint: %s", exc)
+            return ""
         default_id = str(getattr(default_device, "id", ""))
         for logical, device in _logical_devices().items():
             if str(getattr(device, "id", "")) == default_id:
