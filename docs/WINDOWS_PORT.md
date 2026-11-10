@@ -556,4 +556,159 @@ A local per-user pilot installation was created from the rebuilt hearth-5.1.0-py
 
 - Runtime: %LOCALAPPDATA%\Programs\Hearth\venv
 - Launcher: %LOCALAPPDATA%\Programs\Hearth\Launch-Hearth.ps1
-- Start 
+- Start Menu shortcut: %APPDATA%\Microsoft\Windows\Start Menu\Programs\Hearth.lnk
+- User data remains below %LOCALAPPDATA%\Hearth (config, state, cache and runtime); it is not stored inside the program venv.
+- The installation directory ACL grants full access only to the current user, SYSTEM and local Administrators. The existing %LOCALAPPDATA%\Hearth data tree was preserved.
+
+The install uses the existing Windows bootstrap helper and inherits the already provisioned MSYS2 UCRT64 runtime packages. The installed distribution reports Hearth 5.1.0. pip check found no broken requirements. The installed CLI version and read-only status commands were exercised. Windows Audio and Audio Endpoint Builder report running; the inventory reports four of four mapped playback endpoints and eleven capture endpoints.
+
+### Wheel artwork correction
+
+The first pilot wheel exposed a packaging omission: the source-tree GTK module looked for assets/art above the installed package and therefore fell back to theme speaker icons. The GTK module now first resolves assets/art alongside itself and falls back to the repository-root art directory only for a source checkout. Hatch's wheel force-include maps the root assets/art directory to hearth/ui/gtk4/assets/art.
+
+The rebuilt 5.1.0 wheel was inspected independently. Both app-muted@2x.png and app-unmuted@2x.png are present, their PNG signatures are valid, and the installed module resolves ART_DIR inside the installed venv's site-packages. The refreshed installed package's asset probe passed. The Windows Actions workflow now also verifies the two wheel entries and their PNG signatures immediately after its build step; the workflow YAML and step ordering were parsed and asserted locally. Hosted Actions remains unrun while the branch is local-only.
+
+### Installed UI workflow and regression results
+
+- The hidden installed-wheel Mixer workflow refreshed five configured strips (laptop_audio, mic_b1, vm_chat, vm_game, vm_music) with no missing strips. It loaded the installed package from site-packages, confirmed both packaged speaker icons, kept the window hidden, verified 100% endpoint/app slider upper bounds and clamping of an over-range synthetic value, and confirmed unsupported app-to-bus reassignment/LPD8 binding stay disabled. Collector and meter workers both stopped cleanly.
+- The hidden installed-wheel Setup/Remap workflow passed. It did not start Linux-only polling or service queries, did not enable Moonlight or LPD8 actions, and recorded zero mapping-write side effects.
+- Both GUI workflows used a disposable _installed_smoke data subtree and temporary interactive scheduled tasks. The task wrappers unregister themselves and remove the isolated smoke data.
+- Final source checks after the artwork fix: Ruff lint passed; Ruff format reported 86 files already formatted; strict MyPy passed for 40 source files; Windows non-GUI pytest reported 393 passed, 85 skipped, 56 deselected in 40.32 seconds; compileall and both Git whitespace checks passed.
+
+### Scope and remaining release work
+
+This was a same-user pilot install on the existing MSYS2-equipped laptop. It is not a clean-machine acceptance test, signed installer, or supported standalone Windows distribution. The UCRT64 runtime package manifest is still not pinned, and an official install/update/uninstall and backup policy remains future work. The installed Start Menu link and launcher were created and their target, arguments and working directory validated; no visible-window/visual-acceptance session was performed.
+
+The Windows backend remains intentionally limited: the status report is read-only, the virtual mixer/routing graph and playback/capture signal paths have not been verified, and app reassignment, capture routing, and Linux-specific Setup/Remap workflows are not implemented on Windows. No audio endpoint level/mute setters, default-device changes, driver changes, service configuration changes, or playback/capture signal tests were performed. Padfire and the existing RoaringMic setup were left untouched.
+
+The source/packaging changes remain local to windows-port. No commit, push, merge, or hosted GitHub Actions run was performed.
+
+
+## 12. Verified Windows pilot status - 2026-10-30
+
+This section supersedes the initial gap list above where the implementation below is now present.
+
+### Implemented and tested
+
+- Windows LocalAppData config/state/cache/runtime paths, protected SID-derived ACLs, atomic writes, safe reparse-point handling, and MSVCRT locking.
+- Authenticated per-user named-pipe IPC with single-instance locking, clean shutdown, CLI control, and Windows-safe runtime paths.
+- Windows Core Audio endpoint and application-session inventory, endpoint/session volume and mute setters, capture peak queries, and a truthful read-only health report.
+- Windows dark/light palette and system accent-color reader, plus a native DWM caption integration that is applied after the GTK window maps.
+- Windows bootstrap/runtime probe, packaging metadata, and a Windows Actions workflow. The pilot remains an MSYS2 UCRT64 development installation, not a standalone installer.
+
+### Verification
+
+- Windows Python 3.14 full suite: **397 passed, 141 skipped**. Platform-specific POSIX/Linux tests and display-dependent GUI tests account for the skips.
+- Focused Windows theme/Core Audio/ACL/IPC suite: **47 passed**; Ruff clean; MyPy clean for 40 source files.
+- Linux full suite under Xvfb: **506 passed**.
+- The laptop's Windows registry reports dark app mode, accent #e90082, and accent-on-title-bars enabled. The Core Audio adapter successfully accepted a same-value endpoint write and read back the unchanged value.
+
+### Remaining functional boundaries
+
+- Windows per-application routing between Hearth buses is not implemented; non-empty move_sink_input requests fail closed.
+- The Windows endpoint inventory is not a substitute for the complete six-bus virtual audio engine or for a verified Windows mic/effects chain.
+- No external LPD8 MIDI device was present in the Windows Plug-and-Play inventory during this audit. Native LPD8 MIDI discovery/control remains unimplemented; Linux currently has an active LPD8 service, while the Launchpad remains owned by Padfire.
+- A clean-machine installer, pinned MSYS2 runtime manifest, signed distribution, and full Windows signal-path/visible-GUI acceptance remain open work.
+
+The test for named-pipe lifecycle uses a process-scoped test pipe so it can run while the real desktop Hearth application owns its stable per-user pipe. This preserves the production single-instance contract and avoids disrupting the live application during tests.
+
+## 22. Cross-machine Windows-port recovery checkpoint - 2026-11-09
+
+This checkpoint records the actual transfer state on the Nobara development PC and the Windows laptop. It supersedes the earlier statements that the Windows branch was local-only or that hosted CI had not yet been exercised.
+
+### Source and transfer state
+
+- Repository: Roaring1/Hearth
+- Windows-port branch head at the start of this checkpoint: 0db7ba2e6e0ff4204af736bcdcce06500cb4c41d
+- The Nobara checkout at /home/roaring/Documents/GitHub/Hearth has a clean local windows-port branch at that same commit. Its currently checked-out branch is a separate GTK4 review branch and was not switched or modified.
+- The Windows laptop checkout is %USERPROFILE%\Documents\GitHub\Hearth-Windows, on windows-port at the same commit. Its existing working changes were preserved and reviewed; no checkout reset, branch switch, or bundle import was performed.
+- An untracked windows-port.bundle exists in the laptop checkout. git bundle list-heads shows only refs/heads/windows-port at the same 0db7ba2 commit. It was left untouched and is not part of the source patch.
+- The existing pilot data root %LOCALAPPDATA%\Hearth is present. No Hearth process was running during the read-only session inventory.
+
+### Recovered five-file patch
+
+The laptop's pre-existing working diff contains five files:
+
+- .github/workflows/ci.yml: run the Linux-hosted Mypy executable with --platform win32, so it resolves Windows-specific standard-library APIs while checking the Windows branch.
+- pyproject.toml: tell Mypy that the optional comtypes and pycaw imports have no usable stubs and should be treated as missing-import boundaries.
+- src/hearth/theme.py: construct the EnumWindows callback explicitly with WINFUNCTYPE, rather than using a decorator on the Python callback.
+- src/hearth/windows_audio.py: return an empty default-sink identifier when Core Audio reports that no default render endpoint exists.
+- tests/test_windows_audio.py: use deterministic fake Core Audio endpoints for inventory/peak tests, and add coverage for the absent-default-endpoint case. CI no longer assumes a hosted runner has a physical playback endpoint.
+
+No audio routing, endpoint volume/mute setter, playback/capture, Windows service, driver, RoaringMic, Padfire, or MIDI operation was part of this patch.
+
+### Validation of the exact laptop diff
+
+The complete five-file diff was fetched from the Windows checkout and applied only to a disposable export of the Nobara windows-port commit. The real checkout on either machine was not changed by that cross-check.
+
+Windows laptop, MSYS2 UCRT64 Python 3.14.9:
+- Non-GUI suite: **398 passed, 85 skipped, 56 deselected**.
+- Ruff lint: passed.
+- Ruff formatting: **86 files already formatted**.
+- Strict Mypy: no issues in **40 source files**.
+- compileall and git diff --check: passed.
+- The tests used fake endpoints for the affected Core Audio checks; they did not alter a real device or stream.
+
+Nobara Linux, against the exact same five-file patch:
+- Non-GUI suite: **455 passed, 28 skipped, 56 deselected**.
+- Ruff lint and format: passed; **86 files already formatted**.
+- Mypy with --platform win32: no issues in **40 source files**.
+- compileall and git diff --check: passed.
+
+### Hosted CI diagnosis
+
+The existing hosted runs for the unpatched 0db7ba2 head failed for two specific reasons:
+- Linux Mypy used the Linux typeshed while traversing Windows-only code and reported 47 Windows API/missing-import/unused-ignore errors. The patched Windows-target command was tested on Nobara and passed.
+- The Windows workflow had three Core Audio test failures because the hosted runner exposed no default render endpoint. The patched deterministic fixture and no-default-endpoint behavior passed on the real laptop.
+
+The exact patched tree has passed local cross-platform checks, but a new hosted Actions run is still required to establish hosted CI status for the new commit.
+
+### Remaining boundary
+
+This does not turn the Windows pilot into a completed feature-parity port. The Windows build still has no implemented virtual-bus routing graph, per-app endpoint reassignment, microphone send/effects chain, Windows share-audio graph, LPD8 MIDI ownership, or signed clean-machine installer. The existing MSYS2 UCRT64 pilot and per-user launcher are not a general-purpose end-user installer. Real audio signal-path acceptance and visible UI acceptance remain separate tasks.
+
+Preserve the current safe boundary: keep RoaringMic and Padfire independent, leave real audio routing untouched, and do not advertise unsupported route operations as functional.
+
+## 23. Published cross-machine transfer and hosted verification - 2026-11-09/10
+
+This section supersedes the preliminary CI and transfer status in section 22. The current Windows-port branch head is `e0c3461229a31b0c6d500051ad8e603720dcc04f` (`fix(ci): isolate Windows Core Audio tests from Linux GTK`). PR #7 remains an open draft stacked on `test/gtk4-accessibility-tab-order`; it was not merged or marked ready for review.
+
+### Branch and machine synchronization
+
+- GitHub `Roaring1/Hearth`, branch `windows-port`: `e0c3461229a31b0c6d500051ad8e603720dcc04f`.
+- Windows laptop checkout: `%USERPROFILE%\Documents\GitHub\Hearth-Windows`, branch `windows-port`, same commit and tree. Its working tree is clean apart from the two deliberately retained bundle backups.
+- The previous laptop-local commit `3404e9ec7eabdb166cba00c9ebd4d074e57938d1` is preserved at `backup/windows-port-local-3404e9e`. Its tree was compared with the published GitHub tree before the branch was aligned.
+- A minimal 948-byte bundle containing the `4e16202..e0c3461` update was transferred from Nobara and imported on Windows. Bundle SHA-256: `7562cbf8df6efac8dd7e23bcb59413d604acb813ccc8db9534d8ad37e4455046`.
+- The original full-history `windows-port.bundle` was retained unchanged (SHA-256 `FFF5B7A96C27E7E670FA8D393F31000142510C652A31ED13C4E6033F6B76E654`). Both bundle files remain untracked backups in the Windows checkout and must not be committed as source files.
+- The Nobara primary checkout remains on its separate `fix/gtk4-install-and-smoke-test` branch. Its `origin/windows-port` tracking ref was fetched to `e0c3461`; no branch switch or worktree overwrite was performed there.
+
+### Hosted Actions results for `e0c3461`
+
+Both workflows completed successfully:
+
+- Linux CI run #227 (`42731262275`): lint, formatting, MyPy `--platform win32`, metadata validation, GTK4 GUI render/import smoke, and install smoke all passed. Python 3.11, 3.12, and 3.13 each reported **455 passed, 18 skipped, 6 deselected**.
+- Windows UCRT64 run #8 (`42731262114`): native GTK/COM environment check, Ruff, MyPy, non-GUI suite (**398 passed, 85 skipped, 56 deselected**), wheel/sdist build, artwork verification, and clean UCRT64 wheel-install/bootstrap/version smoke all passed.
+
+The Linux-only module guard in `tests/test_windows_audio.py` now skips the Windows Core Audio module before importing GTK on non-Windows systems. Windows still imports and runs those tests normally. This resolves the Python 3.11/3.12/3.13 hosted collection error where `gi` is not installed.
+
+### Local cross-machine validation
+
+- Nobara, complete `scripts/check.sh` gate under Xvfb: Ruff lint/format passed, MyPy with the Win32 target passed, **511 passed, 28 skipped**, desktop/AppStream checks passed, and shell syntax checks passed.
+- Nobara, clean no-PyGObject environment: **455 passed, 18 skipped, 6 deselected**; the Windows Core Audio module exits before GTK import.
+- Windows laptop, MSYS2 UCRT64 Python 3.14.9: Ruff lint/format and native MyPy passed; **398 passed, 85 skipped, 56 deselected**; wheel/sdist build and `pip check` passed.
+- The Windows laptop's `scripts/windows_bootstrap.ps1 -CheckOnly` passed against its installed UCRT64 development venv. It reported GTK 4.24, Hearth 5.1.0, Pycaw 20260927, comtypes 1.4.17, and psutil 7.2.2; it did not query audio devices.
+- A second temporary wheel was built from the synchronized `e0c3461` checkout and installed using `windows_bootstrap.ps1` into a separate temporary UCRT64 venv. Runtime imports, `hearth --version`, and `pip check` passed. The candidate wheel SHA-256 was `B28595F271B45406250B23C238F42E277FE5E115D180A5A6CD907C8EA6FA2A62`. The wheel, build venv, and candidate install venv were then removed.
+
+### Existing Windows pilot was deliberately not upgraded
+
+- The per-user pilot remains at `%LOCALAPPDATA%\Programs\Hearth`, Hearth **5.1.0**.
+- User data remains separate at `%LOCALAPPDATA%\Hearth`.
+- The temporary candidate install used a path under `%LOCALAPPDATA%\Temp`, not the production program root.
+- Before/after checks confirmed the pilot still reports 5.1.0 and both its program-root and user-data-root timestamps were unchanged. No Hearth process or scheduled task was running during the inventory.
+- No visible app launch, audio endpoint enumeration, playback/capture, volume/mute changes, route changes, driver install, service start, RoaringMic operation, Padfire operation, or MIDI change was performed.
+
+### Remaining boundary
+
+The source branch and pilot bootstrap have now been transferred and locally verified, but the production per-user pilot has not been upgraded. The wheel remains an experimental Python package, not a standalone installer. A pinned clean-machine MSYS2 runtime manifest, installer/uninstaller and rollback policy, signed distribution, visible GUI acceptance, and real Windows audio signal-path acceptance remain open. The Windows virtual-bus routing graph, per-app endpoint reassignment, microphone send/effects chain, Windows share-audio graph, and native LPD8 ownership are still not implemented.
+
+Keep the pilot upgrade as a separate acceptance step. Preserve RoaringMic and Padfire independence, keep unsupported routes fail-closed, and do not treat a successful package import smoke as proof of end-to-end audio behavior.
