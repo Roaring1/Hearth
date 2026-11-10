@@ -26,10 +26,12 @@ import math
 import os
 import stat
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
 from hearth import paths
+from hearth.platform.locking import lock_file, unlock_file
 
 log = logging.getLogger(__name__)
 
@@ -119,7 +121,7 @@ def load(path: Path | None = None) -> dict[str, Any]:
     return merge(raw)
 
 
-def save(values: dict[str, Any], path: Path | None = None) -> None:
+def _save_unlocked(values: dict[str, Any], path: Path | None = None) -> None:
     """Write preferences atomically.
 
     The temporary file is created in the destination directory so the rename
@@ -140,23 +142,53 @@ def save(values: dict[str, Any], path: Path | None = None) -> None:
     if existing is not None:
         if not stat.S_ISREG(existing.st_mode):
             raise OSError(f"refusing to replace non-regular settings path: {target}")
-        if existing.st_uid != os.getuid():
+        if os.name == "nt":
+            paths.ensure_private_file(target)
+        elif existing.st_uid != int(os.getuid()):  # type: ignore[attr-defined]
             raise PermissionError(f"settings file is not owned by this user: {target}")
 
     # mkstemp makes each concurrent write independent and private.
     fd, tmp_name = tempfile.mkstemp(prefix=f"{target.name}.tmp.", dir=target.parent)
     tmp = Path(tmp_name)
     try:
-        os.fchmod(fd, 0o600)
+        os.fchmod(fd, 0o600)  # type: ignore[attr-defined]
         stream = os.fdopen(fd, "w", encoding="utf-8")
         fd = -1
         with stream:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
+        paths.ensure_private_file(tmp)
         tmp.replace(target)  # atomic within one filesystem
     except BaseException:
         if fd >= 0:
             os.close(fd)
         tmp.unlink(missing_ok=True)
         raise
+
+
+# Serializes concurrent writers in this process. A persistent file lock below
+# extends the same guarantee across separate Hearth processes.
+_SAVE_LOCK = threading.RLock()
+
+
+def save(values: dict[str, Any], path: Path | None = None) -> None:
+    """Write settings atomically under a thread and cross-process lock."""
+    target = paths.settings_file() if path is None else Path(path)
+    with _SAVE_LOCK:
+        paths.ensure_private_dir(target.parent)
+        lock_path = target.with_name(f".{target.name}.lock")
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        if lock_path.exists():
+            paths.ensure_private_file(lock_path)
+        fd = os.open(lock_path, flags, 0o600)
+        try:
+            paths.ensure_private_fd(fd, lock_path)
+            lock_file(fd)
+            try:
+                _save_unlocked(values, target)
+            finally:
+                unlock_file(fd)
+        finally:
+            os.close(fd)

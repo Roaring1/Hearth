@@ -6,6 +6,7 @@ format change in PipeWire shows up here rather than as an empty mixer.
 
 from __future__ import annotations
 
+import os
 import subprocess
 
 import pytest
@@ -84,6 +85,7 @@ def test_exact_source_filter_does_not_match_similarly_named_sources():
     assert [loop.index for loop in exact] == [2]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux-only pactl commands")
 def test_unload_loopbacks_only_unloads_the_exact_source(monkeypatch):
     modules = [
         pactl.Module(
@@ -105,6 +107,7 @@ def test_unload_loopbacks_only_unloads_the_exact_source(monkeypatch):
     assert calls == [["pactl", "unload-module", "2"]]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux-only pactl commands")
 def test_unload_loopbacks_reports_failures_instead_of_success(monkeypatch):
     modules = [
         pactl.Module(
@@ -131,6 +134,7 @@ def test_module_arg_parsing():
     assert mod.arg("missing") is None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux-only pactl commands")
 def test_commands_are_argv_and_never_shell(monkeypatch):
     calls: list[list[str]] = []
 
@@ -167,6 +171,7 @@ def test_commands_are_argv_and_never_shell(monkeypatch):
         ("set_default_sink", ("vm_game",)),
     ],
 )
+@pytest.mark.skipif(os.name == "nt", reason="Linux-only pactl commands")
 def test_detached_mutators_report_immediate_spawn_failure(
     monkeypatch, name: str, args: tuple[object, ...]
 ) -> None:
@@ -192,6 +197,7 @@ def test_empty_sink_name_is_a_no_op(monkeypatch):
     assert not called, "an unset monitor sink must not produce a pactl call"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux-only pactl commands")
 def test_load_loopback_waits_for_a_bounded_command(monkeypatch):
     calls: list[tuple[list[str], dict[str, object]]] = []
 
@@ -211,6 +217,7 @@ def test_load_loopback_waits_for_a_bounded_command(monkeypatch):
     assert kwargs["timeout"] == 2.0
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux-only pactl commands")
 def test_load_loopback_surfaces_a_rejected_route(monkeypatch):
     def rejected(argv, **_kwargs):
         raise CommandError(argv, returncode=1, stderr="No such source")
@@ -221,6 +228,7 @@ def test_load_loopback_surfaces_a_rejected_route(monkeypatch):
         pactl.load_loopback("missing.monitor", "vm_chat")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux-only pactl commands")
 def test_reads_survive_a_missing_pactl():
     def missing(_argv, **_kwargs):
         raise FileNotFoundError("pactl")
@@ -236,6 +244,7 @@ def test_reads_survive_a_missing_pactl():
         proc.set_runner(None)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux-only pactl commands")
 def test_volume_and_mute_parse_real_output():
     def fake(argv, **_kwargs):
         vol = "Volume: front-left: 36044 /  55% / -15.56 dB"

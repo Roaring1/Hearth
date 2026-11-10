@@ -31,7 +31,7 @@ jobs:
       - run: pip install -e '.[dev]'
       - run: ruff check --output-format=github .
       - run: ruff format --check .
-      - run: mypy
+      - run: mypy --platform win32
       - name: Validate desktop entries and metadata
         run: |
           sudo apt-get update

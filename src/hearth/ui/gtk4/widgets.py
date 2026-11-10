@@ -12,6 +12,7 @@ out, which keeps the widgets testable and the audio code toolkit-free.
 from __future__ import annotations
 
 import math
+import os
 import time
 from itertools import pairwise
 from typing import ClassVar
@@ -19,13 +20,14 @@ from typing import ClassVar
 import gi
 
 gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
 
 from gi.repository import Gdk, GObject, Gtk  # noqa: E402 - must follow require_version
 
 __all__ = ["VMAX", "Fader", "Meter", "Scale", "Sliver", "parse_rgb"]
 
-#: Faders run to 150 %, matching pactl and what the GTK3 window allowed.
-VMAX = 150
+#: Linux software gain can reach 150%; Windows Core Audio endpoint scalars stop at 100%.
+VMAX = 100 if os.name == "nt" else 150
 
 #: Where a double click puts a fader: unity, not silence and not the top.
 DEFAULT_VOLUME = 100
@@ -203,9 +205,16 @@ class Fader(Gtk.DrawingArea):
 
     __gsignals__: ClassVar[dict] = {"moved": (GObject.SignalFlags.RUN_FIRST, None, (int,))}
 
-    def __init__(self, palette: dict[str, str], width: int = 20, height: int = 76) -> None:
+    def __init__(
+        self,
+        palette: dict[str, str],
+        width: int = 20,
+        height: int = 76,
+        max_value: int = VMAX,
+    ) -> None:
         super().__init__()
         self._pal = palette
+        self._max_value = max(1, int(max_value))
         self._value = 0
         self._hw = False
         self._dead = False
@@ -218,7 +227,7 @@ class Fader(Gtk.DrawingArea):
                 Gtk.AccessibleProperty.VALUE_NOW,
                 Gtk.AccessibleProperty.VALUE_TEXT,
             ],
-            [0.0, float(VMAX), 0.0, "0%"],
+            [0.0, float(self._max_value), 0.0, "0%"],
         )
         self.set_content_width(width)
         self.set_content_height(height)
@@ -248,7 +257,7 @@ class Fader(Gtk.DrawingArea):
         return self._value
 
     def set_value(self, value: int) -> None:
-        value = max(0, min(VMAX, int(value)))
+        value = max(0, min(self._max_value, int(value)))
         if value != self._value:
             self._value = value
             self.queue_draw()
@@ -280,7 +289,7 @@ class Fader(Gtk.DrawingArea):
             return
         h = max(1, self.get_height())
         frac = 1.0 - max(0.0, min(1.0, y / h))
-        self.set_value(round(frac * VMAX))
+        self.set_value(round(frac * self._max_value))
         self.emit("moved", self._value)
 
     def _on_press(self, _g: Gtk.GestureClick, n_press: int, _x: float, y: float) -> None:
@@ -332,7 +341,7 @@ class Fader(Gtk.DrawingArea):
         elif keyval == Gdk.KEY_Home:
             value = 0
         elif keyval == Gdk.KEY_End:
-            value = VMAX
+            value = self._max_value
         else:
             return False
         previous = self._value
@@ -352,7 +361,7 @@ class Fader(Gtk.DrawingArea):
         cr.fill()
         if self._dead:
             return
-        frac = self._value / VMAX
+        frac = self._value / self._max_value
         cap_h = 9.0
         y = (h - cap_h) - frac * (h - cap_h)
         cr.set_source_rgb(*parse_rgb(self._pal["accent" if self._hw else "cap"]))

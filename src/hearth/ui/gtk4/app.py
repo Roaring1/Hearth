@@ -46,6 +46,7 @@ from hearth import meters as meters_mod  # noqa: E402
 from hearth import mic_routes  # noqa: E402
 from hearth import services as services_mod  # noqa: E402
 from hearth import settings as settings_mod  # noqa: E402
+from hearth import theme as theme_mod  # noqa: E402
 from hearth.audio import pactl  # noqa: E402
 
 from hearth.ui.gtk4 import action_icons, icons as icons_mod  # noqa: E402
@@ -56,7 +57,9 @@ log = logging.getLogger(__name__)
 
 #: Hearth's own icon set, drawn by scripts/draw_art.py. Theme icons vary
 #: wildly between icon packs; these do not.
-ART_DIR = Path(__file__).resolve().parents[4] / "assets" / "art"
+ART_DIR = Path(__file__).resolve().parent / "assets" / "art"
+if not ART_DIR.is_dir():  # Source checkout: artwork still lives at the repository root.
+    ART_DIR = Path(__file__).resolve().parents[4] / "assets" / "art"
 
 
 #: Meter height, expanded and compact. Everything else in a strip is fixed, so
@@ -309,7 +312,11 @@ class Strip(Gtk.Box):
         row.set_halign(Gtk.Align.CENTER)
         self.meter = Meter(self.pal, height=window.meter_h)
         action_icons.accessible_label(self.meter, f"{channel.name} audio level")
-        self.fader = Fader(self.pal, height=window.meter_h)
+        self.fader = Fader(
+            self.pal,
+            height=window.meter_h,
+            max_value=100 if os.name == "nt" else 150,
+        )
         action_icons.accessible_label(self.fader, f"{channel.name} volume")
         self.fader.connect("moved", self._on_moved)
         # The ruler used to be drawn once per group, hanging off the right
@@ -337,8 +344,14 @@ class Strip(Gtk.Box):
             chip.set_valign(Gtk.Align.CENTER)
             accessible_name = f"Open LPD8 remapping for {channel.name} (knob {channel.bind})"
             action_icons.accessible_label(chip, accessible_name)
-            chip.set_tooltip_text(self._bind_tip())
-            chip.connect("clicked", lambda _b: self.win.open_remap())
+            if os.name == "nt":
+                chip.set_sensitive(False)
+                chip.set_tooltip_text(
+                    "Padfire owns the Windows LPD8 connection; Hearth remapping is disabled."
+                )
+            else:
+                chip.set_tooltip_text(self._bind_tip())
+                chip.connect("clicked", lambda _b: self.win.open_remap())
             self.bind_button = chip
             vrow.append(chip)
         else:
@@ -497,6 +510,11 @@ class Strip(Gtk.Box):
 
     def _move_app_to(self, listener_index: str, *, restore_focus: bool = False) -> bool:
         """Move one application stream onto this bus, preserving drag behavior."""
+        if os.name == "nt":
+            self.set_tooltip_text(
+                "Moving an application between Windows audio endpoints is not supported yet."
+            )
+            return False
         if not pactl.move_sink_input(listener_index, self.channel.sink):
             self.set_tooltip_text("Could not move this app; check pactl/PipeWire")
             return False
@@ -519,6 +537,8 @@ class Strip(Gtk.Box):
         listener_index: str,
     ) -> bool:
         """Move a focused app-row grip left/right across visible mixer buses."""
+        if os.name == "nt":
+            return False
         if keyval not in (Gdk.KEY_Left, Gdk.KEY_Right):
             return False
         # The key controller belongs to the dedicated app-row grip. If a
@@ -720,6 +740,19 @@ class Strip(Gtk.Box):
         server is slow. While no verified graph is available, keep controls
         disabled rather than showing a guessed all-off state.
         """
+        if os.name == "nt":
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            hint = Gtk.Label(
+                label="Windows Core Audio does not expose the PipeWire route graph used here.",
+                xalign=0.0,
+            )
+            hint.add_css_class("outhint")
+            hint.set_wrap(True)
+            box.append(hint)
+            self._out_checks = {}
+            self.out_popover.set_child(box)
+            return
+
         if self._route_busy:
             # A popover may be opened while an earlier operation owns the
             # graph. Mark it dirty so worker completion re-renders it enabled.
@@ -764,6 +797,20 @@ class Strip(Gtk.Box):
 
     def _fill_inputs(self) -> None:
         """Which capture devices are poured into this mic bus."""
+        if os.name == "nt":
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            hint = Gtk.Label(
+                label="Windows capture routing is not wired yet. Endpoint mute and level controls remain available.",
+                xalign=0.0,
+            )
+            hint.add_css_class("outhint")
+            hint.set_wrap(True)
+            box.append(hint)
+            self._in_checks = {}
+            self._carla_check = None
+            self.in_popover.set_child(box)
+            return
+
         if self._route_busy:
             self._route_popover_dirty = True
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
@@ -1197,7 +1244,8 @@ class Strip(Gtk.Box):
         """Adjust one sink input without changing the bus volume."""
         if not listener.index:
             return
-        percent = max(0, min(150, round(scale.get_value())))
+        maximum = 100 if os.name == "nt" else 150
+        percent = max(0, min(maximum, round(scale.get_value())))
         self._listener_volume_held[listener.index] = time.monotonic() + HOLD_S
         controls = self._listener_volume_controls.get(listener.index)
         if controls is not None:
@@ -1221,7 +1269,8 @@ class Strip(Gtk.Box):
             if controls is None or now <= self._listener_volume_held.get(listener.index, 0.0):
                 continue
             scale, value_label, handler = controls
-            percent = max(0, min(150, int(listener.volume)))
+            maximum = 100 if os.name == "nt" else 150
+            percent = max(0, min(maximum, int(listener.volume)))
             if round(scale.get_value()) != percent:
                 scale.handler_block(handler)
                 try:
@@ -1270,7 +1319,7 @@ class Strip(Gtk.Box):
             # without touching the bus everything else is riding on.
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
             mark = self._mark(listener.name, 12)
-            if listener.index:
+            if listener.index and os.name != "nt":
                 # The whole row is the handle. A 12 px icon was a
                 # pixel-hunt: miss it and the press did nothing, which
                 # reads as a broken feature rather than a small target.
@@ -1294,7 +1343,12 @@ class Strip(Gtk.Box):
             name.set_width_chars(0)
             name.set_hexpand(True)
             name.set_tooltip_text(listener.name)
-            if listener.index:
+            if os.name == "nt" and listener.index:
+                name.set_tooltip_text(
+                    f"{listener.name} — per-app volume and mute are available; "
+                    "moving it between Windows endpoints is not supported yet"
+                )
+            if listener.index and os.name != "nt":
                 # The app name remains the drag source. Give keyboard movement
                 # its own DrawingArea handle, matching the strip-reorder pattern:
                 # GTK skips focusable containers and labels during Tab traversal.
@@ -1333,8 +1387,11 @@ class Strip(Gtk.Box):
             if listener.muted:
                 name.add_css_class("muted")
             row.append(name)
-            initial_volume = max(0, min(150, held_values.get(listener.index, int(listener.volume))))
-            volume = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 150.0, 1.0)
+            maximum = 100 if os.name == "nt" else 150
+            initial_volume = max(
+                0, min(maximum, held_values.get(listener.index, int(listener.volume)))
+            )
+            volume = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, maximum, 1.0)
             action_icons.accessible_label(volume, f"{listener.name} volume in {self.channel.name}")
             volume.add_css_class("app-volume")
             volume.set_draw_value(False)
@@ -1499,6 +1556,7 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.rebuild()
         self._start_backends()
         self.connect("close-request", self._on_close)
+        self.connect("map", self._on_map)
 
         # Setup is a second window that does not exist until it is asked
         # for. It gets no permanent button here: a mixer this size cannot
@@ -1893,8 +1951,9 @@ class MixerWindow(Gtk.ApplicationWindow):
         if kind not in {"sink", "stream"} or not target:
             return False
         key = (kind, target)
+        maximum = 100 if os.name == "nt" else 150
         with self._volume_lock:
-            self._volume_pending[key] = (max(0, min(150, int(percent))), on_failure)
+            self._volume_pending[key] = (max(0, min(maximum, int(percent))), on_failure)
             if self._volume_worker_active:
                 return True
             self._volume_worker_active = True
@@ -1944,6 +2003,9 @@ class MixerWindow(Gtk.ApplicationWindow):
 
     def _push_led(self, sink: str, muted: bool) -> None:
         """Queue the latest desired LED state without blocking GTK."""
+        if os.name == "nt":
+            return
+
         if leds.pad_for_sink(sink) is None:
             return
         with self._led_lock:
@@ -2133,6 +2195,8 @@ class MixerWindow(Gtk.ApplicationWindow):
             self.banner_text.set_accessible_role(Gtk.AccessibleRole.STATUS)
 
     def _on_restart(self, _button: Gtk.Button) -> None:
+        if os.name == "nt":
+            return
         """Restart whichever units own the buses that are missing."""
         if not self.banner_units:
             return
@@ -2290,6 +2354,14 @@ class MixerWindow(Gtk.ApplicationWindow):
             self._menu.popdown()
         self.open_remap()
 
+    def _on_map(self, *_args) -> None:
+        """Apply native Windows caption colours after GTK creates its HWND."""
+        if os.name == "nt":
+            theme_mod.apply_windows_titlebar(
+                "Hearth",
+                getattr(self.get_application(), "desktop_theme", None),
+            )
+
     def _on_close(self, *_args) -> bool:
         self._save()
         self.shutdown()
@@ -2321,7 +2393,8 @@ class MixerWindow(Gtk.ApplicationWindow):
 class MixerApp(Gtk.Application):
     def __init__(self) -> None:
         super().__init__(application_id=APP_ID)
-        self.pal = style_mod.palette()
+        self.desktop_theme = theme_mod.read()
+        self.pal = style_mod.palette(self.desktop_theme)
         self.window: MixerWindow | None = None
         self._ipc: ipc_mod.Server | None = None
 
@@ -2458,21 +2531,24 @@ class MixerApp(Gtk.Application):
                 except FileNotFoundError:
                     existing = None
                 if existing is not None:
-                    if not stat.S_ISREG(existing.st_mode) or existing.st_uid != os.getuid():
-                        raise OSError(f"refusing to replace non-regular or foreign dump: {target}")
+                    if not stat.S_ISREG(existing.st_mode):
+                        raise OSError(f"refusing to replace non-regular dump: {target}")
+                    paths.ensure_private_file(target)
 
                 # Publish one complete, private snapshot rather than a
                 # world-readable partial write under the default umask.
                 fd, tmp_name = tempfile.mkstemp(prefix=f"{target.name}.tmp.", dir=target.parent)
                 tmp = Path(tmp_name)
                 try:
-                    os.fchmod(fd, 0o600)
+                    if os.name != "nt":
+                        os.fchmod(fd, 0o600)
                     stream = os.fdopen(fd, "w", encoding="utf-8")
                     fd = -1
                     with stream:
                         stream.write(status.text() + "\n")
                         stream.flush()
                         os.fsync(stream.fileno())
+                    paths.ensure_private_file(tmp)
                     tmp.replace(target)
                 except BaseException:
                     if fd >= 0:

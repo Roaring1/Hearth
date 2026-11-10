@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 from pathlib import Path
 
 import pytest
 
-from hearth import config, settings
+from hearth import config, paths, settings
 
 # --------------------------------------------------------------------------
 # config.json
@@ -193,7 +194,10 @@ def test_saving_repairs_permissive_settings_file_permissions(tmp_path: Path) -> 
 
     settings.save({**settings.DEFAULTS, "win_w": 1234}, target)
 
-    assert target.stat().st_mode & 0o777 == 0o600
+    if os.name == "nt":
+        paths.ensure_private_file(target)
+    else:
+        assert target.stat().st_mode & 0o777 == 0o600
     assert settings.load(target)["win_w"] == 1234
 
 

@@ -13,6 +13,7 @@ state, not replay a backlog.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import time
@@ -218,6 +219,11 @@ def collect(units: Sequence[str]) -> Snapshot:
     unplugged. Routes are optional; failure to read the module table marks them
     unknown so the UI can keep its last verified route graph.
     """
+    if os.name == "nt":
+        from hearth import windows_audio
+
+        return windows_audio.collect(units)
+
     sinks = parse_sinks(pactl.raw_checked("list", "sinks"))
     streams = parse_streams(
         pactl.raw_checked("list", "sink-inputs"),

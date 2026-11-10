@@ -8,6 +8,7 @@ The command functions are thin argv wrappers over :mod:`hearth.proc`.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -352,3 +353,71 @@ def unload_loopbacks(
     if errors:
         raise errors[0]
     return unloaded
+
+
+# Windows native Core Audio adapter. Keep all Linux Pulse/PipeWire behaviour
+# and pure parsers intact for the existing supported platform.
+if os.name == "nt":
+    from hearth import windows_audio as _windows_audio
+
+    def sinks() -> list[ShortEntry]:
+        return _windows_audio.short_entries(capture=False)
+
+    def sources() -> list[ShortEntry]:
+        return _windows_audio.short_entries(capture=True)
+
+    def server_version() -> str:
+        return "Windows Core Audio"
+
+    def default_sink() -> str:
+        return _windows_audio.default_sink()
+
+    def volume(sink: str) -> int:
+        return _windows_audio.endpoint_volume(sink)
+
+    def is_muted(sink: str) -> bool:
+        return _windows_audio.endpoint_muted(sink)
+
+    def set_mute(sink: str, muted: bool) -> bool:
+        return True if not sink else _windows_audio.set_endpoint_mute(sink, muted)
+
+    def move_sink_input(index: str, sink: str) -> bool:
+        # Empty arguments are consistent no-ops; non-empty moves are not
+        # supported by the documented Core Audio session-volume API.
+        return not index or not sink
+
+    def is_source_muted(source: str) -> bool:
+        return _windows_audio.endpoint_muted(source)
+
+    def set_source_mute(source: str, muted: bool) -> bool:
+        return True if not source else _windows_audio.set_endpoint_mute(source, muted)
+
+    def set_stream_mute(index: str, muted: bool) -> bool:
+        return True if not index else _windows_audio.set_session_mute(index, muted)
+
+    def set_stream_volume(index: str, percent: int) -> bool:
+        return True if not index else _windows_audio.set_session_volume(index, percent)
+
+    def set_volume(sink: str, percent: int) -> bool:
+        return True if not sink else _windows_audio.set_endpoint_volume(sink, percent)
+
+    def set_default_sink(sink: str) -> bool:
+        return not sink
+
+    def modules(*, strict: bool = False, timeout: float = 2.0) -> list[Module]:
+        return []
+
+    def load_loopback(
+        source: str,
+        sink: str,
+        *,
+        latency_msec: int = 12,
+        timeout: float = 2.0,
+    ) -> None:
+        raise NotImplementedError("PipeWire loopback routing is not available on Windows")
+
+    def unload_loopbacks(
+        source: str,
+        sinks_wanted: Sequence[str] = DEFAULT_LOOPBACK_SINKS,
+    ) -> int:
+        return 0

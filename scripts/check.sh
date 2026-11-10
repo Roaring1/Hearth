@@ -40,8 +40,9 @@ fi
 step "mypy"
 MYPY="$(tool mypy)"
 if [ -n "$MYPY" ]; then
-    # Typing is being adopted module by module; see [tool.mypy] excludes.
-    "$MYPY" || printf '   (type errors reported, not enforced yet)\n'
+    # This cross-platform tree is checked against Win32 stdlib/API types here;
+    # the Windows workflow repeats the check in its native UCRT64 environment.
+    "$MYPY" --platform win32 || printf '   (type errors reported, not enforced yet)\n'
 else
     skip "mypy not installed"
 fi

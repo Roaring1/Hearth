@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 
 import pytest
@@ -102,6 +103,7 @@ def test_all_units_active_is_false_with_no_units():
     assert collector.Snapshot().all_units_active is False
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux-only PipeWire collector")
 def test_collect_keeps_core_audio_read_failures_distinct_from_empty_graph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -114,6 +116,7 @@ def test_collect_keeps_core_audio_read_failures_distinct_from_empty_graph(
         collector.collect([])
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux-only PipeWire collector")
 def test_collect_builds_route_graph_off_the_ui_thread(
     monkeypatch: pytest.MonkeyPatch, fixture_text
 ) -> None:
@@ -148,6 +151,7 @@ def test_collect_builds_route_graph_off_the_ui_thread(
     assert isinstance(snapshot.sinks["vm_game"].muted, bool)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux-only PipeWire collector")
 def test_optional_route_query_failure_marks_routes_unknown_but_keeps_snapshot(
     monkeypatch: pytest.MonkeyPatch, fixture_text
 ) -> None:

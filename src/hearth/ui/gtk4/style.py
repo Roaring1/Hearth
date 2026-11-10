@@ -33,10 +33,10 @@ _SIGNAL = {
 }
 
 
-def palette() -> dict[str, str]:
+def palette(desktop_theme: theme_mod.Theme | None = None) -> dict[str, str]:
     """The token dict the widgets and the stylesheet both read."""
     try:
-        desktop = theme_mod.read()
+        desktop = desktop_theme or theme_mod.read()
         tokens = dict(desktop.tokens)
         accent = desktop.accent
     except Exception:  # pragma: no cover - a themeless session still gets a window

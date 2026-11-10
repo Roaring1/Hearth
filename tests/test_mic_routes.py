@@ -246,6 +246,7 @@ def test_write_refuses_a_hard_linked_lock_without_chmodding_its_target(
     assert victim.stat().st_mode & 0o777 == original_mode
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows ownership uses ACLs rather than st_uid")
 def test_write_refuses_a_config_owned_by_another_user(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -318,7 +319,12 @@ def test_concurrent_mic_route_writes_use_independent_atomic_temp_files(
     assert loaded["CARLA_TO_B2"] == "true"
     assert "B1_ROUTE" in loaded and "B2_ROUTE" in loaded
     assert list(tmp_path.glob("*.tmp.*")) == []
-    assert (tmp_path / ".roaring_mic_router.conf.lock").stat().st_mode & 0o777 == 0o600
+    if os.name == "nt":
+        from hearth import paths
+
+        paths.ensure_private_file(tmp_path / ".roaring_mic_router.conf.lock")
+    else:
+        assert (tmp_path / ".roaring_mic_router.conf.lock").stat().st_mode & 0o777 == 0o600
 
 
 def test_writing_creates_the_file_when_it_is_missing(tmp_path: Path) -> None:

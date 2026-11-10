@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import threading
 
 import gi
@@ -326,6 +327,20 @@ class RemapWindow(Gtk.Window):
 
         self.connect("map", lambda *_a: self.refresh())
         self.connect("close-request", self._on_close)
+        if os.name == "nt":
+            self._configure_windows_port()
+
+    def _configure_windows_port(self) -> None:
+        """Leave the drawn controller visible but inert while Padfire owns MIDI."""
+        self._map_usable = False
+        self._write_error = (
+            "Padfire owns the Windows LPD8 connection. Hearth remapping is disabled "
+            "here to avoid competing for the controller or editing the Linux shell map."
+        )
+        for widget in (*self._pads.values(), *self._knobs.values()):
+            widget.set_sensitive(False)
+        self.choice.set_sensitive(False)
+        self._show_status()
 
     # -- construction ----------------------------------------------------
     def _build_device(self) -> Gtk.Widget:
@@ -409,6 +424,9 @@ class RemapWindow(Gtk.Window):
 
     # -- reading ---------------------------------------------------------
     def refresh(self) -> None:
+        if os.name == "nt":
+            self._configure_windows_port()
+            return
         """Re-read the script and show what it says."""
         self._refresh_map()
 
@@ -420,6 +438,8 @@ class RemapWindow(Gtk.Window):
         return "The LPD8 service is not running \u2014 knobs and pads do nothing until it is"
 
     def _queue_service_state_refresh(self) -> None:
+        if os.name == "nt":
+            return
         """Read systemd away from GTK and update only the cached status."""
         if self._service_query_pending:
             return
@@ -627,6 +647,8 @@ class RemapWindow(Gtk.Window):
 
     # -- writing ---------------------------------------------------------
     def _on_choice(self, drop: Gtk.DropDown, _param) -> None:
+        if os.name == "nt":
+            return
         if self._write_pending or self._open is None:
             return
         widget = self._open
@@ -645,6 +667,9 @@ class RemapWindow(Gtk.Window):
         self.menu.popdown()
 
     def _write(self, edit) -> None:
+        if os.name == "nt":
+            self._configure_windows_port()
+            return
         """Save one mapping off GTK and queue restart only after success."""
         if self._write_pending:
             return
@@ -691,6 +716,8 @@ class RemapWindow(Gtk.Window):
         return False
 
     def _restart(self) -> None:
+        if os.name == "nt":
+            return
         try:
             started = services_mod.restart(lpd8map.UNIT)
         except Exception as exc:  # pragma: no cover - surfaced, not raised

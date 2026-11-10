@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import select
 import struct
 import subprocess
@@ -105,7 +106,7 @@ class PeakPoller(threading.Thread):
         # shadowing it with an Event makes ``join()`` raise TypeError on
         # CPython 3.11/3.12. CI caught this; 3.13+ happens not to call it.
         self._stopping = threading.Event()
-        self.available = proc.have("parec")
+        self.available = True if os.name == "nt" else proc.have("parec")
 
     def set_sources(self, sources: Sequence[str]) -> None:
         with self._lock:
@@ -177,6 +178,21 @@ class PeakPoller(threading.Thread):
             log.warning("cannot meter %s: %s", source, exc)
 
     def run(self) -> None:
+        if os.name == "nt":
+            from hearth import windows_audio
+
+            try:
+                while not self._stopping.is_set():
+                    with self._lock:
+                        sources = list(self._sources)
+                    levels = windows_audio.peaks(sources)
+                    with self._lock:
+                        self._levels = levels
+                    self._stopping.wait(0.05)
+            except Exception as exc:
+                log.warning("Windows Core Audio meter worker failed: %s", exc)
+            return
+
         try:
             if not self.available:
                 log.info("parec is not installed; VU meters are disabled")

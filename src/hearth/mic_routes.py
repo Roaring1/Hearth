@@ -28,21 +28,26 @@ write is atomic.
 
 from __future__ import annotations
 
-import fcntl
 import logging
 import os
 import re
 import stat
 import tempfile
+import threading
 from pathlib import Path
 
-from hearth import proc
+from hearth import paths, proc
 from hearth.errors import CommandError
+from hearth.platform.locking import lock_file, unlock_file
 
 log = logging.getLogger(__name__)
 
 #: The file ``roaring_mic_routesd.sh`` sources.
-CONF_PATH = Path("~/.config/hearth/roaring_mic_router.conf").expanduser()
+CONF_PATH = (
+    paths.config_dir() / "mic_routes.conf"
+    if os.name == "nt"
+    else Path("~/.config/hearth/roaring_mic_router.conf").expanduser()
+)
 
 #: Bus name to the prefix used by every key about that bus.
 BUS_PREFIX: dict[str, str] = {"mic_b1": "B1", "mic_b2": "B2"}
@@ -120,7 +125,7 @@ def read(path: Path | None = None) -> dict[str, str]:
         return {}
 
 
-def write(updates: dict[str, str], path: Path | None = None) -> bool:
+def _write_unlocked(updates: dict[str, str], path: Path | None = None) -> bool:
     """Apply validated updates atomically and serialize concurrent writers.
 
     The daemon sources this file on a three-second timer, so a malformed or
@@ -152,15 +157,9 @@ def write(updates: dict[str, str], path: Path | None = None) -> bool:
         return False
 
     try:
-        lock_metadata = os.fstat(lock_fd)
-        if not stat.S_ISREG(lock_metadata.st_mode):
-            raise OSError(f"microphone config lock is not a regular file: {lock_path}")
-        if lock_metadata.st_uid != os.getuid():
-            raise PermissionError(f"microphone config lock is not owned by this user: {lock_path}")
-        if lock_metadata.st_nlink != 1:
-            raise OSError(f"refusing hard-linked microphone config lock: {lock_path}")
-        os.fchmod(lock_fd, 0o600)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        paths.ensure_private_fd(lock_fd, lock_path)
+        os.fchmod(lock_fd, 0o600)  # type: ignore[attr-defined]
+        lock_file(lock_fd)
         try:
             cfg_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
             cfg_flags |= getattr(os, "O_NOFOLLOW", 0)
@@ -172,13 +171,8 @@ def write(updates: dict[str, str], path: Path | None = None) -> bool:
                     original = ""
                     original_mode = None
                 else:
+                    paths.ensure_private_fd(cfg_fd, target)
                     metadata = os.fstat(cfg_fd)
-                    if not stat.S_ISREG(metadata.st_mode):
-                        raise OSError(f"refusing to edit non-regular config: {target}")
-                    if metadata.st_uid != os.getuid():
-                        raise PermissionError(
-                            f"microphone config is not owned by this user: {target}"
-                        )
                     with os.fdopen(cfg_fd, "r", encoding="utf-8") as stream:
                         cfg_fd = -1
                         original = stream.read()
@@ -197,11 +191,12 @@ def write(updates: dict[str, str], path: Path | None = None) -> bool:
             tmp = Path(tmp_name)
             try:
                 if original_mode is not None:
-                    os.fchmod(fd, original_mode)
+                    os.fchmod(fd, original_mode)  # type: ignore[attr-defined]
                 with os.fdopen(fd, "w", encoding="utf-8") as stream:
                     stream.write(updated)
                     stream.flush()
                     os.fsync(stream.fileno())
+                paths.ensure_private_file(tmp)
                 tmp.replace(target)
             except BaseException:
                 tmp.unlink(missing_ok=True)
@@ -215,7 +210,7 @@ def write(updates: dict[str, str], path: Path | None = None) -> bool:
         return False
     finally:
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            unlock_file(lock_fd)
         except OSError as exc:
             # Closing the descriptor releases the lock as a fallback.
             log.debug("could not explicitly unlock %s: %s", target, exc)
@@ -404,3 +399,14 @@ def flow_lines(
             line += f" \u2192 laptop ({laptop_host})" if named else " \u2192 laptop"
         lines.append(line)
     return lines
+
+
+# Advisory byte-range/flock locks coordinate separate processes. This RLock
+# also serializes writers within this process, including Windows thread pools.
+_WRITE_LOCK = threading.RLock()
+
+
+def write(updates: dict[str, str], path: Path | None = None) -> bool:
+    """Serialize route updates across threads and processes."""
+    with _WRITE_LOCK:
+        return _write_unlocked(updates, path)
