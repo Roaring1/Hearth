@@ -24,6 +24,26 @@ requests a service restart; this reports that the request was launched, not
 that systemd has completed the transition. The Setup/Remap status refresh then
 reads back the actual state.
 
+## Current pad layout
+
+The available pad actions now match the 2026-11-10 physical layout:
+
+- Pad 1: mute/unmute the processed B1 microphone.
+- Pad 2: mute/unmute both Astro A50 output endpoints.
+- Pad 3: Show Hearth (one-shot action).
+- Pads 4-7: unassigned.
+- Pad 8: toggle the Scarlett desktop-speaker mirror.
+
+The mute-pad polarity is lit = muted and dark = normal/unmuted. Pads 1/2 use
+hardware Toggle behavior; pads 3-8 use Momentary behavior. The four hardware
+banks were set through the original LPD8's editor-only SysEx protocol and read
+back. The Remap choices are filtered by those stored modes: mute actions can
+only be placed on pads 1/2, and one-shot actions can only be placed on pads
+3-8. The script remap itself still edits only note/CC/program mapping values;
+it does not change the controller's stored Toggle/Momentary mode. See
+[`LPD8_MUTE_LAYOUT_2026-11-10.md`](LPD8_MUTE_LAYOUT_2026-11-10.md) for the
+verified assignments, hardware limitation, and boot initialization.
+
 ## Read-only checks
 
 To inspect the configured mapping without changing it, open LPD8 Controls and
@@ -31,6 +51,4 @@ choose Refresh. The UI reads the script's current knob/pad values and shows
 unknown mappings as unknown rather than assuming that a missing binding is
 unbound. The systemd unit state is queried on a background worker when the
 map is refreshed; if systemd is unreachable, Hearth does not report a
-confident "service stopped" state from a failed query. The controller's live
-LEDs still depend on the LPD8 being in Note Toggle mode; the mapping file alone
-cannot change the device's hardware mode.
+confident "service stopped" state from a failed query.

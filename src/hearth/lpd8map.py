@@ -237,19 +237,28 @@ class PadSlot:
         return f"PROG_{self.slot}"
 
 
-#: Every pad job the script has, read off its dispatch ``case``. Slots the
-#: script ignores are not listed, because offering to remap a pad that does
-#: nothing is offering a setting with no effect.
+#: Only actions the live LPD8 script currently implements are offered.
+#: Pads 4-7 are intentionally empty and therefore are not remap choices.
 PAD_SLOTS: tuple[PadSlot, ...] = (
-    PadSlot(1, "Mute or unmute music", True),
-    PadSlot(2, "Mute or unmute chat", True),
-    PadSlot(3, "Switch the headset between chat and game", False),
-    PadSlot(4, "Mute or unmute the headset", True),
-    PadSlot(5, "Save a diagnostic report", False),
-    PadSlot(6, "Mute or unmute the microphone", True),
-    PadSlot(7, "Mute or unmute game audio", True),
-    PadSlot(8, "Switch the desk speakers on or off", False),
+    PadSlot(1, "Mute or unmute the B1 microphone", True),
+    PadSlot(2, "Mute or unmute the headset", True),
+    PadSlot(3, "Show Hearth", False),
+    PadSlot(8, "Toggle desktop speakers", False),
 )
+
+#: The original controller stores Toggle/Momentary mode per physical pad.
+#: These sets match the four hardware banks programmed on 2026-11-10.
+TOGGLE_PADS: tuple[int, ...] = (1, 2)
+MOMENTARY_PADS: tuple[int, ...] = (3, 4, 5, 6, 7, 8)
+
+
+def compatible_pad_slots(pad: int) -> tuple[PadSlot, ...]:
+    """Assignments whose latch behavior matches physical pad ``pad``."""
+    if pad not in PADS:
+        raise ValueError(f"the LPD8 has pads 1-8, not {pad}")
+    is_toggle = pad in TOGGLE_PADS
+    return tuple(slot for slot in PAD_SLOTS if slot.latching is is_toggle)
+
 
 #: The note the first pad sends, minus one: pad *n* sends ``59 + n``.
 PAD_NOTE_BASE = 59
@@ -321,6 +330,10 @@ def set_pad(slot: int, pad: int, script: Path | None = None) -> bool:
     if slot not in slots:
         raise ValueError(f"unknown LPD8 pad slot {slot!r}")
     pad_slot = slots[slot]
+    pad_to_note(pad)  # Validate the physical pad before checking its mode.
+    if pad_slot not in compatible_pad_slots(pad):
+        expected = "Toggle" if pad_slot.latching else "Momentary"
+        raise ValueError(f"{pad_slot.label} requires a physical {expected} pad")
     path = script or SCRIPT
 
     def update(text: str) -> str | None:

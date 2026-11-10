@@ -64,13 +64,9 @@ KNOB_ROWS: tuple[tuple[int, ...], ...] = ((1, 2, 3, 4), (5, 6, 7, 8))
 #: jobs said shorter; the full wording is on the tooltip and in the
 #: dropdown, so nothing is only ever seen abbreviated.
 PAD_SHORT: dict[int, str] = {
-    1: "Music mute",
-    2: "Chat mute",
-    3: "Headset source",
-    4: "Headset mute",
-    5: "Save report",
-    6: "Mic mute",
-    7: "Game mute",
+    1: "Mic mute",
+    2: "Headset mute",
+    3: "Show Hearth",
     8: "Desk speakers",
 }
 
@@ -159,11 +155,10 @@ class _Pad(Gtk.Button, _Control):
             self.add_css_class("free")
 
     def set_live(self, lit: bool | None) -> None:
-        """Glow while the bus this pad watches is audible.
+        """Glow when this mute pad's target is muted.
 
-        Same rule as the hardware LED: lit means you can hear it. ``None``
-        is a pad that holds no state, and it stays plain rather than
-        claiming its light is off.
+        The original LPD8 uses lit = muted and dark = normal. ``None`` is
+        an action/empty pad or an unavailable target, not an all-clear.
         """
         if lit:
             self.add_css_class("live")
@@ -535,7 +530,7 @@ class RemapWindow(Gtk.Window):
             state = self._live.get(PAD_SINK.get(pad, ""))
             lit: bool | None = None
             if state is not None and getattr(state, "present", True):
-                lit = not bool(getattr(state, "muted", False))
+                lit = bool(getattr(state, "muted", False))
             widget.set_live(lit)
 
     def _clashes(self, knobs: dict[str, int], pads: dict[int, int]) -> str:
@@ -590,10 +585,11 @@ class RemapWindow(Gtk.Window):
         )
         if widget.kind == "pad":
             self.menu_name.set_text(f"Pad {number} does")
-            names = [s.label for s in lpd8map.PAD_SLOTS]
-            slots = sorted(self._pad_use.get(number, []))
-            order = [s.slot for s in lpd8map.PAD_SLOTS]
-            index = order.index(slots[0]) if slots else None
+            compatible = lpd8map.compatible_pad_slots(number)
+            names = [slot.label for slot in compatible]
+            assigned = sorted(self._pad_use.get(number, []))
+            order = [slot.slot for slot in compatible]
+            index = next((order.index(slot) for slot in assigned if slot in order), None)
         else:
             self.menu_name.set_text(f"Knob {number} moves")
             names = [a.label for a in lpd8map.ASSIGNMENTS]
@@ -625,9 +621,10 @@ class RemapWindow(Gtk.Window):
         number = widget.number
         index = int(drop.get_selected())
         if widget.kind == "pad":
-            if index >= len(lpd8map.PAD_SLOTS):
+            compatible = lpd8map.compatible_pad_slots(number)
+            if index >= len(compatible):
                 return
-            slot = lpd8map.PAD_SLOTS[index].slot
+            slot = compatible[index].slot
             self._write(lambda: lpd8map.set_pad(slot, number))
         else:
             if index >= len(lpd8map.ASSIGNMENTS):
