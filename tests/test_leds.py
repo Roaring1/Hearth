@@ -30,7 +30,7 @@ def test_pads_outside_the_device_are_refused(pad: int) -> None:
 
 
 def test_message_matches_the_shell_script_format() -> None:
-    """Note On, channel 10, velocity 127 -- uppercase hex, space separated."""
+    """Note On, channel 10, velocity 127 means the mute state is lit."""
     assert leds.message(1, True) == "99 3C 7F"
     assert leds.message(1, False) == "99 3C 00"
 
@@ -45,22 +45,36 @@ def test_impossible_channels_are_refused(channel: int) -> None:
         leds.message(1, True, channel=channel)
 
 
-def test_lit_means_audible() -> None:
-    """A muted bus is a dark pad, which is what the script already does."""
-    assert leds.message(7, True).endswith("7F")
-    assert leds.message(7, False).endswith("00")
+def test_lit_means_muted() -> None:
+    """The hardware state indicator is lit for muted and dark for normal."""
+    assert leds.message(1, True).endswith("7F")
+    assert leds.message(1, False).endswith("00")
 
 
-def test_pad_lookup_covers_the_three_bound_buses() -> None:
-    assert leds.pad_for_sink("vm_music") == 1
-    assert leds.pad_for_sink("vm_chat") == 2
-    assert leds.pad_for_sink("vm_game") == 7
+def test_pad_lookup_covers_the_two_mute_targets() -> None:
+    assert leds.pad_for_sink("mic_b1") == 1
+    assert leds.pad_for_sink("astro_headset") == 2
+    assert leds.HEADSET_SINKS == (
+        "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat",
+        "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game",
+    )
 
 
 def test_unbound_buses_have_no_pad() -> None:
-    """Laptop and the mic buses are not on the surface; nothing to light."""
+    """Only the B1 microphone and whole-headset mute targets have state pads."""
     assert leds.pad_for_sink("vm_laptop") is None
-    assert leds.pad_for_sink("mic_b1") is None
+    assert leds.pad_for_sink("vm_music") is None
+    assert leds.pad_for_sink("vm_chat") is None
+
+
+@pytest.mark.parametrize(
+    ("chat_muted", "game_muted", "expected"),
+    [(False, False, False), (True, False, True), (False, True, True), (True, True, True)],
+)
+def test_headset_pad_warns_when_either_endpoint_is_muted(
+    chat_muted: bool, game_muted: bool, expected: bool
+) -> None:
+    assert leds.headset_is_muted(chat_muted, game_muted) is expected
 
 
 def test_port_is_read_from_a_real_amidi_listing() -> None:
@@ -140,3 +154,17 @@ def test_set_sink_mute_skips_buses_without_a_pad(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(leds.proc, "run", lambda cmd, **_: called.append(cmd))
     assert leds.set_sink_mute("hw:6,0,0", "vm_laptop", True) is False
     assert called == []
+
+
+def test_set_sink_mute_lights_the_pad_when_muted(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    called: list[list[str]] = []
+    monkeypatch.setattr(leds.proc, "have", lambda _name: True)
+    monkeypatch.setattr(
+        leds.proc,
+        "run",
+        lambda cmd, **_: called.append(cmd) or SimpleNamespace(ok=True),
+    )
+    assert leds.set_sink_mute("hw:6,0,0", "mic_b1", True) is True
+    assert called == [["amidi", "-p", "hw:6,0,0", "-S", "99 3C 7F"]]

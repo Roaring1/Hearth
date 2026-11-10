@@ -6,11 +6,20 @@ The attached device identifies as USB `09e8:0075`, the original/classic Akai
 LPD8 (not the LPD8 MkII). The original Akai LPD8 Quickstart Guide's MIDI
 Implementation Chart lists note numbers `000–127` under Transmit/Export and
 `n/a` under Recognize/Import. Therefore this unit does not accept incoming MIDI
-Note On/Off messages as a means of setting its pad lights.
+Note On/Off messages as a means of setting its pad lights. That restriction is
+specific to ordinary Note feedback; the original unit does support editor-only
+SysEx for reading and writing its stored pad/knob programs, including each
+pad's Toggle/Momentary behavior byte.
 
 Reference: [Akai LPD8 Quickstart Guide, MIDI Implementation Chart (page 5)](https://static.bhphotovideo.com/lit_files/84742.pdf).
 
 ## Runtime behavior
+
+The per-pad behavior configuration is documented in the
+[reverse-engineered LPD8 editor SysEx reference](https://github.com/charlesfleche/lpd8editor/blob/master/doc/SYSEX.md).
+The active hardware was read as program 4. All four stored programs now use
+Toggle for pads 1/2 and Momentary for pads 3-8; readback confirmed that the
+pad assignments, channel and knob values were preserved.
 
 The installed script is `~/bin/lpd8_mixer.sh`, invoked by `lpd8-mixer.service`.
 It remains outside the Hearth source tree because the remap UI edits mapping
@@ -32,11 +41,15 @@ The current script now:
 
 - Defaults `LED_FEEDBACK_SUPPORTED=0` for this classic LPD8 and does not send
   futile Note On/Off messages to it.
-- Logs explicitly that hardware LED feedback is disabled, rather than claiming
-  visible LEDs synchronized.
-- Still reads the actual Pulse/PipeWire mute states on startup/reconnect and
-  seeds Hearth's internal CC/Program toggle state, so the first physical pad
-  press is interpreted against real mixer state.
+- Uses lit = muted and dark = normal for the two hardware mute toggles.
+- Maps pad 1 to the processed B1 microphone, pad 2 to both A50 outputs, pad 3
+  to Show Hearth, pads 4-7 to no action, and pad 8 to the existing desktop
+  speaker-mirror toggle.
+- Ignores Note-Off releases for momentary action pads 3 and 8, so a long press
+  cannot fire Show Hearth or the speaker toggle twice.
+- Reads the actual Pulse/PipeWire mute states on startup/reconnect and seeds
+  Hearth's internal CC/Program toggle state after the boot-default unit has
+  unmuted B1 and both A50 endpoints.
 - Retains the timeout/retry/write-validation path behind an explicit
   `LED_FEEDBACK_SUPPORTED=1` opt-in for a different controller verified to
   support incoming Note On/Off pad-light control. Do not enable this setting for
@@ -51,8 +64,11 @@ The current script now:
   support, and is not evidence of actual LEDs illuminating.
 - The actual device is detected by `lsusb` as `09e8:0075`; `amidi -l` lists
   `hw:6,0,0 LPD8 MIDI 1`.
-- The device's pad LEDs cannot be initialized dynamically through the classic
-  LPD8 MIDI Note protocol. Use a controller with inbound LED feedback (such as
-  an appropriately configured LPD8 MkII) if the app must show mute state on
-  the pad surfaces. Mixer controls continue to work independently of this
-  limitation.
+- The device's pad LEDs cannot be updated dynamically through the classic
+  LPD8 MIDI Note protocol. The stored Toggle behavior still lets the physical
+  pad light follow pad presses; it cannot reflect a later mute change made by
+  another PC application. The Hearth window remains the live-state indicator.
+  A boot-default service starts the B1 microphone and both headset outputs
+  unmuted so the fresh dark pads and PC state agree at login. It also enables
+  and verifies the six desktop-speaker mirror links to Scarlett on every login;
+  pad 8 remains a manual toggle during the session.
