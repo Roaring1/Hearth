@@ -273,6 +273,10 @@ def test_production_windows_render_and_capture(
     # one fader, one VU, one mute, and the normal minimise control. It does not
     # expose an OUT/IN popover or arbitrary per-app move controls.
     assert share_strip.channel.sink == "vm_share"
+    share_header = share_strip.get_first_child()
+    assert share_header is not None and share_header.get_first_child() is not None
+    share_header_name = share_header.get_first_child().get_next_sibling()
+    assert share_header_name is not None and share_header_name.get_text() == "SCREEN SHARE"
     assert share_strip.out_button is None
     assert share_strip.in_button is None
     assert share_strip.share_mode_button is not None

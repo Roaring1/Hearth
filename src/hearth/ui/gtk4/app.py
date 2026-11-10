@@ -281,7 +281,7 @@ class Strip(Gtk.Box):
         header.append(grip)
         # Single-word bus names shout; a two-word name like "Discord mic"
         # reads better as typed and would not fit the strip uppercased.
-        label = channel.name.upper() if " " not in channel.name else channel.name
+        label = channel.name.upper() if " " not in channel.name or channel.master else channel.name
         name = Gtk.Label(label=label, xalign=0.0)
         name.add_css_class("strip-name")
         # No ellipsize: a strip should grow to fit its own name rather
