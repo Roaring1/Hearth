@@ -57,6 +57,7 @@ def test_production_windows_render_and_capture(
         lambda: {
             "mixer_hidden": ["mic_b2"],
             "mixer_minimised": [],
+            "mixer_share_visibility_set": True,
             "mixer_order": [
                 "vm_game",
                 "vm_chat",
@@ -70,6 +71,7 @@ def test_production_windows_render_and_capture(
         },
     )
     monkeypatch.setattr(app_mod.settings_mod, "save", lambda _values: None)
+    monkeypatch.setattr(app_mod.share_mod, "selection", lambda: ["game", "music"])
     # Keep the gallery deterministic and fast: app icon resolution has its
     # own tests; this suite is measuring the composition of UI widgets.
     icon_calls: dict[str, int] = {}
@@ -273,7 +275,37 @@ def test_production_windows_render_and_capture(
     assert share_strip.channel.sink == "vm_share"
     assert share_strip.out_button is None
     assert share_strip.in_button is None
-    assert not share_strip.listeners.get_visible()
+    assert share_strip.share_mode_button is not None
+    assert share_strip.share_mode_button.get_label() == "OUTPUTS"
+    assert share_strip.listeners.get_visible()
+    assert share_strip._share_detail_signature == (
+        ("Vesktop", "Not configured"),
+        (
+            "note",
+            "Screen-share selection is Game, Music directly. "
+            "VM-SHARE is not selected; migration remains in #10.",
+        ),
+    )
+    # Switching views lists source BUSES, not applications. Switching back
+    # lists applications, not one row for each source bus.
+    share_strip._on_share_view_clicked(share_strip.share_mode_button)
+    assert share_strip.share_mode_button.get_label() == "SOURCES"
+    assert share_strip._share_detail_signature == (
+        ("Game", "Configured source"),
+        ("Music", "Configured source"),
+        (
+            "note",
+            "The VM-SHARE service is configured for Game + Music. "
+            "Live link state is not shown here yet.",
+        ),
+    )
+    monkeypatch.setattr(app_mod.share_mod, "selection", lambda: ["share"])
+    share_strip._on_share_view_clicked(share_strip.share_mode_button)
+    assert share_strip.share_mode_button.get_label() == "OUTPUTS"
+    assert share_strip._share_detail_signature == (
+        ("Vesktop", "Configured"),
+        ("note", "Vesktop is configured to receive VM-SHARE."),
+    )
     assert share_strip.meter.get_accessible_role() == Gtk.AccessibleRole.METER
     assert share_strip.fader.get_accessible_role() == Gtk.AccessibleRole.SLIDER
     assert "Share audio level" in accessible_labels[id(share_strip.meter)]

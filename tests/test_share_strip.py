@@ -23,6 +23,19 @@ def test_vm_share_is_a_first_class_master_channel() -> None:
     assert all(sink != "vm_share" for _label, sink in mixer.OUTPUTS)
 
 
+def test_share_is_collapsed_by_default_until_the_user_chooses() -> None:
+    from hearth.ui.gtk4 import app as mixer
+
+    assert {"mic_b2", "vm_share"} <= mixer._initial_hidden({"mixer_hidden": ["mic_b2"]})
+    assert "vm_share" not in mixer._initial_hidden(
+        {"mixer_hidden": ["mic_b2"], "mixer_share_visibility_set": True}
+    )
+    # A user who explicitly hid Share keeps that choice after the first launch.
+    assert "vm_share" in mixer._initial_hidden(
+        {"mixer_hidden": ["mic_b2", "vm_share"], "mixer_share_visibility_set": True}
+    )
+
+
 def test_global_unmute_does_not_unmute_the_share_master(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
