@@ -12,11 +12,12 @@ from contextlib import nullcontext
 
 import pytest
 
+if os.name != "nt":
+    pytest.skip("Windows Core Audio backend", allow_module_level=True)
+
 from hearth import collector, meters, windows_audio
 from hearth.audio import pactl
 from hearth.ui.gtk4.widgets import VMAX
-
-pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows Core Audio backend")
 
 
 @pytest.fixture
