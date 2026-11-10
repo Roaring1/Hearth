@@ -68,7 +68,8 @@ The current script now:
   LPD8 MIDI Note protocol. The stored Toggle behavior still lets the physical
   pad light follow pad presses; it cannot reflect a later mute change made by
   another PC application. The Hearth window remains the live-state indicator.
-  A boot-default service starts the B1 microphone and both headset outputs
-  unmuted so the fresh dark pads and PC state agree at login. It also enables
-  and verifies the six desktop-speaker mirror links to Scarlett on every login;
-  pad 8 remains a manual toggle during the session.
+  A boot-default service starts all four VM playback buses, both mic buses and
+  active SM7B/A50 capture paths, both headset outputs, and Scarlett output
+  unmuted, regardless of saved mute state. It deliberately leaves the unrelated
+  LifeCam input untouched. It also enables and verifies the six desktop-speaker
+  mirror links to Scarlett; pad 8 remains a manual toggle during the session.

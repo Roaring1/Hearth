@@ -62,21 +62,25 @@ used again.
 
 ## Every-login default
 
-`lpd8-boot-defaults.service` runs after PipeWire, the B1 bus, and the audio route
-services are available. It explicitly unmutes `mic_b1`, `b1_mic`, the A50 chat
-output, and the A50 game output, then reads each state back. It does not restore
-old mute bits from a previous login. `lpd8-mixer.service` is ordered after this
-initializer so its first software toggle state is seeded from the same known
-unmuted state that the controller's freshly-reset Toggle pads display as dark.
+`lpd8-boot-defaults.service` runs after PipeWire, the audio buses, and the
+routing services are available. It disregards saved mute bits and explicitly
+unmutes all four VM playback buses (`vm_game`, `vm_chat`, `vm_music`, and
+`vm_share`), both mic buses (`mic_b1` and `mic_b2`), the active SM7B/A50 capture
+sources, both Astro A50 outputs, and the Scarlett output. It reads each state
+back and fails if one of those paths does not accept the ON default. The
+unrelated LifeCam input is deliberately left untouched.
 
 The initializer also enables the Scarlett desktop-speaker mirror by ensuring
 all six game/chat/music-to-Scarlett links exist. It uses the existing safe
 mute-before-link helper and verifies the final links and Scarlett unmute state.
-Pad 8 remains a normal user-controlled toggle after login; the next reboot
-restores it to ON regardless of the saved marker state.
+Pad 8 remains a normal user-controlled toggle after startup; the next reboot
+restores it to ON regardless of the saved marker state. `lpd8-mixer.service` is
+ordered after this initializer so its first toggle state is seeded from the
+same known unmuted state that the controller's freshly-reset Toggle pads show
+as dark.
 
-The initializer does not stop, pause, or restart the capture path, Carla, the
-router, or the Moonlight/Vesktop microphone handling.
+The initializer does not stop, pause, or restart Carla, the microphone router,
+or the Moonlight/Vesktop microphone handling.
 
 ## Verification
 
