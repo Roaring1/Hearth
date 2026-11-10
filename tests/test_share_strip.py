@@ -14,7 +14,7 @@ def test_vm_share_is_a_first_class_master_channel() -> None:
 
     channels = [channel for channel in mixer.CHANNELS if channel.sink == "vm_share"]
     assert len(channels) == 1
-    assert channels[0].name == "Share"
+    assert channels[0].name == "Screen Share"
     assert channels[0].group == "headset"
     assert channels[0].master is True
     assert mixer.UNIT_FOR_SINK["vm_share"] == "roaring-vm-share.service"
