@@ -725,11 +725,12 @@ This section is the current handoff for the Screen Share overview work and super
 ### Hardware-independent session coordinator slice - 2026-11-10
 
 - New `src/hearth/capture_session.py` introduces stable USB identity and V4L2 mode value objects, audio mode selection (`Xbox` default, `Nobara`, `Both`), injectable runtime/resource protocols, and a serialized Start/Stop coordinator.
+- New `src/hearth/capture_devices.py` parses V4L2 device listings, per-node udev USB identity, Device Caps and discrete format/size/FPS modes. It groups nodes by stable USB identity, excludes metadata-only nodes, and requires explicit user selection when multiple eligible nodes exist. It consumes fixture strings only and never executes a command or opens a device.
 - Startup does not report Ready until device resolution, audio safety validation, viewer launch, route acquisition, idle inhibit acquisition, first-frame arrival and route verification have all succeeded.
 - Stop/rollback order is explicit: stop viewer/device handle, release idle inhibitor, remove only the session-owned audio route lease. Failed cleanup retains the failed lease, reports `FAILED`, and allows a later Stop to retry. Start is refused until state returns to `DORMANT`.
 - The core is toolkit-free and uses no real V4L2, PipeWire, mpv, desktop portal, systemd or D-Bus adapter. Tests use a fake runtime and inject failures at each startup stage, including failed rollback and retry. This is a lifecycle contract, not a working hardware implementation.
-- `docs/CAPTURE_MODE_SESSION_CORE.md` describes the implemented contract and separates the still-missing provider, real V4L2 discovery, audio association, viewer, route and inhibitor adapters.
-- Current full gate with this no-card slice: **535 passed**, 27 upstream GTK/PyGObject deprecation warnings, Ruff lint/format (99 files), mypy (35 source files), legacy compile, desktop-entry/AppStream validation and ShellCheck all passed. AppStream's uppercase application-id pedantic warning is non-fatal.
+- `docs/CAPTURE_MODE_SESSION_CORE.md` describes the implemented transaction contract and fixture-backed parser, and separates the still-missing live provider, audio association, viewer, route and inhibitor adapters.
+- Current full gate with this no-card slice: **545 passed**, 26 upstream GTK/PyGObject deprecation warnings, Ruff lint/format (101 files), mypy (36 source files), legacy compile, desktop-entry/AppStream validation and ShellCheck all passed. AppStream's uppercase application-id pedantic warning is non-fatal.
 - This work does not implement #10 and does not change the user's audio routes, service state, devices, defaults, volume, mute or desktop session.
 
 ### No-card Wayland/mpv source research - 2026-11-10
