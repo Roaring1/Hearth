@@ -17,6 +17,7 @@ import stat
 import tempfile
 import time
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, Protocol
@@ -73,14 +74,18 @@ class ViewerInputOpenError(HearthError):
         super().__init__(self.user_message)
 
 
-def classify_mpv_input_error(reason: object, file_error: object) -> ViewerInputOpenError | None:
-    """Map mpv's end-file error into a stable, user-actionable category."""
-    reason_text = reason if isinstance(reason, str) else "error"
-    detail = file_error if isinstance(file_error, str) else ""
-    detail = " ".join(detail.split())[:240]
-    if reason_text != "error" and not detail:
+def classify_mpv_input_error(
+    reason: object, file_error: object, diagnostic_log: object = ""
+) -> ViewerInputOpenError | None:
+    """Map mpv's end-file event and bounded error log into a stable category."""
+    reason_text = reason if isinstance(reason, str) else ""
+    if reason_text != "error":
         return None
-    normalized = detail.casefold()
+    event_detail = file_error if isinstance(file_error, str) else ""
+    log_detail = diagnostic_log if isinstance(diagnostic_log, str) else ""
+    full_detail = " | ".join(part for part in (event_detail, log_detail) if part)
+    detail = " ".join(full_detail.split())[:240]
+    normalized = full_detail.casefold()
     if any(
         token in normalized
         for token in ("device or resource busy", "resource busy", "device busy", "ebusy")
@@ -118,6 +123,40 @@ class FirstFrame:
     width: int
     height: int
     picture_type: str
+
+
+def create_private_mpv_log_file(runtime_directory: Path) -> Path:
+    """Create a mode-0600, session-only mpv diagnostic log inside a private dir."""
+    directory = runtime_directory.resolve()
+    try:
+        metadata = directory.stat()
+    except OSError as exc:
+        raise ViewerIPCError(f"Viewer runtime directory cannot be inspected: {exc}") from exc
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.getuid()
+        or metadata.st_mode & 0o077
+    ):
+        raise ViewerIPCError("Viewer runtime directory is not private and owner-controlled")
+    log_path = directory / "mpv.log"
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_CLOEXEC", 0)
+    fd: int | None = None
+    created = False
+    try:
+        fd = os.open(log_path, flags, 0o600)
+        created = True
+        os.close(fd)
+        fd = None
+        log_path.chmod(0o600)
+    except OSError as exc:
+        if fd is not None:
+            with suppress(OSError):
+                os.close(fd)
+        if created:
+            with suppress(OSError):
+                log_path.unlink()
+        raise ViewerIPCError(f"Could not create private mpv log: {exc}") from exc
+    return log_path
 
 
 def create_private_ipc_directory() -> Path:
@@ -158,6 +197,7 @@ class MpvViewerProcess:
         self.ipc_socket = ipc_socket
         self._cleaned = False
         self._frame_health: FrameHealthSnapshot | None = None
+        self.mpv_log_path = runtime_directory / "mpv.log"
 
     @property
     def pid(self) -> int | None:
@@ -288,6 +328,28 @@ class MpvViewerProcess:
         finally:
             connection.close()
 
+    def _read_error_log(self, *, max_bytes: int = 8192) -> str:
+        """Read only recent mpv error/fatal lines from the private session log."""
+        try:
+            with self.mpv_log_path.open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                size = stream.tell()
+                stream.seek(max(0, size - max_bytes), os.SEEK_SET)
+                tail = stream.read(max_bytes).decode("utf-8", errors="replace")
+        except OSError:
+            return ""
+        error_lines = [
+            " ".join(line.split())
+            for line in tail.splitlines()
+            if "[e]" in line.casefold() or "[fatal]" in line.casefold()
+        ]
+        return " | ".join(error_lines[-8:])[:1024]
+
+    def _classify_input_error(
+        self, reason: object, file_error: object = ""
+    ) -> ViewerInputOpenError | None:
+        return classify_mpv_input_error(reason, file_error, self._read_error_log())
+
     def wait_for_first_frame(self, timeout_s: float) -> FirstFrame:
         """Wait for decoded frame metadata and a configured video output.
 
@@ -303,7 +365,11 @@ class MpvViewerProcess:
             raise ViewerIPCError("mpv IPC socket path is too long for a Unix-domain socket")
         deadline = time.monotonic() + timeout_s
         while True:
-            if self.poll() is not None:
+            returncode = self.poll()
+            if returncode is not None:
+                input_error = self._classify_input_error("error" if returncode != 0 else "eof")
+                if input_error is not None:
+                    raise input_error
                 raise ViewerExitedBeforeFirstFrame(
                     "mpv exited before its first decoded video frame"
                 )
@@ -339,11 +405,18 @@ class MpvViewerProcess:
                         connection, channel, "vo-configured", 3, deadline
                     )
             except (ConnectionError, BrokenPipeError, OSError, TimeoutError, ValueError) as exc:
-                if self.poll() is not None:
+                returncode = self.poll()
+                if returncode is not None:
+                    input_error = self._classify_input_error("error" if returncode != 0 else "eof")
+                    if input_error is not None:
+                        raise input_error from exc
                     raise ViewerExitedBeforeFirstFrame(
                         "mpv exited while checking first-frame readiness"
                     ) from exc
                 if time.monotonic() >= deadline:
+                    input_error = self._classify_input_error("timeout")
+                    if input_error is not None and input_error.detail:
+                        raise input_error from exc
                     raise ViewerReadinessTimeout(
                         "Timed out while reading mpv first-frame properties"
                     ) from exc
@@ -362,8 +435,8 @@ class MpvViewerProcess:
                 return FirstFrame(parameters["w"], parameters["h"], picture)
             time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 
-    @staticmethod
     def _get_property(
+        self,
         connection: socket.socket,
         channel: socket.SocketIO,
         name: str,
@@ -394,7 +467,7 @@ class MpvViewerProcess:
             if not isinstance(response, Mapping):
                 continue
             if response.get("event") == "end-file":
-                input_error = classify_mpv_input_error(
+                input_error = self._classify_input_error(
                     response.get("reason"), response.get("file_error")
                 )
                 if input_error is not None:

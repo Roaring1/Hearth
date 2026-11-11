@@ -14,7 +14,11 @@ from pathlib import Path
 
 from hearth import proc
 from hearth.capture_frame_health import write_frame_health_script
-from hearth.capture_mpv_ipc import MpvViewerProcess, create_private_ipc_directory
+from hearth.capture_mpv_ipc import (
+    MpvViewerProcess,
+    create_private_ipc_directory,
+    create_private_mpv_log_file,
+)
 from hearth.capture_session import ResolvedCaptureDevice, ViewerHandle
 from hearth.errors import HearthError
 
@@ -46,6 +50,7 @@ def build_mpv_viewer_argv(
     fullscreen: bool = True,
     ipc_socket_path: str | Path | None = None,
     frame_health_script_path: str | Path | None = None,
+    log_file_path: str | Path | None = None,
 ) -> list[str]:
     """Build a no-audio, no-OSD mpv command for one resolved V4L2 mode.
 
@@ -92,6 +97,11 @@ def build_mpv_viewer_argv(
         if not script_path.startswith("/"):
             raise ValueError("mpv frame-health script path must be absolute")
         argv.append(f"--script={script_path}")
+    if log_file_path is not None:
+        log_path = str(log_file_path)
+        if not log_path.startswith("/"):
+            raise ValueError("mpv log file path must be absolute")
+        argv.extend((f"--log-file={log_path}", "--msg-level=all=warn"))
     if fullscreen:
         argv.append("--fullscreen")
     argv.extend(("--", f"av://v4l2:{device.video_node_path}"))
@@ -122,14 +132,17 @@ class MpvCaptureViewer:
         runtime_directory = create_private_ipc_directory()
         ipc_socket = runtime_directory / "mpv.sock"
         frame_health_script = None
+        mpv_log = None
         try:
             frame_health_script = write_frame_health_script(runtime_directory)
+            mpv_log = create_private_mpv_log_file(runtime_directory)
             argv = build_mpv_viewer_argv(
                 device,
                 executable=self._executable,
                 fullscreen=self._fullscreen,
                 ipc_socket_path=ipc_socket,
                 frame_health_script_path=frame_health_script,
+                log_file_path=mpv_log,
             )
             process = self._process_factory(argv)
         except Exception:

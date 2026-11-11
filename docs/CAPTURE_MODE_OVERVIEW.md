@@ -64,7 +64,7 @@ The real Wayland portal/Vesktop, monitor-input, lock/DPMS and remote-share matri
 
 The first UI slice is implemented in draft PR #17 (`a19d163`) and hosted CI passed all six jobs. The main mixer has a persistent **SCREEN SHARE** entry and the Screen Share strip has a clear **SET UP** action; both open the same lazy overview. This is the obvious first-time-user entry point, not a command-line workflow.
 
-The no-card session-core work is in draft PR #18. It now has fixture-backed device/route resolution, transactional session ownership, an owned mpv Share Output process with first-frame readiness, timestamp-stall monitoring, private frame-health metadata and a lazy logind inhibitor adapter. The mpv child is the V4L2 FD owner; no second Hearth-side device FD is opened. Common mpv input-open errors are mapped to user-actionable categories. These are testable software contracts, not proof of GUV302G hardware behavior.
+The no-card session-core work is in draft PR #18. It now has fixture-backed device/route resolution, transactional session ownership, an owned mpv Share Output process with first-frame readiness, timestamp-stall monitoring, private frame-health metadata, a lazy logind inhibitor adapter and structured mpv input-open errors. The mpv child is the V4L2 FD owner; no second Hearth-side device FD is opened. Because mpv IPC may return only `loading failed`, a mode-0600 log lives in the private session runtime directory and is read only on failure; it is removed on Stop. A synthetic `/dev/video999` attempt confirmed real mpv's missing-device error maps to `device_unavailable`. These are testable software contracts, not proof of GUV302G hardware behavior.
 
 The eventual two-window contract remains unchanged:
 
