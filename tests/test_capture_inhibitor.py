@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import errno
 import os
 from typing import Any
@@ -88,6 +89,22 @@ class FakeGLib:
 
 def _pipe() -> tuple[int, int]:
     return os.pipe()
+
+
+def test_default_construction_does_not_import_pygobject_or_open_dbus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_import = builtins.__import__
+
+    def no_gi_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "gi" or name.startswith("gi."):
+            raise AssertionError("PyGObject must load only during explicit acquire")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_gi_import)
+    adapter = Login1IdleInhibitorAdapter()
+
+    assert adapter._connection_factory is None
 
 
 def test_construction_is_inert_and_acquire_uses_one_bounded_login1_call() -> None:
