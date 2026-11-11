@@ -262,6 +262,7 @@ def test_production_windows_render_and_capture(
         "Choose the window in Vesktop",
         "Enable audio and start sharing",
     ]
+    assert "desktop picker on Wayland" in overview.workflow_details[1].get_text()
     assert not hasattr(overview, "collector") and not hasattr(overview, "device_fd")
     share_strip.capture_setup_button.emit("clicked")
     assert window._capture_window is overview
