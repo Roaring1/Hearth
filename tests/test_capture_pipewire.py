@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 
 import pytest
@@ -266,6 +267,14 @@ def test_pipewire_provider_wraps_a_bounded_command_timeout() -> None:
     proc.set_runner(timeout_runner)
     with pytest.raises(PipeWireDiscoveryError, match="Could not inspect audio devices"):
         PipeWireAudioProvider(timeout_s=0.2).discover()
+
+
+@pytest.mark.parametrize("timeout_s", [0, math.nan, math.inf])
+def test_pipewire_provider_rejects_nonpositive_or_unbounded_timeout(
+    timeout_s: float,
+) -> None:
+    with pytest.raises(ValueError, match="timeout_s must be positive and finite"):
+        PipeWireAudioProvider(timeout_s=timeout_s)
 
 
 def test_pipewire_provider_wraps_command_and_json_failures() -> None:

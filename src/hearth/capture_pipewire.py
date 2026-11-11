@@ -8,6 +8,7 @@ snapshot-local foreign key and is never exposed as a persistent selector.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -194,8 +195,8 @@ class PipeWireAudioProvider:
     """Read one bounded PipeWire snapshot on explicit request; no monitoring."""
 
     def __init__(self, *, timeout_s: float = 3.0) -> None:
-        if timeout_s <= 0:
-            raise ValueError("timeout_s must be positive")
+        if not math.isfinite(timeout_s) or timeout_s <= 0:
+            raise ValueError("timeout_s must be positive and finite")
         self._timeout_s = timeout_s
 
     def discover(self) -> PipeWireAudioInventory:

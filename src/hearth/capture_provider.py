@@ -8,6 +8,8 @@ covered with an injected `hearth.proc` runner in tests.
 
 from __future__ import annotations
 
+import math
+import time
 from dataclasses import dataclass
 
 from hearth import proc
@@ -54,12 +56,15 @@ class V4L2InventoryProvider:
     """Run a single, read-only probe when requested; no periodic work is started."""
 
     def __init__(self, *, timeout_s: float = 3.0) -> None:
-        if timeout_s <= 0:
-            raise ValueError("timeout_s must be positive")
+        if not math.isfinite(timeout_s) or timeout_s <= 0:
+            raise ValueError("timeout_s must be positive and finite")
         self._timeout_s = timeout_s
 
-    def _run(self, argv: list[str]) -> str:
-        result = proc.run(argv, timeout=self._timeout_s)
+    def _run(self, argv: list[str], *, deadline: float) -> str:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise CommandError(argv, timed_out=True, stderr="V4L2 discovery time budget exhausted")
+        result = proc.run(argv, timeout=remaining)
         return result.stdout
 
     def discover(self) -> CaptureInventory:
@@ -70,8 +75,11 @@ class V4L2InventoryProvider:
         returned as a `CaptureProbeIssue`; it does not cause another node to
         be silently selected in its place.
         """
+        # One overall budget bounds the entire inventory, not each command.
+        # A machine with many video nodes must not multiply the timeout by N.
+        deadline = time.monotonic() + self._timeout_s
         try:
-            listing = self._run(["v4l2-ctl", "--list-devices"])
+            listing = self._run(["v4l2-ctl", "--list-devices"], deadline=deadline)
             listed_nodes = parse_video_device_listing(listing)
         except (CommandError, ValueError) as exc:
             raise CaptureDiscoveryError(f"Could not list video devices: {exc}") from exc
@@ -81,7 +89,8 @@ class V4L2InventoryProvider:
         for device_path, card_label in listed_nodes.items():
             try:
                 udev_text = self._run(
-                    ["udevadm", "info", "--query=property", f"--name={device_path}"]
+                    ["udevadm", "info", "--query=property", f"--name={device_path}"],
+                    deadline=deadline,
                 )
                 bus = next(
                     (
@@ -102,7 +111,9 @@ class V4L2InventoryProvider:
                 continue
 
             try:
-                caps_text = self._run(["v4l2-ctl", f"--device={device_path}", "--all"])
+                caps_text = self._run(
+                    ["v4l2-ctl", f"--device={device_path}", "--all"], deadline=deadline
+                )
                 capabilities = parse_v4l2_capabilities(caps_text)
             except (CommandError, ValueError) as exc:
                 issues.append(
@@ -114,7 +125,8 @@ class V4L2InventoryProvider:
             if capabilities.capture_capable:
                 try:
                     formats_text = self._run(
-                        ["v4l2-ctl", f"--device={device_path}", "--list-formats-ext"]
+                        ["v4l2-ctl", f"--device={device_path}", "--list-formats-ext"],
+                        deadline=deadline,
                     )
                 except CommandError as exc:
                     issues.append(
