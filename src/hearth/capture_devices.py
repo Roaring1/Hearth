@@ -12,6 +12,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+from enum import StrEnum
 from fractions import Fraction
 
 from hearth.capture_session import UsbIdentity, VideoMode
@@ -30,6 +31,49 @@ class UdevVideoProperties:
     identity: UsbIdentity
     product_name: str
     v4l_capabilities: frozenset[str]
+
+
+class AudioAssociationStatus(StrEnum):
+    """What USB-parent evidence says about the capture card's audio source."""
+
+    UNKNOWN = "unknown"
+    NONE = "none"
+    MATCHED = "matched"
+    AMBIGUOUS = "ambiguous"
+
+
+@dataclass(frozen=True, slots=True)
+class AudioSourceCandidate:
+    """One discovered USB-backed audio source with an adapter-supplied selector.
+
+    ``source_selector`` must be a stable node property chosen by the future
+    PipeWire adapter, never a numeric object ID or ALSA card number.
+    """
+
+    source_selector: str
+    display_name: str
+    identity: UsbIdentity
+
+    def __post_init__(self) -> None:
+        selector = self.source_selector.strip()
+        if not selector:
+            raise ValueError("audio source selector must not be blank")
+        if selector.isdecimal() or re.fullmatch(
+            r"(?:card|alsa_card|node[._-]?id)[=:]?\d+", selector, re.IGNORECASE
+        ):
+            raise ValueError("audio selector must not be a volatile numeric device/object ID")
+
+
+@dataclass(frozen=True, slots=True)
+class AudioAssociation:
+    """A conservative association result; `selected` exists only when unique."""
+
+    status: AudioAssociationStatus
+    candidates: tuple[AudioSourceCandidate, ...] = ()
+
+    @property
+    def selected(self) -> AudioSourceCandidate | None:
+        return self.candidates[0] if self.status is AudioAssociationStatus.MATCHED else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,25 +137,86 @@ def parse_video_device_listing(text: str) -> dict[str, str]:
     return devices
 
 
-def parse_udev_video_properties(text: str) -> UdevVideoProperties:
-    """Parse ``udevadm info --query=property`` for one V4L2 node."""
+def _udev_properties(text: str) -> dict[str, str]:
     properties: dict[str, str] = {}
     for line in text.splitlines():
         key, separator, value = line.partition("=")
         if separator and key and key not in properties:
             properties[key] = value
+    return properties
 
-    device_path = properties.get("DEVNAME", "")
-    if not _VIDEO_NODE.fullmatch(device_path):
-        raise ValueError("udev data does not identify a /dev/videoN node")
+
+def normalize_usb_parent_path(value: str | None) -> str | None:
+    """Remove a udev USB interface suffix while preserving physical topology.
+
+    Typical composite-device ID_PATH values end in ``:configuration.interface``
+    (for example ``...-usb-0:5:1.2``). Video and audio interfaces then share
+    the parent ``...-usb-0:5``. Values without that suffix are kept unchanged.
+    """
+    if value is None:
+        return None
+    path = value.strip()
+    if not path:
+        return None
+    return re.sub(r":\d+\.\d+$", "", path)
+
+
+def parse_udev_usb_identity(text: str) -> UsbIdentity:
+    """Parse a stable identity from USB-backed video or audio udev properties."""
+    properties = _udev_properties(text)
     bus = properties.get("ID_BUS", "").lower()
-    if bus and bus != "usb":
-        raise ValueError("video node is not attached to a USB device")
+    if bus != "usb":
+        raise ValueError("device is not confirmed as USB-backed by udev")
     vendor = properties.get("ID_VENDOR_ID", "")
     product = properties.get("ID_MODEL_ID", "")
     serial = properties.get("ID_SERIAL_SHORT") or None
-    port_path = properties.get("ID_PATH") or None
-    identity = UsbIdentity(vendor, product, serial_number=serial, port_path=port_path)
+    port_path = normalize_usb_parent_path(properties.get("ID_PATH"))
+    return UsbIdentity(vendor, product, serial_number=serial, port_path=port_path)
+
+
+def same_usb_device(left: UsbIdentity, right: UsbIdentity) -> bool:
+    """Compare serial first; fall back to matching USB parent path if needed."""
+    if (left.vendor_id.lower(), left.product_id.lower()) != (
+        right.vendor_id.lower(),
+        right.product_id.lower(),
+    ):
+        return False
+    if left.serial_number and right.serial_number:
+        return left.serial_number == right.serial_number
+    return bool(left.port_path and right.port_path and left.port_path == right.port_path)
+
+
+def associate_audio_source(
+    video_device: CaptureDevice,
+    audio_sources: Iterable[AudioSourceCandidate] | None,
+) -> AudioAssociation:
+    """Match by shared USB identity only; no name/card-number heuristic.
+
+    ``None`` means the audio inventory could not be queried, which is distinct
+    from a successful query returning no matching source. Multiple matches
+    remain ambiguous and are returned for an explicit user choice.
+    """
+    if audio_sources is None:
+        return AudioAssociation(AudioAssociationStatus.UNKNOWN)
+    matches = tuple(
+        source
+        for source in audio_sources
+        if same_usb_device(video_device.identity, source.identity)
+    )
+    if not matches:
+        return AudioAssociation(AudioAssociationStatus.NONE)
+    if len(matches) > 1:
+        return AudioAssociation(AudioAssociationStatus.AMBIGUOUS, matches)
+    return AudioAssociation(AudioAssociationStatus.MATCHED, matches)
+
+
+def parse_udev_video_properties(text: str) -> UdevVideoProperties:
+    """Parse ``udevadm info --query=property`` for one V4L2 node."""
+    properties = _udev_properties(text)
+    device_path = properties.get("DEVNAME", "")
+    if not _VIDEO_NODE.fullmatch(device_path):
+        raise ValueError("udev data does not identify a /dev/videoN node")
+    identity = parse_udev_usb_identity(text)
     raw_caps = properties.get("ID_V4L_CAPABILITIES", "")
     capabilities = frozenset(part for part in raw_caps.strip(":").split(":") if part)
     return UdevVideoProperties(

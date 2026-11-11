@@ -4,7 +4,7 @@
 
 ## What is implemented
 
-`hearth.capture_session` is toolkit-free and receives its external operations through a `CaptureRuntime` protocol. The session manager owns sequencing and state, while an eventual runtime adapter owns actual V4L2, viewer, audio-route and desktop-inhibit operations.
+`hearth.capture_session` is toolkit-free and receives its external operations through a `CaptureRuntime` protocol. The session manager owns sequencing and state, while an eventual runtime adapter owns actual V4L2, viewer, audio-route and desktop-inhibit operations. `hearth.capture_devices` contains pure fixture parsers and identity matching that the live provider can reuse.
 
 The persisted `CapturePlan` contains a stable USB identity, a preferred mode, and the chosen audio family (`Xbox`, `Nobara` or `Both`). It does not store `/dev/videoN`, PipeWire node IDs, numeric ALSA card IDs or link IDs. `UsbIdentity` requires a USB serial or a physical USB port path; serial is preferred and hidden from repr output. A resolved `/dev/videoN` path is obtained only during the current start operation and is not included in the UI snapshot.
 
@@ -40,7 +40,7 @@ A process crash still needs a real viewer parent-death/owner strategy and a one-
 ## Deliberately not implemented here
 
 - No live udev/V4L2 provider or actual `open()` call yet. The fixture-friendly parser in `hearth.capture_devices` is implemented, but no real command or device node is queried. Hardware identity, capabilities and busy behavior remain unverified.
-- No PipeWire source association, route safety, route mutation, link ownership tags or `pw-dump` verification. The full user-managed routing work remains deferred in #10.
+- No live PipeWire audio inventory or route safety/mutation, link ownership tags or `pw-dump` verification. `associate_audio_source()` only tests USB-parent identity against fixture candidates; it does not inspect the PipeWire graph. The full user-managed routing work remains deferred in #10.
 - No mpv or other viewer adapter, idle-inhibit adapter, systemd unit, timer, watcher, polling loop or background process.
 - No GTK import, UI, real process launch, device fd, audio route or machine-state change.
 
@@ -70,3 +70,15 @@ Do not add a permanent service, timer, hotplug watcher or polling loop to solve 
 - Groups nodes by stable USB key. It chooses a capture node only when exactly one eligible node exists; multiple eligible nodes require an explicit path selection.
 
 The provider that gathers those command/sysfs outputs is still not implemented. These functions accept strings and mappings only; they do not run `udevadm`, `v4l2-ctl`, open `/dev/videoN`, or touch hardware. The tests use representative fixture text for a card with video and metadata nodes, not a record from the absent GUV302G.
+
+## USB audio-source association (fixture-backed only)
+
+The device module provides `parse_udev_usb_identity()` and `associate_audio_source()` for a future PipeWire inventory adapter:
+
+- Udev must explicitly classify each endpoint as `ID_BUS=usb`; vendor/product IDs alone do not prove the bus type.
+- USB serial is authoritative when both video and audio functions expose it, with vendor/product IDs also required to match.
+- If either side lacks a serial, matching falls back to the normalized physical USB parent path. Composite interface suffixes such as `:1.0` and `:1.3` are removed so functions on the same physical USB device can match.
+- A successful audio inventory with no matching USB identity reports `none`; an unavailable inventory reports `unknown`; one match reports `matched`; more than one endpoint reports `ambiguous` and requires user selection.
+- Friendly names, ALSA card numbers and numeric PipeWire object IDs are never used to associate endpoints. The future adapter supplies a stable source selector for a matched endpoint; obvious volatile numeric selectors are rejected.
+
+This is pure matching logic over udev-property fixtures and fake source candidates. It does not parse a live `pw-dump`, `pactl` or ALSA inventory and does not open or mutate an audio device. The future adapter must establish that PipeWire source metadata carries the matching udev parent identity before this association can be trusted on the target system. Real GUV302G audio topology is still unknown and must be measured when the card is available.

@@ -265,3 +265,9 @@ def test_video_mode_rejects_invalid_capabilities() -> None:
 
 def test_capture_plan_defaults_to_xbox_audio_mode() -> None:
     assert PLAN.audio_mode is AudioMode.XBOX
+
+
+def test_resolved_device_rejects_volatile_audio_source_ids() -> None:
+    for selector in ("42", "card2", "alsa_card=3", "node.id=9"):
+        with pytest.raises(ValueError, match="stable, not a volatile numeric"):
+            ResolvedCaptureDevice(IDENTITY, "/dev/video42", MODE, selector)

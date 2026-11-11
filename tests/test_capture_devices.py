@@ -5,10 +5,16 @@ from __future__ import annotations
 import pytest
 
 from hearth.capture_devices import (
+    AudioAssociationStatus,
+    AudioSourceCandidate,
     CaptureNode,
+    V4L2Capabilities,
+    associate_audio_source,
     choose_capture_node,
     group_capture_devices,
     make_capture_node,
+    normalize_usb_parent_path,
+    parse_udev_usb_identity,
     parse_udev_video_properties,
     parse_v4l2_capabilities,
     parse_v4l2_discrete_modes,
@@ -95,14 +101,29 @@ def test_udev_identity_uses_serial_and_falls_back_to_physical_port() -> None:
         "DEVNAME=/dev/video8\nID_BUS=usb\nID_VENDOR_ID=045e\nID_MODEL_ID=0811\nID_PATH=pci-0000:00:14.0-usb-0:7:1.0\n"
     )
     assert fallback.identity.serial_number is None
-    assert fallback.identity.stable_key.endswith(":port:pci-0000:00:14.0-usb-0:7:1.0")
+    assert fallback.identity.stable_key.endswith(":port:pci-0000:00:14.0-usb-0:7")
+    assert normalize_usb_parent_path("pci-0000:00:14.0-usb-0:7:1.2") == ("pci-0000:00:14.0-usb-0:7")
 
 
 def test_udev_rejects_node_without_stable_usb_identity() -> None:
     with pytest.raises(ValueError, match="serial or physical port"):
-        parse_udev_video_properties("DEVNAME=/dev/video4\nID_VENDOR_ID=1abc\nID_MODEL_ID=02ef\n")
+        parse_udev_video_properties(
+            "DEVNAME=/dev/video4\nID_BUS=usb\nID_VENDOR_ID=1abc\nID_MODEL_ID=02ef\n"
+        )
     with pytest.raises(ValueError, match="/dev/videoN"):
         parse_udev_video_properties("DEVNAME=/dev/media0\n")
+
+
+def test_udev_requires_explicit_usb_bus_classification() -> None:
+    with pytest.raises(ValueError, match="not confirmed as USB-backed"):
+        parse_udev_usb_identity("ID_VENDOR_ID=1abc\nID_MODEL_ID=02ef\nID_SERIAL_SHORT=unit\n")
+
+
+def test_audio_selector_rejects_volatile_numeric_object_ids() -> None:
+    identity = UsbIdentity("1abc", "02ef", serial_number="unit")
+    for selector in ("42", "card2", "alsa_card=3", "node.id=9"):
+        with pytest.raises(ValueError, match="volatile numeric"):
+            AudioSourceCandidate(selector, "USB capture audio", identity)
 
 
 def test_parse_capabilities_prefers_device_caps_over_aggregate_card_caps() -> None:
@@ -120,7 +141,7 @@ def test_aggregate_capabilities_are_not_used_when_device_caps_are_absent() -> No
 
 
 def test_non_usb_video_node_is_rejected() -> None:
-    with pytest.raises(ValueError, match="not attached to a USB device"):
+    with pytest.raises(ValueError, match="not confirmed as USB-backed"):
         parse_udev_video_properties(
             "DEVNAME=/dev/video4\nID_BUS=pci\nID_VENDOR_ID=1abc\nID_MODEL_ID=02ef\nID_PATH=pci-0000:00:14.0\n"
         )
@@ -216,3 +237,100 @@ def test_node_identity_mismatch_is_rejected() -> None:
             parse_v4l2_capabilities(CAPTURE_CAPS),
             FORMATS,
         )
+
+
+def _video_device_for_audio_tests():
+    node = make_capture_node(
+        "/dev/video4",
+        "IOGEAR video",
+        parse_udev_video_properties(UDEV_VIDEO4),
+        parse_v4l2_capabilities(CAPTURE_CAPS),
+        FORMATS,
+    )
+    return group_capture_devices((node,))[0]
+
+
+def test_audio_source_association_uses_usb_serial_not_friendly_name() -> None:
+    video = _video_device_for_audio_tests()
+    audio_identity = parse_udev_usb_identity(
+        "ID_BUS=usb\nID_VENDOR_ID=1abc\nID_MODEL_ID=02ef\nID_SERIAL_SHORT=GUV302G-001\n"
+    )
+    source = AudioSourceCandidate(
+        "alsa_input.usb-IOGEAR_GUV302G.analog-stereo",
+        "Some unrelated display name",
+        audio_identity,
+    )
+
+    result = associate_audio_source(video, [source])
+
+    assert result.status is AudioAssociationStatus.MATCHED
+    assert result.selected is source
+
+
+def test_audio_source_association_falls_back_to_shared_usb_parent_path() -> None:
+    video_no_serial = parse_udev_usb_identity(
+        "ID_BUS=usb\nID_VENDOR_ID=045e\nID_MODEL_ID=0811\nID_PATH=pci-0000:00:14.0-usb-0:7:1.0\n"
+    )
+    audio_no_serial = parse_udev_usb_identity(
+        "ID_BUS=usb\nID_VENDOR_ID=045e\nID_MODEL_ID=0811\nID_PATH=pci-0000:00:14.0-usb-0:7:1.3\n"
+    )
+    source = AudioSourceCandidate("alsa_input.usb-lifecam", "Camera audio", audio_no_serial)
+    camera_node = CaptureNode(
+        "/dev/video8",
+        "LifeCam",
+        video_no_serial,
+        V4L2Capabilities(True, False, False),
+        (VideoMode("YUYV", 1280, 720, 30),),
+    )
+    camera = group_capture_devices((camera_node,))[0]
+
+    result = associate_audio_source(camera, [source])
+
+    assert result.status is AudioAssociationStatus.MATCHED
+
+
+def test_audio_source_association_distinguishes_unknown_from_no_match() -> None:
+    video = _video_device_for_audio_tests()
+    assert associate_audio_source(video, None).status is AudioAssociationStatus.UNKNOWN
+    unrelated = AudioSourceCandidate(
+        "alsa_input.usb-other",
+        "Same friendly name is irrelevant",
+        UsbIdentity("045e", "0811", serial_number="other-device"),
+    )
+    assert associate_audio_source(video, [unrelated]).status is AudioAssociationStatus.NONE
+
+
+def test_multiple_audio_endpoints_for_same_usb_card_remain_ambiguous() -> None:
+    video = _video_device_for_audio_tests()
+    identity = UsbIdentity("1abc", "02ef", serial_number="GUV302G-001")
+    candidates = (
+        AudioSourceCandidate("alsa_input.usb-hdmi", "HDMI capture", identity),
+        AudioSourceCandidate("alsa_input.usb-headset", "Headset mic", identity),
+    )
+
+    result = associate_audio_source(video, candidates)
+
+    assert result.status is AudioAssociationStatus.AMBIGUOUS
+    assert result.selected is None
+    assert result.candidates == candidates
+
+
+def test_different_usb_serials_do_not_match_even_if_port_path_is_equal() -> None:
+    video_identity = UsbIdentity(
+        "1abc", "02ef", serial_number="serial-A", port_path="pci-0000:00:14.0-usb-0:7"
+    )
+    audio_identity = UsbIdentity(
+        "1abc", "02ef", serial_number="serial-B", port_path="pci-0000:00:14.0-usb-0:7"
+    )
+    node = CaptureNode(
+        "/dev/video4",
+        "USB video",
+        video_identity,
+        V4L2Capabilities(True, False, False),
+        (VideoMode("MJPG", 1920, 1080, 60),),
+    )
+    source = AudioSourceCandidate("alsa_input.usb-test", "USB audio", audio_identity)
+
+    result = associate_audio_source(group_capture_devices((node,))[0], [source])
+
+    assert result.status is AudioAssociationStatus.NONE
