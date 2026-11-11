@@ -248,17 +248,20 @@ class CaptureSessionManager:
         self._viewer_watcher: Thread | None = None
         self._listeners: set[Callable[[SessionSnapshot], None]] = set()
 
-    def subscribe_no_signal(
+    def subscribe(
         self,
         listener: Callable[[SessionSnapshot], None],
         *,
         emit_current: bool = True,
     ) -> Callable[[], None]:
-        """Subscribe to no-signal transitions; return an unsubscribe function.
+        """Subscribe to asynchronous session snapshots; return unsubscribe.
 
-        Lifecycle changes are returned synchronously by start()/stop(). This
-        subscription reports only asynchronous viewer no-signal changes.
-        Callbacks run on the viewer monitor thread. GTK callers must marshal
+        Start/Stop lifecycle snapshots are returned synchronously. This
+        subscription reports asynchronous no-signal transitions and viewer
+        exit/failure transitions. The initial snapshot callback runs
+        synchronously during subscription; later callbacks run on the viewer
+        monitor thread while the manager serializes state transitions. Keep
+        observers non-blocking. GTK callers must marshal
         them to the main context (for example with GLib.idle_add). No timer or
         background watcher is created by subscribing.
         """
@@ -281,15 +284,17 @@ class CaptureSessionManager:
         with suppress(Exception):
             listener(snapshot)
 
+    def _notify_listeners_locked(self, snapshot: SessionSnapshot) -> None:
+        """Notify a stable listener set while lifecycle transitions are serialized."""
+        for listener in tuple(self._listeners):
+            self._notify_one(listener, snapshot)
+
     def _viewer_no_signal_changed(self, _value: bool) -> None:
         with self._lock:
             if self._state is not SessionState.RUNNING or self._viewer is None:
                 return
             self._revision += 1
-            snapshot = self.snapshot()
-            listeners = tuple(self._listeners)
-        for listener in listeners:
-            self._notify_one(listener, snapshot)
+            self._notify_listeners_locked(self.snapshot())
 
     def snapshot(self) -> SessionSnapshot:
         """Return a copy of UI-safe lifecycle state."""
@@ -467,6 +472,7 @@ class CaptureSessionManager:
             self._revision += 1
             snapshot = self.snapshot()
             watcher = self._viewer_watcher
+            self._notify_listeners_locked(snapshot)
         if watcher is not None and watcher is not current_thread():
             watcher.join(timeout=1.0)
         return snapshot
