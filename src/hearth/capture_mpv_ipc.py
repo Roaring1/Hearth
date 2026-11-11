@@ -16,12 +16,47 @@ import socket
 import stat
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Lock
 from typing import Protocol
 
+from hearth.capture_session import FrameHealthState
 from hearth.errors import HearthError
+
+FRAME_HEALTH_FREEZE_DURATION_S = 5.0
+FRAME_HEALTH_CHANGING_CONFIRM_S = 6.5
+FRAME_HEALTH_FILTER_LABEL = "hearth-frame-health"
+FRAME_HEALTH_FILTER_GRAPH = f"freezedetect=n=-55dB:d={FRAME_HEALTH_FREEZE_DURATION_S:g}"
+FRAME_HEALTH_METADATA_PROPERTY = f"vf-metadata/{FRAME_HEALTH_FILTER_LABEL}"
+FRAME_HEALTH_FILTER = f"--vf=@{FRAME_HEALTH_FILTER_LABEL}:lavfi=[{FRAME_HEALTH_FILTER_GRAPH}]"
+
+
+def _finite_number(value: object) -> float | None:
+    """Parse a finite numeric timestamp from mpv/FFmpeg metadata."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        number = float(value)
+    except ValueError:
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _has_frame_health_filter(filters: object) -> bool:
+    """Confirm the exact labelled lavfi filter is present and enabled."""
+    if not isinstance(filters, list):
+        return False
+    return any(
+        isinstance(item, Mapping)
+        and item.get("name") == "lavfi"
+        and item.get("label") == FRAME_HEALTH_FILTER_LABEL
+        and item.get("enabled") is True
+        and isinstance(item.get("params"), Mapping)
+        and item["params"].get("graph") == FRAME_HEALTH_FILTER_GRAPH
+        for item in filters
+    )
 
 
 class OwnedProcessHandle(Protocol):
@@ -96,6 +131,29 @@ class MpvViewerProcess:
         self.runtime_directory = runtime_directory
         self.ipc_socket = ipc_socket
         self._cleaned = False
+        self._frame_health_lock = Lock()
+        self._frame_health = FrameHealthState.UNKNOWN
+        self._frame_health_callback: Callable[[FrameHealthState], None] | None = None
+
+    @property
+    def frame_health(self) -> FrameHealthState:
+        """Most recent decoded-image state; unchanged is not proof of lost signal."""
+        with self._frame_health_lock:
+            return self._frame_health
+
+    def set_frame_health_callback(self, callback: Callable[[FrameHealthState], None]) -> None:
+        """Attach the active-session observer before monitoring starts."""
+        with self._frame_health_lock:
+            self._frame_health_callback = callback
+
+    def _publish_frame_health(self, state: FrameHealthState) -> None:
+        with self._frame_health_lock:
+            if self._frame_health is state:
+                return
+            self._frame_health = state
+            callback = self._frame_health_callback
+        if callback is not None:
+            callback(state)
 
     @property
     def pid(self) -> int | None:
@@ -108,14 +166,14 @@ class MpvViewerProcess:
         return self._process.wait(timeout=timeout)
 
     def monitor_until_exit(self, stall_timeout_s: float = 2.0) -> int:
-        """Wait for child exit while observing event-driven video timestamp progress.
+        """Observe timestamp progress and decoded-image changes until child exit.
 
-        This monitor is intended to run only in the active session's existing
-        viewer-wait thread, after `wait_for_first_frame()` succeeded. It keeps
-        one local IPC connection open and uses `observe_property(time-pos)`;
-        there is no timer-driven query loop. If timestamps stop changing for
-        `stall_timeout_s`, it raises `ViewerStreamStalled` so the session manager
-        can transition to FAILED and perform normal resource cleanup.
+        This runs only in the active session's existing viewer-wait thread,
+        after first-frame readiness. One IPC connection observes both time-pos
+        and the FFmpeg freezedetect metadata. A sustained unchanged image is
+        reported as advisory state; it does not stop capture because a static
+        game menu or pause screen can be legitimate. Timestamp stalls remain a
+        separate failure that triggers session cleanup.
         """
         if stall_timeout_s <= 0:
             raise ValueError("stall_timeout_s must be positive")
@@ -136,22 +194,26 @@ class MpvViewerProcess:
 
         buffer = bytearray()
         last_position: float | None = None
+        first_position: float | None = None
         last_progress = time.monotonic()
-        request_id = 4001
+        subscriptions = {
+            4001: (1, "time-pos"),
+            4002: (2, FRAME_HEALTH_METADATA_PROPERTY),
+        }
+        acknowledged: set[int] = set()
+        last_freeze_start: float | None = None
+        last_freeze_end: float | None = None
         try:
-            connection.sendall(
-                (
-                    json.dumps(
-                        {
-                            "command": ["observe_property", 1, "time-pos"],
-                            "request_id": request_id,
-                        },
-                        separators=(",", ":"),
-                    )
-                    + "\n"
-                ).encode("utf-8")
-            )
-            acknowledged = False
+            for request_id, (property_id, property_name) in subscriptions.items():
+                payload = json.dumps(
+                    {
+                        "command": ["observe_property", property_id, property_name],
+                        "request_id": request_id,
+                    },
+                    separators=(",", ":"),
+                )
+                connection.sendall((payload + "\n").encode("utf-8"))
+
             while True:
                 remaining = stall_timeout_s - (time.monotonic() - last_progress)
                 readable, _, _ = select.select([connection], [], [], max(0.0, remaining))
@@ -173,28 +235,57 @@ class MpvViewerProcess:
                         raise ViewerIPCError("mpv sent invalid stream-monitor JSON") from exc
                     if not isinstance(message, Mapping):
                         continue
-                    if message.get("request_id") == request_id:
+
+                    response_id = message.get("request_id")
+                    if response_id in subscriptions:
                         if message.get("error") != "success":
+                            _, property_name = subscriptions[response_id]
                             raise ViewerIPCError(
-                                f"mpv could not observe video timestamps: {message.get('error')}"
+                                f"mpv could not observe {property_name}: {message.get('error')}"
                             )
-                        acknowledged = True
-                        last_progress = time.monotonic()
-                        continue
-                    if message.get("event") != "property-change" or message.get("id") != 1:
-                        continue
-                    position = message.get("data")
-                    if (
-                        isinstance(position, bool)
-                        or not isinstance(position, (int, float))
-                        or not math.isfinite(position)
-                    ):
-                        continue
-                    numeric_position = float(position)
-                    if last_position is None or numeric_position != last_position:
-                        last_position = numeric_position
-                        if acknowledged:
+                        acknowledged.add(response_id)
+                        if response_id == 4001:
                             last_progress = time.monotonic()
+                        continue
+
+                    if message.get("event") != "property-change":
+                        continue
+
+                    event_id = message.get("id")
+                    if event_id == 1:
+                        position = _finite_number(message.get("data"))
+                        if position is None:
+                            continue
+                        if last_position is None or position != last_position:
+                            if first_position is None:
+                                first_position = position
+                            last_position = position
+                            if 4001 in acknowledged:
+                                last_progress = time.monotonic()
+                            # The filter confirms a freeze after five seconds.
+                            # Wait an additional 1.5s before inferring motion from
+                            # the absence of a freeze event, avoiding a race
+                            # between the time-pos and metadata notifications.
+                            if (
+                                first_position is not None
+                                and position - first_position >= FRAME_HEALTH_CHANGING_CONFIRM_S
+                                and last_freeze_start is None
+                            ):
+                                self._publish_frame_health(FrameHealthState.CHANGING)
+                    elif event_id == 2:
+                        metadata = message.get("data")
+                        if not isinstance(metadata, Mapping):
+                            continue
+                        freeze_start = _finite_number(
+                            metadata.get("lavfi.freezedetect.freeze_start")
+                        )
+                        freeze_end = _finite_number(metadata.get("lavfi.freezedetect.freeze_end"))
+                        if freeze_start is not None and freeze_start != last_freeze_start:
+                            last_freeze_start = freeze_start
+                            self._publish_frame_health(FrameHealthState.UNCHANGED)
+                        if freeze_end is not None and freeze_end != last_freeze_end:
+                            last_freeze_end = freeze_end
+                            self._publish_frame_health(FrameHealthState.CHANGING)
         except ViewerStreamStalled:
             raise
         except (ConnectionError, OSError) as exc:
@@ -254,6 +345,19 @@ class MpvViewerProcess:
                     output_ready = self._get_property(
                         connection, channel, "vo-configured", 3, deadline
                     )
+                    frame_properties_valid = (
+                        isinstance(parameters, dict)
+                        and isinstance(parameters.get("w"), int)
+                        and isinstance(parameters.get("h"), int)
+                        and parameters["w"] > 0
+                        and parameters["h"] > 0
+                        and output_ready is True
+                    )
+                    filters = (
+                        self._get_property(connection, channel, "vf", 4, deadline)
+                        if frame_properties_valid
+                        else None
+                    )
             except (ConnectionError, BrokenPipeError, OSError, TimeoutError, ValueError) as exc:
                 if self.poll() is not None:
                     raise ViewerExitedBeforeFirstFrame(
@@ -275,6 +379,8 @@ class MpvViewerProcess:
                 and parameters["h"] > 0
                 and output_ready is True
             ):
+                if not _has_frame_health_filter(filters):
+                    raise ViewerIPCError("mpv did not enable the required frame-health filter")
                 return FirstFrame(parameters["w"], parameters["h"], picture)
             time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 

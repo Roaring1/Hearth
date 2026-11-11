@@ -14,6 +14,9 @@ from typing import Any
 import pytest
 
 from hearth.capture_mpv_ipc import (
+    FRAME_HEALTH_FILTER_GRAPH,
+    FRAME_HEALTH_FILTER_LABEL,
+    FRAME_HEALTH_METADATA_PROPERTY,
     FirstFrame,
     MpvViewerProcess,
     ViewerExitedBeforeFirstFrame,
@@ -22,6 +25,7 @@ from hearth.capture_mpv_ipc import (
     ViewerStreamStalled,
     create_private_ipc_directory,
 )
+from hearth.capture_session import FrameHealthState
 
 
 class FakeProcess:
@@ -156,6 +160,14 @@ def test_first_frame_requires_picture_type_dimensions_and_configured_output(
             "video-frame-info/picture-type": "I",
             "video-params": {"w": 1920, "h": 1080, "pixelformat": "yuv420p"},
             "vo-configured": True,
+            "vf": [
+                {
+                    "name": "lavfi",
+                    "label": FRAME_HEALTH_FILTER_LABEL,
+                    "enabled": True,
+                    "params": {"graph": FRAME_HEALTH_FILTER_GRAPH},
+                }
+            ],
         }
         return {
             "request_id": request["request_id"],
@@ -167,7 +179,45 @@ def test_first_frame_requires_picture_type_dimensions_and_configured_output(
         frame = viewer.wait_for_first_frame(timeout_s=1.0)
 
     assert frame == FirstFrame(1920, 1080, "I")
-    assert seen == ["video-frame-info/picture-type", "video-params", "vo-configured"]
+    assert seen == [
+        "video-frame-info/picture-type",
+        "video-params",
+        "vo-configured",
+        "vf",
+    ]
+
+
+def test_first_frame_fails_closed_when_health_filter_is_missing_or_disabled(
+    tmp_path: Path,
+) -> None:
+    viewer = _viewer(tmp_path)
+
+    def handler(request: dict[str, Any]) -> dict[str, object]:
+        name = request["command"][1]
+        values: dict[str, object] = {
+            "video-frame-info/picture-type": "I",
+            "video-params": {"w": 640, "h": 360},
+            "vo-configured": True,
+            "vf": [
+                {
+                    "name": "lavfi",
+                    "label": FRAME_HEALTH_FILTER_LABEL,
+                    "enabled": False,
+                    "params": {"graph": FRAME_HEALTH_FILTER_GRAPH},
+                }
+            ],
+        }
+        return {
+            "request_id": request["request_id"],
+            "error": "success",
+            "data": values[name],
+        }
+
+    with (
+        FakeMpvIpcServer(viewer.ipc_socket, handler),
+        pytest.raises(ViewerIPCError, match="required frame-health filter"),
+    ):
+        viewer.wait_for_first_frame(timeout_s=1.0)
 
 
 def test_first_frame_retries_unavailable_frame_properties(tmp_path: Path) -> None:
@@ -184,8 +234,17 @@ def test_first_frame_retries_unavailable_frame_properties(tmp_path: Path) -> Non
             data: object = "P"
         elif name == "video-params":
             data = {"w": 640, "h": 360}
-        else:
+        elif name == "vo-configured":
             data = True
+        else:
+            data = [
+                {
+                    "name": "lavfi",
+                    "label": FRAME_HEALTH_FILTER_LABEL,
+                    "enabled": True,
+                    "params": {"graph": FRAME_HEALTH_FILTER_GRAPH},
+                }
+            ]
         return {"request_id": request["request_id"], "error": "success", "data": data}
 
     with FakeMpvIpcServer(viewer.ipc_socket, handler):
@@ -271,11 +330,13 @@ class FakeFrameMonitorServer:
         positions: list[float],
         *,
         hold_open: bool,
+        metadata_events: list[dict[str, str]] | None = None,
     ) -> None:
         self.path = path
         self.process = process
         self.positions = positions
         self.hold_open = hold_open
+        self.metadata_events = metadata_events or []
         self.stop_event = threading.Event()
         self.errors: list[BaseException] = []
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -291,22 +352,35 @@ class FakeFrameMonitorServer:
             with client:
                 client.settimeout(1.0)
                 request_buffer = b""
-                while b"\n" not in request_buffer:
-                    request_buffer += client.recv(4096)
-                request_line, _, _ = request_buffer.partition(b"\n")
-                request = json.loads(request_line)
-                assert request["command"] == ["observe_property", 1, "time-pos"]
-                client.sendall(
-                    (
-                        json.dumps(
-                            {
-                                "request_id": request["request_id"],
-                                "error": "success",
-                            }
-                        )
-                        + "\n"
-                    ).encode()
-                )
+                acknowledged: set[int] = set()
+                expected = {
+                    (1, "time-pos"),
+                    (2, FRAME_HEALTH_METADATA_PROPERTY),
+                }
+                while len(acknowledged) < len(expected):
+                    while b"\n" not in request_buffer:
+                        chunk = client.recv(4096)
+                        if not chunk:
+                            raise ConnectionError("client closed before subscriptions")
+                        request_buffer += chunk
+                    request_line, _, request_buffer = request_buffer.partition(b"\n")
+                    request = json.loads(request_line)
+                    command = request["command"]
+                    assert command[0] == "observe_property"
+                    assert (command[1], command[2]) in expected
+                    assert command[1] not in acknowledged
+                    acknowledged.add(command[1])
+                    client.sendall(
+                        (
+                            json.dumps(
+                                {
+                                    "request_id": request["request_id"],
+                                    "error": "success",
+                                }
+                            )
+                            + "\n"
+                        ).encode()
+                    )
                 for position in self.positions:
                     if self.stop_event.is_set():
                         break
@@ -318,6 +392,23 @@ class FakeFrameMonitorServer:
                                     "id": 1,
                                     "name": "time-pos",
                                     "data": position,
+                                }
+                            )
+                            + "\n"
+                        ).encode()
+                    )
+                    time.sleep(0.02)
+                for metadata in self.metadata_events:
+                    if self.stop_event.is_set():
+                        break
+                    client.sendall(
+                        (
+                            json.dumps(
+                                {
+                                    "event": "property-change",
+                                    "id": 2,
+                                    "name": FRAME_HEALTH_METADATA_PROPERTY,
+                                    "data": metadata,
                                 }
                             )
                             + "\n"
@@ -364,3 +455,86 @@ def test_stream_monitor_fails_when_time_pos_stops_advancing(tmp_path: Path) -> N
         pytest.raises(ViewerStreamStalled, match="timestamps stopped advancing"),
     ):
         viewer.monitor_until_exit(stall_timeout_s=0.12)
+
+
+def test_frame_health_freeze_and_resume_are_advisory(
+    tmp_path: Path,
+) -> None:
+    process = FakeProcess()
+    viewer = _viewer(tmp_path, process=process)
+    states: list[FrameHealthState] = []
+    viewer.set_frame_health_callback(states.append)
+    metadata = [
+        {"lavfi.freezedetect.freeze_start": "0"},
+        {
+            "lavfi.freezedetect.freeze_start": "0",
+            "lavfi.freezedetect.freeze_duration": "5",
+            "lavfi.freezedetect.freeze_end": "5",
+        },
+    ]
+
+    with FakeFrameMonitorServer(
+        viewer.ipc_socket,
+        process,
+        [0.0, 0.2, 0.4],
+        hold_open=False,
+        metadata_events=metadata,
+    ):
+        assert viewer.monitor_until_exit(stall_timeout_s=0.2) == 0
+
+    assert states == [FrameHealthState.UNCHANGED, FrameHealthState.CHANGING]
+    assert viewer.frame_health is FrameHealthState.CHANGING
+
+
+def test_frame_health_marks_motion_after_confirmed_timestamp_window(
+    tmp_path: Path,
+) -> None:
+    process = FakeProcess()
+    viewer = _viewer(tmp_path, process=process)
+    states: list[FrameHealthState] = []
+    viewer.set_frame_health_callback(states.append)
+
+    with FakeFrameMonitorServer(
+        viewer.ipc_socket,
+        process,
+        [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.5],
+        hold_open=False,
+    ):
+        assert viewer.monitor_until_exit(stall_timeout_s=0.2) == 0
+
+    assert states == [FrameHealthState.CHANGING]
+
+
+def test_frame_health_detects_a_second_freeze_after_a_resumed_image(
+    tmp_path: Path,
+) -> None:
+    process = FakeProcess()
+    viewer = _viewer(tmp_path, process=process)
+    states: list[FrameHealthState] = []
+    viewer.set_frame_health_callback(states.append)
+    metadata = [
+        {"lavfi.freezedetect.freeze_start": "0"},
+        {
+            "lavfi.freezedetect.freeze_start": "0",
+            "lavfi.freezedetect.freeze_end": "5",
+        },
+        {
+            "lavfi.freezedetect.freeze_start": "8",
+            "lavfi.freezedetect.freeze_end": "5",
+        },
+    ]
+
+    with FakeFrameMonitorServer(
+        viewer.ipc_socket,
+        process,
+        [0.0, 0.2, 0.4],
+        hold_open=False,
+        metadata_events=metadata,
+    ):
+        assert viewer.monitor_until_exit(stall_timeout_s=0.2) == 0
+
+    assert states == [
+        FrameHealthState.UNCHANGED,
+        FrameHealthState.CHANGING,
+        FrameHealthState.UNCHANGED,
+    ]

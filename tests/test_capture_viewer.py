@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from hearth.capture_mpv_ipc import MpvViewerProcess
+from hearth.capture_mpv_ipc import FRAME_HEALTH_FILTER, MpvViewerProcess
 from hearth.capture_session import ResolvedCaptureDevice, UsbIdentity, VideoMode
 from hearth.capture_viewer import (
     MpvCaptureViewer,
@@ -39,6 +39,7 @@ def test_mjpeg_viewer_argv_is_video_only_and_pins_discrete_mode() -> None:
     assert "--input-builtin-bindings=no" in argv
     assert not any(arg.startswith("--demuxer=") for arg in argv)
     assert "--demuxer-lavf-format=v4l2" not in argv
+    assert FRAME_HEALTH_FILTER in argv
     assert argv[-1].startswith("av://v4l2:")
     assert "--demuxer-lavf-o=input_format=mjpeg,video_size=1920x1080,framerate=60000/1001" in argv
     assert argv[-2:] == ["--", "av://v4l2:/dev/video42"]

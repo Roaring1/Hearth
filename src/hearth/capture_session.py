@@ -34,6 +34,14 @@ class SessionState(StrEnum):
     FAILED = "failed"
 
 
+class FrameHealthState(StrEnum):
+    """Conservative decoded-image health; unchanged does not prove no signal."""
+
+    UNKNOWN = "unknown"
+    CHANGING = "changing"
+    UNCHANGED = "unchanged"
+
+
 class SessionStage(StrEnum):
     """The operation whose failure prevented a session from becoming ready."""
 
@@ -189,6 +197,7 @@ class SessionSnapshot:
     error: str | None
     cleanup_failures: tuple[str, ...]
     revision: int
+    frame_health: FrameHealthState = FrameHealthState.UNKNOWN
 
 
 class CaptureSessionError(HearthError):
@@ -236,6 +245,7 @@ class CaptureSessionManager:
         self._stage: SessionStage | None = None
         self._error: str | None = None
         self._cleanup_failures: tuple[str, ...] = ()
+        self._frame_health = FrameHealthState.UNKNOWN
         self._revision = 0
         self._viewer: ViewerHandle | None = None
         self._routes: AudioRouteLease | None = None
@@ -252,6 +262,7 @@ class CaptureSessionManager:
                 error=self._error,
                 cleanup_failures=self._cleanup_failures,
                 revision=self._revision,
+                frame_health=self._frame_health,
             )
 
     def start(self, plan: CapturePlan) -> SessionSnapshot:
@@ -266,6 +277,7 @@ class CaptureSessionManager:
             self._plan = plan
             self._error = None
             self._cleanup_failures = ()
+            self._frame_health = FrameHealthState.UNKNOWN
             self._state = SessionState.STARTING
             self._revision += 1
             stage = SessionStage.PROBE_DEVICE
@@ -282,6 +294,9 @@ class CaptureSessionManager:
                 stage = SessionStage.START_VIEWER
                 self._stage = stage
                 self._viewer = self._runtime.start_viewer(device)
+                set_frame_health_callback = getattr(self._viewer, "set_frame_health_callback", None)
+                if callable(set_frame_health_callback):
+                    set_frame_health_callback(self.report_frame_health)
 
                 stage = SessionStage.APPLY_AUDIO
                 self._stage = stage
@@ -344,6 +359,19 @@ class CaptureSessionManager:
                     ) from exc
             return self.snapshot()
 
+    def report_frame_health(self, state: FrameHealthState) -> None:
+        """Accept decoded-image health only from the currently active session."""
+        if not isinstance(state, FrameHealthState):
+            raise TypeError("frame health must be a FrameHealthState")
+        with self._lock:
+            # A late mpv notification after Stop must not contaminate the next
+            # session or make a dormant window look active.
+            if self._state is not SessionState.RUNNING:
+                return
+            if self._frame_health is not state:
+                self._frame_health = state
+                self._revision += 1
+
     def _watch_viewer(self, viewer: ViewerHandle) -> None:
         """Wait only while RUNNING; no polling or dormant watcher exists."""
         try:
@@ -391,6 +419,7 @@ class CaptureSessionManager:
             self._state = SessionState.FAILED
             self._stage = SessionStage.CLEANUP
             self._error = detail or f"Share Output viewer exited unexpectedly (code {returncode})"
+            self._frame_health = FrameHealthState.UNKNOWN
             self._revision += 1
             failures = self._cleanup_resources()
             self._cleanup_failures = tuple(failures)
@@ -428,6 +457,7 @@ class CaptureSessionManager:
                     self._stage = None
                     self._error = None
                     self._plan = None
+                    self._frame_health = FrameHealthState.UNKNOWN
                     self._revision += 1
                 snapshot = self.snapshot()
                 watcher = self._viewer_watcher

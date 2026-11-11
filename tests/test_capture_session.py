@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from threading import Event
 
@@ -15,6 +16,7 @@ from hearth.capture_session import (
     CapturePlan,
     CaptureSessionError,
     CaptureSessionManager,
+    FrameHealthState,
     ResolvedCaptureDevice,
     SessionStage,
     SessionState,
@@ -34,6 +36,16 @@ class FakeViewer:
     exit_event: Event = field(default_factory=Event, repr=False)
     exit_code: int = 0
     monitor_error: str | None = None
+    frame_health_callback: Callable[[FrameHealthState], None] | None = field(
+        default=None, repr=False
+    )
+
+    def set_frame_health_callback(self, callback: Callable[[FrameHealthState], None]) -> None:
+        self.frame_health_callback = callback
+
+    def report_frame_health(self, state: FrameHealthState) -> None:
+        if self.frame_health_callback is not None:
+            self.frame_health_callback(state)
 
     def wait(self, timeout: float | None = None) -> int:
         if not self.exit_event.wait(timeout):
@@ -304,6 +316,27 @@ def test_resolved_device_rejects_volatile_audio_source_ids() -> None:
     for selector in ("42", "card2", "alsa_card=3", "node.id=9"):
         with pytest.raises(ValueError, match="stable, not a volatile numeric"):
             ResolvedCaptureDevice(IDENTITY, "/dev/video42", MODE, selector)
+
+
+def test_frame_health_is_ui_safe_and_late_updates_after_stop_are_ignored() -> None:
+    runtime = FakeRuntime()
+    manager = CaptureSessionManager(runtime)
+    running = manager.start(PLAN)
+
+    assert running.frame_health is FrameHealthState.UNKNOWN
+    assert runtime.viewer is not None
+    runtime.viewer.report_frame_health(FrameHealthState.CHANGING)
+    changed = manager.snapshot()
+    assert changed.frame_health is FrameHealthState.CHANGING
+    assert changed.revision > running.revision
+
+    stopped = manager.stop()
+    assert stopped.state is SessionState.DORMANT
+    assert stopped.frame_health is FrameHealthState.UNKNOWN
+
+    # A notification racing after Stop cannot make the dormant UI look active.
+    runtime.viewer.report_frame_health(FrameHealthState.UNCHANGED)
+    assert manager.snapshot().frame_health is FrameHealthState.UNKNOWN
 
 
 def test_unexpected_viewer_exit_cleans_session_and_requires_explicit_stop_ack() -> None:

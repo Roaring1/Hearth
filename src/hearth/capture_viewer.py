@@ -13,7 +13,11 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from hearth import proc
-from hearth.capture_mpv_ipc import MpvViewerProcess, create_private_ipc_directory
+from hearth.capture_mpv_ipc import (
+    FRAME_HEALTH_FILTER,
+    MpvViewerProcess,
+    create_private_ipc_directory,
+)
 from hearth.capture_session import ResolvedCaptureDevice, ViewerHandle
 from hearth.errors import HearthError
 
@@ -77,6 +81,7 @@ def build_mpv_viewer_argv(
         "--input-builtin-bindings=no",
         f"--demuxer-lavf-o={lavf_options}",
         "--force-window=yes",
+        FRAME_HEALTH_FILTER,
     ]
     if ipc_socket_path is not None:
         ipc_path = str(ipc_socket_path)
