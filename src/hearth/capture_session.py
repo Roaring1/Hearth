@@ -200,10 +200,14 @@ class CaptureSessionError(HearthError):
         message: str,
         *,
         cleanup_failures: tuple[str, ...] = (),
+        cause: BaseException | None = None,
     ) -> None:
         self.stage = stage
         self.reason = message
         self.cleanup_failures = cleanup_failures
+        # Keep typed adapter context (for example ambiguous audio candidates)
+        # available to the caller without putting raw objects in SessionSnapshot.
+        self.cause = cause
         suffix = "; cleanup incomplete: " + ", ".join(cleanup_failures) if cleanup_failures else ""
         super().__init__(f"{stage.value}: {message}{suffix}")
 
@@ -306,6 +310,7 @@ class CaptureSessionManager:
                     stage,
                     self._error,
                     cleanup_failures=self._cleanup_failures,
+                    cause=exc,
                 ) from exc
 
             self._state = SessionState.RUNNING

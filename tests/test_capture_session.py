@@ -8,6 +8,8 @@ from threading import Event
 
 import pytest
 
+from hearth.capture_devices import AudioAssociationStatus, AudioSourceCandidate
+from hearth.capture_runtime import CaptureAudioAssociationError
 from hearth.capture_session import (
     AudioMode,
     CapturePlan,
@@ -365,3 +367,37 @@ def test_viewer_exit_outside_running_state_is_rejected() -> None:
         CaptureSessionError, match="viewer exit reported while the session is dormant"
     ):
         manager.viewer_exited(1)
+
+
+def test_start_failure_preserves_typed_audio_candidates_for_user_choice_ui() -> None:
+    first = AudioSourceCandidate(
+        "alsa_input.usb-card.analog-stereo",
+        "Capture Card Analog",
+        IDENTITY,
+    )
+    second = AudioSourceCandidate(
+        "alsa_input.usb-card.hdmi-stereo",
+        "Capture Card HDMI",
+        IDENTITY,
+    )
+    association_error = CaptureAudioAssociationError(
+        AudioAssociationStatus.AMBIGUOUS,
+        "multiple USB audio endpoints match; user selection required",
+        (first, second),
+    )
+
+    class AmbiguousAudioRuntime:
+        def probe_device(self, plan: CapturePlan) -> ResolvedCaptureDevice:
+            raise association_error
+
+    manager = CaptureSessionManager(AmbiguousAudioRuntime())
+
+    with pytest.raises(CaptureSessionError) as caught:
+        manager.start(PLAN)
+
+    assert caught.value.stage is SessionStage.PROBE_DEVICE
+    assert caught.value.cause is association_error
+    assert isinstance(caught.value.cause, CaptureAudioAssociationError)
+    assert caught.value.cause.status is AudioAssociationStatus.AMBIGUOUS
+    assert caught.value.cause.candidates == (first, second)
+    assert manager.snapshot().state is SessionState.DORMANT
