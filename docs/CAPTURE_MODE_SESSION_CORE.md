@@ -48,7 +48,13 @@ On failure it attempts cleanup in reverse ownership order: viewer/device handle,
 
 `MpvCaptureRuntime` now implements the `CaptureRuntime` protocol by composing `V4L2CaptureResolver`, `MpvCaptureViewer`, and two mandatory injected interfaces: `CaptureAudioAdapter` (validate, acquire/remove a session route lease, verify) and `CaptureIdleInhibitorAdapter` (acquire/release a lease). Its default V4L2 resolver also performs one `PipeWireCaptureAudioResolver` snapshot and fails unless the matching card audio endpoint is uniquely identified. It delegates first-frame readiness to `MpvViewerProcess.wait_for_first_frame()`. Construction is inert; only `CaptureSessionManager.start()` invokes the resolver and then the adapters in the defined transaction order.
 
-The composition is exercised with fake inventory, viewer, route and inhibitor adapters, including first-frame failure rollback. The PipeWire identity resolver separately tests unique, none, unknown, ambiguous and provider-failure outcomes. This does **not** implement live audio route creation/removal or a real idle inhibitor, and it is not yet connected to the Hearth GTK Controls/Start action. Those adapters remain required before this composition can become an operational capture runtime.
+The composition is exercised with fake inventory, viewer, route and inhibitor adapters, including first-frame failure rollback. The PipeWire identity resolver separately tests unique, none, unknown, ambiguous and provider-failure outcomes. The GTK-layer logind idle/sleep inhibitor lease is implemented separately (see below), but it is not yet wired into this runtime or an active Controls/Start path. Live audio-route creation/removal and post-route verification remain unimplemented, so this is not an operational capture runtime.
+
+### systemd-logind idle/sleep inhibitor lease
+
+`hearth.ui.gtk4.capture_inhibit.Login1IdleInhibitorAdapter` now implements the injected idle-inhibitor protocol without adding a core dependency on GTK/Gio. Construction is inert. Only an explicit `acquire()` opens a private system-bus connection and requests logind's `idle:sleep` block inhibitor for Hearth. The adapter duplicates and validates the returned Unix FD, marks it close-on-exec, closes its private D-Bus connection, and returns a lease whose lifetime is the FD alone. Stop closes that FD; Hearth process exit closes it automatically, so there is no helper process, permanent service, timer, or capture-specific watcher.
+
+Release is idempotent. The lease clears its owned-FD slot before calling `close()` and never retries the same descriptor number after an error: Linux releases the descriptor early, so it may already have been reused by another thread. `EBADF`/`EINTR` are also treated as released. A reported close error is surfaced once; the manager's subsequent Stop retry is a no-op rather than a second `close()` on a potentially reused FD. The adapter fails closed if the system bus, logind call, returned handle, or FD validation fails. Six fake-FD tests cover lazy acquisition, the exact `idle:sleep`/`block` request, private bus connection cleanup, close-on-exec, failure cleanup, idempotent release and no-retry-on-close-error. No live system-bus call has been made, and the adapter is not yet wired into a GTK Start action. See [Linux close(2)](https://man7.org/linux/man-pages/man2/close.2.html) for the descriptor-reuse caveat.
 
 ### mpv command construction and owned process
 
@@ -77,7 +83,7 @@ These checks prove command shape, local IPC first-frame/progress behavior with s
 ## Not implemented yet
 
 - Real `CaptureAudioAdapter` implementation: route-guard validation against live PipeWire metadata, safe session-scoped VM-SHARE lease creation/removal, owner metadata and post-route verification. USB audio identity discovery now exists as a fixture-backed, one-shot selector only. Full user-managed VM-SHARE source editing and one-path migration remain explicitly deferred in #10; this work has not changed live audio routes.
-- Real `CaptureIdleInhibitorAdapter` implementation and its Stop/crash cleanup.
+- Wire the tested `Login1IdleInhibitorAdapter` into the future GTK Start path. The adapter itself is implemented, but no live logind call has been made and no active Controls window uses it yet.
 - Connect the composed `MpvCaptureRuntime` to the Hearth GTK Controls/Start action. No UI path constructs or starts it yet.
 - The active V4L2 streaming open, device-fd ownership, pixel-level No signal/frozen-image detection and user-facing status. Timestamp progress is not proof that pixel content changes. Inventory ioctls must close before the viewer takes the streaming open.
 - Active Capture Controls/Share Output UI integration. Do not show Start/Stop until the live audio, inhibitor, device and UI paths exist.
@@ -85,12 +91,11 @@ These checks prove command shape, local IPC first-frame/progress behavior with s
 
 ## Next no-card work
 
-1. Implement a live fail-closed `CaptureAudioAdapter` using the one-shot PipeWire snapshot and stable USB identity. Keep route mutation behind #10's single-path ownership contract.
-2. Implement and test a real idle-inhibitor lease adapter with bounded release/retry behavior.
-3. Connect the composed `MpvCaptureRuntime` to a lazy Hearth Controls action. Controls may run one bounded discovery; app startup must remain dormant.
-4. Add pixel-level No signal/frozen-image detection. Timestamp progress alone must not let an unchanged frame look live.
-4. Continue #13 documentation/fixtures only. Real KDE portal, monitor, lock/DPMS and remote Vesktop tests remain deferred until the user explicitly grants a safe interactive window.
-5. Keep #10 deferred. All session route operations remain abstract; no live route adapter is supplied in this tranche.
+1. Keep the real `CaptureAudioAdapter` behind #10's single-path ownership contract. Full user-managed VM-SHARE editing/migration remains deferred; do not mutate live routes or guess the route model.
+2. Add pixel-level No signal/frozen-image evidence without turning dormant Hearth into a polling app. Timestamp progress alone must not let an unchanged frame look live; document any unavoidable false-positive boundary.
+3. Finish explicit V4L2 streaming-open ownership and busy/error reporting around the already-owned mpv process, using fake device/process tests only.
+4. Wire the tested login1 inhibitor and composed `MpvCaptureRuntime` into a lazy Hearth Controls action only after the real route adapter and all Start prerequisites exist. Controls may run one bounded discovery; app startup must remain dormant.
+5. Continue #13 documentation/fixtures only. Real KDE portal, monitor, lock/DPMS and remote Vesktop tests remain deferred until the user explicitly grants a safe interactive window.
 6. Wire active controls and Share Output in #12 only after the owned viewer/session operations work. No inert Start/Stop buttons.
 
 No permanent service, timer, polling daemon or idle graph watcher is added. Capture-specific activity should exist only while a user explicitly starts a session.
