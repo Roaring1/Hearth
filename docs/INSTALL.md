@@ -10,9 +10,12 @@ io.github.roaring1.Hearth.desktop
         mkdir -p ~/.local/bin && ln -sf "$PWD/hearth.py" ~/.local/bin/hearth
 
 io.github.roaring1.Hearth.Capture.desktop
-    Separate **Use Capture Card** launcher. Opens the lazy Screen Share setup
-    overview in the existing Hearth instance when available, or starts Hearth
-    directly into that overview. It is a desktop entry, not a terminal workflow.
+    Separate **Use Capture Card** launcher. Opens the read-only Capture
+    Controls window in the existing Hearth instance when available, or starts
+    Hearth directly into Controls. Opening performs one bounded, read-only
+    USB video-device inventory; Refresh explicitly repeats it. It does not
+    start video, query PipeWire, or change audio. Start/Stop are not available
+    until the production session and audio-route cleanup path are connected.
 
 Install both launchers to ~/.local/share/applications/ and run:
     update-desktop-database ~/.local/share/applications

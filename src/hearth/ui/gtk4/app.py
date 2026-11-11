@@ -1719,6 +1719,7 @@ class MixerWindow(Gtk.ApplicationWindow):
         self._setup_window: Gtk.Window | None = None
         self._remap_window: Gtk.Window | None = None
         self._capture_window: Gtk.Window | None = None
+        self._capture_controls_window: Gtk.Window | None = None
         self._menu: Gtk.Popover | None = None
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key)
@@ -2487,6 +2488,15 @@ class MixerWindow(Gtk.ApplicationWindow):
             self._capture_window.refresh()
         self._capture_window.present()
 
+    def open_capture_controls(self) -> None:
+        """Show Capture Controls and perform one explicit device inventory."""
+        if self._capture_controls_window is None:
+            from hearth.ui.gtk4.capture_controls import CaptureControlsWindow
+
+            self._capture_controls_window = CaptureControlsWindow(self)
+        self._capture_controls_window.refresh()
+        self._capture_controls_window.present()
+
     # -- setup -----------------------------------------------------------
     def open_setup(self) -> None:
         """Build the Setup window the first time it is wanted, then show it.
@@ -2583,6 +2593,11 @@ class MixerWindow(Gtk.ApplicationWindow):
         if capture_window is not None:
             capture_window.destroy()
             self._capture_window = None
+        capture_controls_window = getattr(self, "_capture_controls_window", None)
+        if capture_controls_window is not None:
+            capture_controls_window.shutdown()
+            capture_controls_window.destroy()
+            self._capture_controls_window = None
         if getattr(self, "_frame_id", None):
             GLib.source_remove(self._frame_id)
             self._frame_id = 0
@@ -2619,7 +2634,9 @@ class MixerApp(Gtk.Application):
     def do_command_line(self, command_line) -> int:
         """Route desktop-only launch intents through the single GApplication."""
         arguments = command_line.get_arguments()
-        if "--open-capture-overview" in arguments:
+        if "--open-capture-controls" in arguments:
+            self._show_capture_controls()
+        elif "--open-capture-overview" in arguments:
             self._show_capture_overview()
         else:
             self.activate()
@@ -2677,6 +2694,7 @@ class MixerApp(Gtk.Application):
             {
                 "show": self._ctl_show,
                 "capture_overview": self._ctl_capture_overview,
+                "capture_controls": self._ctl_capture_controls,
                 "quit": self._ctl_quit,
                 "unmute": self._ctl_unmute,
                 "get_sinks": self._ctl_sinks,
@@ -2700,6 +2718,18 @@ class MixerApp(Gtk.Application):
     def _ctl_capture_overview(self) -> str:
         """Open the same overview from an existing instance's control socket."""
         GLib.idle_add(self._show_capture_overview)
+        return "ok"
+
+    def _show_capture_controls(self) -> bool:
+        """Open Capture Controls in the existing or lazily-created mixer app."""
+        if self.window is None:
+            self.window = MixerWindow(self)
+        self.window.open_capture_controls()
+        return False
+
+    def _ctl_capture_controls(self) -> str:
+        """Route the desktop launcher to Capture Controls in the main context."""
+        GLib.idle_add(self._show_capture_controls)
         return "ok"
 
     def _ctl_quit(self) -> str:
