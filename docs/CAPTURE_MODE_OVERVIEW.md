@@ -15,7 +15,7 @@ Both paths reuse one lazily-created window. Closing it hides the window; reopeni
 
 ## Overview content
 
-The overview should answer four questions in order, using user language rather than internal PipeWire terminology:
+The overview should answer four questions in order, using user language rather than internal PipeWire terminology. On KDE Wayland, the expected source-selection UI is the desktop capture portal opened by Vesktop, not necessarily a custom grid drawn inside Vesktop; see [the Wayland source research](CAPTURE_MODE_WAYLAND_RESEARCH.md). The installed Flatpak version and local dialog remain unverified.
 
 - **What video is being shared?** Capture will create a separate video-only window titled `Hearth - Share Output`. This is the window to choose in Vesktop, not the whole desktop. Device discovery is not available in the current overview; nothing is opened merely by looking at this page.
 - **What audio will friends hear?** Show the saved Vesktop audio selection as saved intent, not as proof of live signal. At this checkpoint the machine's saved selection is Game + Music directly into Vesktop. The Screen Share master strip is not yet connected to that route. The overview says this plainly and does not imply its fader changes the audio currently sent to friends.

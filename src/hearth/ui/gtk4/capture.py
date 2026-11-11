@@ -87,6 +87,7 @@ class CaptureOverviewWindow(Gtk.Window):
 
         steps = _section("WHEN CAPTURE IS AVAILABLE")
         self.workflow_steps: list[Gtk.Label] = []
+        self.workflow_details: list[Gtk.Label] = []
         for number, heading, detail in (
             (
                 "1",
@@ -96,7 +97,7 @@ class CaptureOverviewWindow(Gtk.Window):
             (
                 "2",
                 "Choose the window in Vesktop",
-                "Open Share Screen and select Hearth - Share Output. Do not share the whole desktop.",
+                "Open Share Screen in Vesktop. In the desktop picker on Wayland, choose Hearth - Share Output, not the whole display.",
             ),
             (
                 "3",
@@ -113,7 +114,9 @@ class CaptureOverviewWindow(Gtk.Window):
             name.add_css_class("listener")
             self.workflow_steps.append(name)
             text.append(name)
-            text.append(_note(detail))
+            detail_label = _note(detail)
+            self.workflow_details.append(detail_label)
+            text.append(detail_label)
             row.append(text)
             steps.append(row)
         steps.append(

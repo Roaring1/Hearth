@@ -710,10 +710,10 @@ This section is the current handoff for the Screen Share overview work and super
 
 ### Verification and visual review
 
-- `./scripts/check.sh` passed after the overview implementation and collapsed-strip regression: **519 tests**, 42 upstream GTK/PyGObject deprecation warnings, Ruff lint/format, mypy (34 source files), legacy compile, desktop entry, AppStream and ShellCheck. AppStream reported its existing non-fatal uppercase application-ID pedantic notice. A focused production GTK rerun also passes after adding empty/unknown saved-selection refresh cases; rerun the full gate after the final commit.
+- `./scripts/check.sh` passed after the overview implementation and collapsed-strip regression: **519 tests**, 43 upstream GTK/PyGObject deprecation warnings, Ruff lint/format, mypy (34 source files), legacy compile, desktop entry, AppStream and ShellCheck. AppStream reported its existing non-fatal uppercase application-ID pedantic notice. A focused production GTK rerun also passes after adding empty/unknown saved-selection refresh cases; rerun the full gate after the final commit.
 - The production GTK overview test verifies both accessible entry points, one shared lazy window, live refresh of saved selection intent (Game + Music, empty selection and an unknown future alias), the three workflow steps, no capture worker/device fd, and opening the overview while the Screen Share strip is collapsed.
-- Isolated 1600x1200 Xvfb rendered the production mixer and overview together. The overview capture was 793x494 and was visually inspected. It has a separate window, concise sections for Video Input, Audio Friends Hear and the Vesktop workflow, and no inert action buttons.
-- The latest full local gate on the current implementation passes **519 tests**, 31 upstream GTK/PyGObject deprecation warnings, Ruff, formatting (95 files), mypy (34 source files), legacy compilation, desktop-entry/AppStream validation and ShellCheck. AppStream's existing uppercase application-ID pedantic warning remains non-fatal. Hosted CI for the new overview branch has not yet been verified.
+- Isolated 1600x1200 Xvfb rendered the production mixer and overview together. The overview capture was 793x494 and was visually inspected. It has a separate window, concise sections for Video Input, What Friends Hear and the Vesktop workflow, and no inert action buttons.
+- The latest full local gate on the current implementation passes **519 tests**, 43 upstream GTK/PyGObject deprecation warnings, Ruff, formatting (96 files), mypy (34 source files), legacy compilation, desktop-entry/AppStream validation and ShellCheck. AppStream's existing uppercase application-ID pedantic warning remains non-fatal. Hosted CI for the new overview branch has not yet been verified.
 
 ### Current branches and PR dependency
 
@@ -721,11 +721,20 @@ This section is the current handoff for the Screen Share overview work and super
 - The overview implementation is on `feature/screen-share-overview-2026-11-10`, based on that PR #15 head. Keep it as a separate stacked change; do not merge PRs or rebase the existing stack without deliberate review.
 - The parent stack still includes PR #1 (GTK4 foundation), PR #8 (LPD8 layout), and PR #15 (Screen Share strip). The PRs remain unmerged and require deliberate integration review.
 
+### No-card Wayland/mpv source research - 2026-11-10
+
+- New `docs/CAPTURE_MODE_WAYLAND_RESEARCH.md` records current upstream source findings and clearly separates them from unrun desktop observations.
+- Current Vesktop `main` detects Wayland, calls Electron `desktopCapturer.getSources` with `window` + `screen`, receives the one source selected through Linux/PipeWire, then skips Vesktop's own multi-source grid. Expected Wayland user flow is Vesktop Share Screen -> KDE/system portal picker -> select `Hearth - Share Output`. Electron documents the single-source PipeWire behavior; the installed user's Vesktop Flatpak version is still unknown and needs later confirmation.
+- Current upstream Vesktop screen-share code does not pass Electron's persistent restore token options. Assume a fresh portal choice on each new share until the installed build proves otherwise. Hearth must not automate or retain screen-capture consent.
+- mpv docs establish useful candidates (`--title`, `--osc=no`, `--osd-level=0`, `--cursor-autohide=always`, `--input-builtin-bindings=no`, `--ao=null`). They also warn that `--screen` cannot place windows on Wayland, minimizing may not be reversible, and hidden rendering can require `--force-render`. Do not turn these into final arguments until the adapter and real matrix verify them. `--force-render` stays off by default pending performance tests.
+- This research is from upstream source/manuals only. No Vesktop, portal, mpv, display or remote-share test was run on the user's PC.
+
 ### Next work without capture hardware
 
-1. Finish isolated UI tests and review the overview wording/layout. Preserve the current direct-routing warning.
-2. Add more no-device UI fixtures: empty saved selection, unknown saved alias, and overview open/reopen while Share is collapsed.
-3. Advance #13 through design review and fixture work only. Do not attempt secondary Wayland or real Vesktop/monitor tests during the active desktop session.
-4. Build the fake V4L2/PipeWire provider contract and transactional session tests for #11 without touching live devices.
-5. Revisit #10 only when the user wants the real user-managed source editor and safe migration.
-6. Implement active controls and the clean viewer in #12 only after the core has real operations to wire. No fake Start/Stop buttons.
+1. Keep the no-card overview and entry points stable; preserve direct-routing caveat.
+2. Design the #11 fake-device provider/session interfaces and implement deterministic fixtures/contracts, separated from a physical provider that cannot be accepted until hardware exists.
+3. Add parser fixtures for V4L2 modes and stable USB identity; prove ambiguous video/audio associations fail closed.
+4. Add lifecycle orchestration tests with fake device, viewer and route adapters. Inject failure after each startup stage and verify reverse cleanup; no real process/device/route.
+5. Continue #13 source/fixture work; real portal/Vesktop/monitor tests wait for an explicitly safe interactive session.
+6. Revisit #10 only when the user wants the full user-managed source editor and safe migration.
+7. Wire active controls and the viewer in #12 only after #11 provides real operations. No fake Start/Stop buttons.
