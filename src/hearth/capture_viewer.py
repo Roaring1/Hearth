@@ -1,12 +1,16 @@
-"""Pure mpv command construction for the future video-only capture viewer.
+"""mpv command construction and explicit start adapter for Capture Mode.
 
-No process is started here. The process owner/parent-death adapter is a
-separate concern and must be in place before this argv is ever launched.
+Building argv is pure. `MpvCaptureViewer.start()` launches only when called
+through the owned `proc.spawn_owned` boundary; constructing this adapter or
+importing this module starts no process and probes no device.
 """
 
 from __future__ import annotations
 
-from hearth.capture_session import ResolvedCaptureDevice
+from collections.abc import Callable, Sequence
+
+from hearth import proc
+from hearth.capture_session import ResolvedCaptureDevice, ViewerHandle
 from hearth.errors import HearthError
 
 
@@ -73,3 +77,30 @@ def build_mpv_viewer_argv(
         argv.append("--fullscreen")
     argv.extend(("--", f"av://v4l2:{device.video_node_path}"))
     return argv
+
+
+class MpvCaptureViewer:
+    """The capture runtime's mpv start_viewer adapter.
+
+    Construction is inert. Calling `start()` is the explicit session action
+    that launches through `proc.spawn_owned`; the adapter itself does not probe
+    devices or decide when a first frame has arrived.
+    """
+
+    def __init__(
+        self,
+        *,
+        executable: str = "mpv",
+        fullscreen: bool = True,
+        process_factory: Callable[[Sequence[str]], ViewerHandle] = proc.spawn_owned,
+    ) -> None:
+        self._executable = executable
+        self._fullscreen = fullscreen
+        self._process_factory = process_factory
+
+    def start(self, device: ResolvedCaptureDevice) -> ViewerHandle:
+        """Build the explicit V4L2 command and return its owned process handle."""
+        argv = build_mpv_viewer_argv(
+            device, executable=self._executable, fullscreen=self._fullscreen
+        )
+        return self._process_factory(argv)

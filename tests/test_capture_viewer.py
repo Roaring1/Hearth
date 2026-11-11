@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from hearth.capture_session import ResolvedCaptureDevice, UsbIdentity, VideoMode
-from hearth.capture_viewer import UnsupportedCaptureFormat, build_mpv_viewer_argv
+from hearth.capture_viewer import (
+    MpvCaptureViewer,
+    UnsupportedCaptureFormat,
+    build_mpv_viewer_argv,
+)
 
 
 def _device(pixel_format: str = "MJPG") -> ResolvedCaptureDevice:
@@ -78,3 +82,25 @@ def test_yv12_fails_closed_without_a_verified_matching_pixel_format() -> None:
 def test_executable_path_is_trimmed_before_argv_construction() -> None:
     argv = build_mpv_viewer_argv(_device(), executable="  /usr/bin/mpv  ")
     assert argv[0] == "/usr/bin/mpv"
+
+
+def test_mpv_viewer_adapter_builds_and_delegates_to_owned_process_factory() -> None:
+    calls: list[list[str]] = []
+
+    class FakeHandle:
+        def stop(self) -> None:
+            calls.append(["STOP"])
+
+    def factory(argv):
+        calls.append(list(argv))
+        return FakeHandle()
+
+    adapter = MpvCaptureViewer(executable="/usr/bin/mpv", fullscreen=False, process_factory=factory)
+    handle = adapter.start(_device())
+
+    assert isinstance(handle, FakeHandle)
+    assert calls[0][0] == "/usr/bin/mpv"
+    assert calls[0][-2:] == ["--", "av://v4l2:/dev/video42"]
+    assert "--fullscreen" not in calls[0]
+    handle.stop()
+    assert calls[-1] == ["STOP"]

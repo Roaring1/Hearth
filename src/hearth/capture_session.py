@@ -135,7 +135,7 @@ class ResolvedCaptureDevice:
 class ViewerHandle(Protocol):
     """Owned viewer process; stop must also release the viewer's device handle."""
 
-    def stop(self) -> None: ...
+    def stop(self) -> int | None: ...
 
 
 class AudioRouteLease(Protocol):
