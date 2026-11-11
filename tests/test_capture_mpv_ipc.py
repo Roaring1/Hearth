@@ -589,6 +589,8 @@ def test_stream_monitor_clears_no_signal_when_time_pos_resumes(tmp_path: Path) -
     process = FakeProcess()
     viewer = _viewer(tmp_path, process=process)
     result: list[int] = []
+    observed: list[bool] = []
+    viewer.set_no_signal_callback(observed.append)
 
     with FakeFrameMonitorServer(
         viewer.ipc_socket, process, [0.1], hold_open=True, resume_after_no_signal=True
@@ -607,6 +609,7 @@ def test_stream_monitor_clears_no_signal_when_time_pos_resumes(tmp_path: Path) -
     assert result == [0]
     assert viewer.no_signal is False
     assert server.no_signal_transitions == [True, False]
+    assert observed == [True, False]
 
 
 def test_stream_monitor_exposes_validated_pixel_health_without_failing_the_stream(

@@ -8,6 +8,8 @@ exercised with fakes on a machine with no capture card or audio graph.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import StrEnum
 from threading import RLock, Thread, current_thread
@@ -242,6 +244,49 @@ class CaptureSessionManager:
         self._routes: AudioRouteLease | None = None
         self._inhibitor: IdleInhibitorLease | None = None
         self._viewer_watcher: Thread | None = None
+        self._listeners: set[Callable[[SessionSnapshot], None]] = set()
+
+    def subscribe_no_signal(
+        self,
+        listener: Callable[[SessionSnapshot], None],
+        *,
+        emit_current: bool = True,
+    ) -> Callable[[], None]:
+        """Subscribe to no-signal transitions; return an unsubscribe function.
+
+        Lifecycle changes are returned synchronously by start()/stop(). This
+        subscription reports only asynchronous viewer no-signal changes.
+        Callbacks run on the viewer monitor thread. GTK callers must marshal
+        them to the main context (for example with GLib.idle_add). No timer or
+        background watcher is created by subscribing.
+        """
+        with self._lock:
+            self._listeners.add(listener)
+            current = self.snapshot() if emit_current else None
+        if current is not None:
+            self._notify_one(listener, current)
+
+        def unsubscribe() -> None:
+            with self._lock:
+                self._listeners.discard(listener)
+
+        return unsubscribe
+
+    @staticmethod
+    def _notify_one(listener: Callable[[SessionSnapshot], None], snapshot: SessionSnapshot) -> None:
+        # An observer is never allowed to affect capture ownership or cleanup.
+        with suppress(Exception):
+            listener(snapshot)
+
+    def _viewer_no_signal_changed(self, _value: bool) -> None:
+        with self._lock:
+            if self._state is not SessionState.RUNNING or self._viewer is None:
+                return
+            self._revision += 1
+            snapshot = self.snapshot()
+            listeners = tuple(self._listeners)
+        for listener in listeners:
+            self._notify_one(listener, snapshot)
 
     def snapshot(self) -> SessionSnapshot:
         """Return a copy of UI-safe lifecycle state."""
@@ -284,6 +329,9 @@ class CaptureSessionManager:
                 stage = SessionStage.START_VIEWER
                 self._stage = stage
                 self._viewer = self._runtime.start_viewer(device)
+                set_no_signal_callback = getattr(self._viewer, "set_no_signal_callback", None)
+                if callable(set_no_signal_callback):
+                    set_no_signal_callback(self._viewer_no_signal_changed)
 
                 stage = SessionStage.APPLY_AUDIO
                 self._stage = stage

@@ -160,7 +160,7 @@ local function show_no_signal()
     no_signal_overlay.res_x = width
     no_signal_overlay.res_y = height
     no_signal_overlay.data = string.format(
-        "{\\an5\\pos(%d,%d)\\fs%d\\bord3\\shad0\\1c&HFFFFFF&\\3c&H000000&}No signal",
+        "{\\an5\\pos(%d,%d)\\fs%d\\bord3\\shad0\\1c&HFFFFFF&\\3c&H000000&}Video stopped updating",
         center_x, center_y, font_size
     )
     no_signal_overlay:update()

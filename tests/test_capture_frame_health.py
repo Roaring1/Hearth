@@ -38,7 +38,9 @@ def test_lua_probe_is_event_driven_and_never_persists_raw_screenshots() -> None:
     assert 'mp.set_property_native("user-data/hearth/frame-health"' in FRAME_HEALTH_LUA
     assert 'mp.observe_property("user-data/hearth/no-signal", "bool"' in FRAME_HEALTH_LUA
     assert 'mp.create_osd_overlay("ass-events")' in FRAME_HEALTH_LUA
-    assert "No signal" in FRAME_HEALTH_LUA
+    assert "Video stopped updating" in FRAME_HEALTH_LUA
+    assert r"\\an5\\pos(%d,%d)" in FRAME_HEALTH_LUA
+    assert "No signal" not in FRAME_HEALTH_LUA
     assert "local SAMPLE_INTERVAL = 2.0" in FRAME_HEALTH_LUA
     assert "mp.add_timeout" not in FRAME_HEALTH_LUA
     assert "mp.add_periodic_timer" not in FRAME_HEALTH_LUA

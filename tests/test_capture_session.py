@@ -47,6 +47,15 @@ class FakeViewer:
     def monitor_until_exit(self) -> int:
         return self.wait()
 
+    def set_no_signal_callback(self, callback) -> None:
+        self._no_signal_callback = callback
+
+    def set_no_signal(self, value: bool) -> None:
+        self.no_signal = value
+        callback = getattr(self, "_no_signal_callback", None)
+        if callback is not None:
+            callback(value)
+
     def stop(self) -> int:
         self.events.append("stop_viewer")
         if self.stop_failures:
@@ -400,3 +409,39 @@ def test_start_failure_preserves_typed_audio_candidates_for_user_choice_ui() -> 
     assert caught.value.cause.status is AudioAssociationStatus.AMBIGUOUS
     assert caught.value.cause.candidates == (first, second)
     assert manager.snapshot().state is SessionState.DORMANT
+
+
+def test_no_signal_events_publish_snapshots_and_unsubscribe_cleanly() -> None:
+    runtime = FakeRuntime()
+    manager = CaptureSessionManager(runtime)
+    snapshots = []
+    unsubscribe = manager.subscribe_no_signal(snapshots.append)
+    assert snapshots[-1].state is SessionState.DORMANT
+
+    manager.start(PLAN)
+    assert runtime.viewer is not None
+    running_revision = manager.snapshot().revision
+    runtime.viewer.set_no_signal(True)
+    assert snapshots[-1].state is SessionState.RUNNING
+    assert snapshots[-1].no_signal is True
+    assert snapshots[-1].revision == running_revision + 1
+
+    runtime.viewer.set_no_signal(False)
+    assert snapshots[-1].no_signal is False
+    count = len(snapshots)
+    unsubscribe()
+    runtime.viewer.set_no_signal(True)
+    assert len(snapshots) == count
+    assert manager.snapshot().no_signal is True
+    manager.stop()
+
+
+def test_no_signal_observer_exception_cannot_break_viewer_state() -> None:
+    runtime = FakeRuntime()
+    manager = CaptureSessionManager(runtime)
+    manager.subscribe_no_signal(lambda _snapshot: (_ for _ in ()).throw(RuntimeError("UI closed")))
+    manager.start(PLAN)
+    assert runtime.viewer is not None
+    runtime.viewer.set_no_signal(True)
+    assert manager.snapshot().no_signal is True
+    manager.stop()
