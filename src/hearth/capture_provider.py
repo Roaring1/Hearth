@@ -20,6 +20,7 @@ from hearth.capture_devices import (
     parse_v4l2_capabilities,
     parse_video_device_listing,
 )
+from hearth.capture_session import UsbIdentity
 from hearth.errors import CommandError, HearthError
 
 
@@ -30,6 +31,7 @@ class CaptureProbeIssue:
     device_path: str
     stage: str
     message: str
+    identity: UsbIdentity | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +83,19 @@ class V4L2InventoryProvider:
                 udev_text = self._run(
                     ["udevadm", "info", "--query=property", f"--name={device_path}"]
                 )
+                bus = next(
+                    (
+                        line.partition("=")[2].strip().lower()
+                        for line in udev_text.splitlines()
+                        if line.startswith("ID_BUS=")
+                    ),
+                    "",
+                )
+                # Known non-USB devices (for example an integrated PCI
+                # webcam) are not capture-card candidates and do not make the
+                # USB inventory incomplete. Unknown bus/identity remains an issue.
+                if bus and bus != "usb":
+                    continue
                 udev = parse_udev_video_properties(udev_text)
             except (CommandError, ValueError) as exc:
                 issues.append(CaptureProbeIssue(device_path, "USB identity", str(exc)))
@@ -90,7 +105,9 @@ class V4L2InventoryProvider:
                 caps_text = self._run(["v4l2-ctl", f"--device={device_path}", "--all"])
                 capabilities = parse_v4l2_capabilities(caps_text)
             except (CommandError, ValueError) as exc:
-                issues.append(CaptureProbeIssue(device_path, "Device Caps", str(exc)))
+                issues.append(
+                    CaptureProbeIssue(device_path, "Device Caps", str(exc), udev.identity)
+                )
                 continue
 
             formats_text = ""
@@ -100,12 +117,16 @@ class V4L2InventoryProvider:
                         ["v4l2-ctl", f"--device={device_path}", "--list-formats-ext"]
                     )
                 except CommandError as exc:
-                    issues.append(CaptureProbeIssue(device_path, "Video formats", str(exc)))
+                    issues.append(
+                        CaptureProbeIssue(device_path, "Video formats", str(exc), udev.identity)
+                    )
 
             try:
                 node = make_capture_node(device_path, card_label, udev, capabilities, formats_text)
             except ValueError as exc:
-                issues.append(CaptureProbeIssue(device_path, "Video formats", str(exc)))
+                issues.append(
+                    CaptureProbeIssue(device_path, "Video formats", str(exc), udev.identity)
+                )
                 continue
 
             nodes.append(node)
@@ -115,6 +136,7 @@ class V4L2InventoryProvider:
                         device_path,
                         "Video formats",
                         "No discrete capture modes were reported by the driver",
+                        udev.identity,
                     )
                 )
 
