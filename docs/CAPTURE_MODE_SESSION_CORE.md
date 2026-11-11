@@ -1,6 +1,6 @@
 # Capture Mode session and adapter contract
 
-**Checkpoint: 2026-11-11.** This is the current no-card engineering checkpoint. The transaction coordinator, fixture parsers, one-shot inventory adapters, owned viewer process, private mpv IPC first-frame check and active-session exit watcher exist. No real capture session has been started. The one-shot providers and viewer adapter have not been invoked against a capture card or the live PipeWire graph.
+**Checkpoint: 2026-11-11.** This is the current no-card engineering checkpoint. The transaction coordinator, fixture parsers, one-shot inventory adapters, V4L2 Start-time resolver, composed mpv runtime, owned viewer process, private IPC first-frame check and active-session timestamp monitor exist. No real capture session has been started. The one-shot providers, resolver and viewer adapter have not been invoked against a capture card or the live PipeWire graph.
 
 ## Implemented
 
@@ -31,7 +31,7 @@ On failure it attempts cleanup in reverse ownership order: viewer/device handle,
 - It requires `ID_BUS=usb` and per-node Device Caps. Aggregate card capabilities alone are insufficient. Metadata-only nodes are excluded. Stepwise/continuous mode ranges are not guessed.
 - Nodes are grouped by USB identity. A single eligible capture node can be selected automatically; multiple eligible nodes require explicit user choice.
 - `hearth.capture_provider.V4L2InventoryProvider` performs one bounded sequence when explicitly called: list nodes, resolve each node's udev properties, query per-node caps, then enumerate formats only for capture-capable nodes. A top-level listing failure aborts; per-node failures are returned as issues without substituting another node.
-- `hearth.capture_runtime.V4L2CaptureResolver.probe_device()` is the Start-time seam: it takes exactly one inventory snapshot, selects by saved stable USB identity, requires one eligible capture node and the exact enumerated preferred mode. Any incomplete inventory or ambiguous node selection fails closed. It returns only the current ephemeral `/dev/videoN` to the active operation and does not persist it.
+- `hearth.capture_runtime.V4L2CaptureResolver.probe_device()` is the Start-time seam: it takes exactly one inventory snapshot, selects by saved stable USB identity, requires one eligible capture node and the exact enumerated preferred mode. An issue with unknown USB identity or the selected device's identity fails closed; a probe issue positively tied to a different USB device does not block the selected card. Ambiguous node selection still requires explicit choice. It returns only the current ephemeral `/dev/videoN` to the active operation and does not persist it.
 - Each `v4l2-ctl` ioctl command transiently opens its node and closes on process exit. Hearth does not open/hold a streaming handle in this inventory/resolution path. The provider/resolver have not been invoked on the user's machine; only fake inventory/process-runner tests exist. The absent GUV302G's node list, permissions, busy behavior and modes remain unknown.
 
 ### PipeWire audio inventory and USB association
@@ -41,6 +41,12 @@ On failure it attempts cleanup in reverse ownership order: viewer/device handle,
 - Video/audio association prefers matching USB serial + VID/PID. When serial is missing on either side, it uses normalized physical USB parent path. Friendly names and numeric ALSA/PipeWire IDs are not identity.
 - Outcomes are `unknown`, `none`, `matched`, and `ambiguous`. Missing/unverifiable metadata makes the inventory incomplete/unknown; multiple matching audio endpoints require user choice.
 - Both parser and provider have synthetic JSON/fake-runner tests. The provider has not been run against the user's live graph. The actual GUV302G audio source topology and whether its video/audio functions expose the same udev identity remain unknown.
+
+### Composed session runtime: `hearth.capture_runtime.MpvCaptureRuntime`
+
+`MpvCaptureRuntime` now implements the `CaptureRuntime` protocol by composing `V4L2CaptureResolver`, `MpvCaptureViewer`, and two mandatory injected interfaces: `CaptureAudioAdapter` (validate, acquire/remove a session route lease, verify) and `CaptureIdleInhibitorAdapter` (acquire/release a lease). It delegates first-frame readiness to `MpvViewerProcess.wait_for_first_frame()`. Construction is inert; only `CaptureSessionManager.start()` invokes the resolver and then the adapters in the defined transaction order.
+
+The composition is exercised with fake inventory, viewer, route and inhibitor adapters, including first-frame failure rollback. It does **not** implement live audio safety/route mutation or a real idle inhibitor, and it is not yet connected to the Hearth GTK Controls/Start action. Those adapters remain required before this composition can become an operational capture runtime.
 
 ### mpv command construction and owned process
 
@@ -68,18 +74,19 @@ These checks prove command shape, local IPC first-frame/progress behavior with s
 
 ## Not implemented yet
 
-- Connect `MpvCaptureViewer.start()` to a concrete `CaptureRuntime.start_viewer()` implementation and `CaptureSessionManager`. The adapter already delegates to `proc.spawn_owned`, but no runtime currently calls it and no mpv process has been started.
-- The active viewer/streaming device open and No signal UI integration. First-frame and active-session timestamp-stall monitoring now exist in `MpvViewerProcess`, but no concrete `CaptureRuntime` calls the viewer adapter yet. Inventory ioctls must close before the viewer takes the streaming open; one component must clearly own the active device handle.
-- A real idle-inhibit lease adapter and its Stop/crash cleanup.
-- A live audio safety/route adapter, owner metadata or `pw-dump` route verification. Full user-managed VM-SHARE source editing and single-path migration remain explicitly deferred in #10. No live audio routes are changed by this work.
-- Active Capture Controls/Share Output UI integration. Do not show Start/Stop until the underlying operations exist.
+- Real `CaptureAudioAdapter` implementation: selected-source validation against live PipeWire metadata, safe session-scoped VM-SHARE lease creation/removal, owner metadata and post-route verification. Full user-managed VM-SHARE source editing and one-path migration remain explicitly deferred in #10; this work has not changed live audio routes.
+- Real `CaptureIdleInhibitorAdapter` implementation and its Stop/crash cleanup.
+- Connect the composed `MpvCaptureRuntime` to the Hearth GTK Controls/Start action. No UI path constructs or starts it yet.
+- The active V4L2 streaming open, device-fd ownership, pixel-level No signal/frozen-image detection and user-facing status. Timestamp progress is not proof that pixel content changes. Inventory ioctls must close before the viewer takes the streaming open.
+- Active Capture Controls/Share Output UI integration. Do not show Start/Stop until the live audio, inhibitor, device and UI paths exist.
 - Real GUV302G discovery, audio association, modes, USB speed, signal, A/V sync and long-run soak results.
 
 ## Next no-card work
 
-1. Connect `MpvCaptureViewer.start()` and `MpvViewerProcess.wait_for_first_frame()` to a concrete `CaptureRuntime` and the session manager. First-frame gating exists, but remains unwired at the runtime layer.
-2. Wire the existing event-driven `time-pos` stall monitor into the concrete runtime, and add clean No signal feedback; do not leave a frozen last frame looking live.
-3. Make the UI-safe wrapper around the one-shot V4L2/PipeWire inventory adapters explicit: no automatic open on app launch, one bounded check on entering Capture Controls, and clear `unknown` vs. `not found` results.
+1. Implement a live fail-closed `CaptureAudioAdapter` using the one-shot PipeWire snapshot and stable USB identity. Keep route mutation behind #10's single-path ownership contract.
+2. Implement and test a real idle-inhibitor lease adapter with bounded release/retry behavior.
+3. Connect the composed `MpvCaptureRuntime` to a lazy Hearth Controls action. Controls may run one bounded discovery; app startup must remain dormant.
+4. Add pixel-level No signal/frozen-image detection. Timestamp progress alone must not let an unchanged frame look live.
 4. Continue #13 documentation/fixtures only. Real KDE portal, monitor, lock/DPMS and remote Vesktop tests remain deferred until the user explicitly grants a safe interactive window.
 5. Keep #10 deferred. All session route operations remain abstract; no live route adapter is supplied in this tranche.
 6. Wire active controls and Share Output in #12 only after the owned viewer/session operations work. No inert Start/Stop buttons.

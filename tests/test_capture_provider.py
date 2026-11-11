@@ -82,7 +82,7 @@ def test_discovery_is_one_shot_read_only_and_groups_video_and_metadata_nodes() -
     assert len(inventory.issues) == 0
 
 
-def test_node_probe_failure_is_reported_without_guessing_another_node() -> None:
+def test_known_non_usb_node_is_excluded_without_incomplete_usb_inventory() -> None:
     def runner(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         if argv == ["v4l2-ctl", "--list-devices"]:
             return subprocess.CompletedProcess(argv, 0, LISTING, "")
@@ -101,9 +101,7 @@ def test_node_probe_failure_is_reported_without_guessing_another_node() -> None:
 
     assert len(inventory.capture_nodes) == 1
     assert inventory.capture_nodes[0].device_path == "/dev/video4"
-    assert len(inventory.issues) == 1
-    assert inventory.issues[0].device_path == "/dev/video5"
-    assert inventory.issues[0].stage == "USB identity"
+    assert inventory.issues == ()
 
 
 def test_top_level_listing_timeout_and_missing_binary_are_discovery_errors() -> None:
