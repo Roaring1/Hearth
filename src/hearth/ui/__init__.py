@@ -13,10 +13,12 @@ drags in ``hearth.legacy_core``.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 __all__ = ["run_app"]
 
 
-def run_app() -> int:
+def run_app(argv: Sequence[str] | None = None) -> int:
     """Run the mixer.
 
     The GTK4 module is imported here, not at package scope, so that merely
@@ -24,4 +26,4 @@ def run_app() -> int:
     """
     from hearth.ui.gtk4.app import main
 
-    return main([])
+    return main(list(argv) if argv is not None else [])
