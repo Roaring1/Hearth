@@ -19,7 +19,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 from hearth.capture_frame_health import FrameHealthSnapshot, parse_frame_health_payload
 from hearth.errors import HearthError
@@ -45,6 +45,66 @@ class ViewerReadinessTimeout(HearthError):
 
 class ViewerExitedBeforeFirstFrame(HearthError):
     """The owned mpv process exited before a decoded frame was available."""
+
+
+class ViewerInputOpenError(HearthError):
+    """mpv reported a classified input/device-open failure before first frame."""
+
+    _USER_MESSAGES: ClassVar[dict[str, str]] = {
+        "device_busy": (
+            "The capture device is already in use. Close other apps using it and try again."
+        ),
+        "permission_denied": (
+            "Hearth cannot access the capture device. Check its device permissions."
+        ),
+        "device_unavailable": (
+            "The selected capture device is no longer available. Reconnect it and try again."
+        ),
+        "unsupported_mode": "The selected capture device rejected the requested video mode.",
+        "io_error": "The capture device reported an input/output error.",
+        "open_failed": "mpv could not open the selected capture input.",
+    }
+
+    def __init__(self, category: str, detail: str, reason: str = "error") -> None:
+        self.category = category if category in self._USER_MESSAGES else "open_failed"
+        self.detail = " ".join(detail.split())[:240]
+        self.reason = reason[:40]
+        self.user_message = self._USER_MESSAGES[self.category]
+        super().__init__(self.user_message)
+
+
+def classify_mpv_input_error(reason: object, file_error: object) -> ViewerInputOpenError | None:
+    """Map mpv's end-file error into a stable, user-actionable category."""
+    reason_text = reason if isinstance(reason, str) else "error"
+    detail = file_error if isinstance(file_error, str) else ""
+    detail = " ".join(detail.split())[:240]
+    if reason_text != "error" and not detail:
+        return None
+    normalized = detail.casefold()
+    if any(
+        token in normalized
+        for token in ("device or resource busy", "resource busy", "device busy", "ebusy")
+    ):
+        category = "device_busy"
+    elif any(
+        token in normalized
+        for token in ("permission denied", "operation not permitted", "eacces", "eperm")
+    ):
+        category = "permission_denied"
+    elif any(
+        token in normalized for token in ("no such file", "no such device", "not found", "enoent")
+    ):
+        category = "device_unavailable"
+    elif any(
+        token in normalized
+        for token in ("not a video capture device", "invalid argument", "unsupported")
+    ):
+        category = "unsupported_mode"
+    elif any(token in normalized for token in ("input/output error", "i/o error", "eio")):
+        category = "io_error"
+    else:
+        category = "open_failed"
+    return ViewerInputOpenError(category, detail or "mpv reported an input error", reason_text)
 
 
 class ViewerStreamStalled(HearthError):
@@ -331,7 +391,16 @@ class MpvViewerProcess:
                 response = json.loads(raw)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise ViewerIPCError("mpv sent invalid JSON IPC data") from exc
-            if not isinstance(response, Mapping) or response.get("request_id") != request_id:
+            if not isinstance(response, Mapping):
+                continue
+            if response.get("event") == "end-file":
+                input_error = classify_mpv_input_error(
+                    response.get("reason"), response.get("file_error")
+                )
+                if input_error is not None:
+                    raise input_error
+                continue
+            if response.get("request_id") != request_id:
                 # Property notifications or unrelated messages are not replies
                 # to the outstanding request; keep the connection and wait.
                 continue

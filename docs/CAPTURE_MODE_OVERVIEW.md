@@ -59,3 +59,16 @@ The real Wayland portal/Vesktop, monitor-input, lock/DPMS and remote-share matri
 - [#12](https://github.com/Roaring1/Hearth/issues/12): active controls and clean viewer - later.
 - [#10](https://github.com/Roaring1/Hearth/issues/10): configurable source editor and one-path migration - explicitly deferred for now.
 - [#14](https://github.com/Roaring1/Hearth/issues/14): post-V1 parking lot.
+
+## Follow-up status - 2026-11-11
+
+The first UI slice is implemented in draft PR #17 (`a19d163`) and hosted CI passed all six jobs. The main mixer has a persistent **SCREEN SHARE** entry and the Screen Share strip has a clear **SET UP** action; both open the same lazy overview. This is the obvious first-time-user entry point, not a command-line workflow.
+
+The no-card session-core work is in draft PR #18. It now has fixture-backed device/route resolution, transactional session ownership, an owned mpv Share Output process with first-frame readiness, timestamp-stall monitoring, private frame-health metadata and a lazy logind inhibitor adapter. The mpv child is the V4L2 FD owner; no second Hearth-side device FD is opened. Common mpv input-open errors are mapped to user-actionable categories. These are testable software contracts, not proof of GUV302G hardware behavior.
+
+The eventual two-window contract remains unchanged:
+
+- **Capture Controls** is a separate movable Hearth window, never part of the shared picture. It will own device status, Start/Stop, audio mode, mute and cleanup feedback. A separate **Use Capture Card** desktop shortcut should open this same Controls window, including through single-instance routing if Hearth is already running. Users should not need a terminal or CLI.
+- **Hearth - Share Output** is a clean fullscreen video-only window. It has no controls, menus, OSD, branding or status text; only the agreed plain No signal card may appear when the stream actually stops.
+
+There is still no production Start/Stop path, no real CaptureAudioAdapter or route mutation, no user-facing frame-health overlay, no active GUV302G test and no live Wayland/Vesktop portal test. Do not add inert controls. Full user-managed VM-SHARE editing/migration remains deferred in #10, and the interactive KDE/Vesktop matrix remains deferred in #13 until a safe test window is explicitly arranged.

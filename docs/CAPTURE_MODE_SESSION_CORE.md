@@ -56,6 +56,12 @@ The composition is exercised with fake inventory, viewer, route and inhibitor ad
 
 Release is idempotent. The lease clears its owned-FD slot before calling `close()` and never retries the same descriptor number after an error: Linux releases the descriptor early, so it may already have been reused by another thread. `EBADF`/`EINTR` are also treated as released. A reported close error is surfaced once; the manager's subsequent Stop retry is a no-op rather than a second `close()` on a potentially reused FD. The adapter fails closed if the system bus, logind call, returned handle, or FD validation fails. Seven fake-FD tests cover headless construction without PyGObject, lazy acquisition, the exact `idle:sleep`/`block` request, private bus connection cleanup, close-on-exec, failure cleanup, idempotent release and no-retry-on-close-error. No live system-bus call has been made, and the adapter is not yet wired into a GTK Start action. See [Linux close(2)](https://man7.org/linux/man-pages/man2/close.2.html) for the descriptor-reuse caveat.
 
+### V4L2 stream ownership and first-frame open errors
+
+The V4L2 device FD is intentionally opened and held by the owned mpv child, not by a second Hearth-side FD. `MpvViewerProcess` is the lifetime lease: it owns the child-process handle, mpv opens the selected `av://v4l2:` input, and Stop reaps mpv before deleting the session IPC directory. This avoids double-opening a driver that may enforce exclusive access. First-frame readiness requires an actual I/P/B decoded picture type, positive `video-params` dimensions, and `vo-configured=true`; a PID or input-open alone is not considered a successful stream. The one-shot inventory probe has already closed its device handles before this viewer start.
+
+During first-frame readiness, mpv `end-file` IPC events with `reason=error` are now mapped into stable categories: `device_busy`, `permission_denied`, `device_unavailable`, `unsupported_mode`, `io_error`, or generic `open_failed`. The UI can present a concise action to the user while retaining a bounded technical detail for diagnostics. Fake-IPC tests cover each category and the event-to-exception path. No physical GUV302G stream has been opened, so actual driver error strings and exclusive-open behavior remain hardware validation items.
+
 ### sampled-frame content health probe
 
 `MpvCaptureViewer.start()` now writes a private `frame-health.lua` into the same 0700 session runtime directory as mpv's IPC socket and passes it through `--script`. The Lua probe observes mpv `time-pos` changes and, at most once every two seconds, samples a 32x18 grid from the in-memory `screenshot-raw` video frame. It hashes only sampled RGB bytes and publishes a small `user-data/hearth/frame-health` object; it never writes screenshots or raw pixel data to disk and never creates a timer. The script exists only for the active owned mpv process and is removed with the IPC directory on Stop.
@@ -93,7 +99,7 @@ These checks prove command shape, local IPC first-frame/progress behavior with s
 - Real `CaptureAudioAdapter` implementation: route-guard validation against live PipeWire metadata, safe session-scoped VM-SHARE lease creation/removal, owner metadata and post-route verification. USB audio identity discovery now exists as a fixture-backed, one-shot selector only. Full user-managed VM-SHARE source editing and one-path migration remain explicitly deferred in #10; this work has not changed live audio routes.
 - Wire the tested `Login1IdleInhibitorAdapter` into the future GTK Start path. The adapter itself is implemented, but no live logind call has been made and no active Controls window uses it yet.
 - Connect the composed `MpvCaptureRuntime` to the Hearth GTK Controls/Start action. No UI path constructs or starts it yet.
-- Explicit V4L2 streaming-open/device-fd ownership and busy/error reporting. The owned mpv process opens the device, but Hearth does not yet expose a separately verified stream-open lease. Inventory ioctls must close before the viewer takes the streaming open.
+- Real GUV302G streaming-open/exclusive-access behavior remains unverified. The ownership model is the owned mpv child process; fake IPC now classifies common mpv `end-file` open errors, but actual driver strings and busy-device behavior need the card. Inventory ioctls must close before the viewer starts.
 - Wire `MpvViewerProcess.frame_health` into the future Controls/Share Output UI. The current `mostly_black` and `unchanged` states are advisory only; decide the precise on-picture copy and thresholds before showing a No signal card.
 - Active Capture Controls/Share Output UI integration. Do not show Start/Stop until the live audio, inhibitor, device and UI paths exist.
 - Real GUV302G discovery, audio association, modes, USB speed, signal, A/V sync and long-run soak results.
@@ -101,8 +107,8 @@ These checks prove command shape, local IPC first-frame/progress behavior with s
 ## Next no-card work
 
 1. Keep the real `CaptureAudioAdapter` behind #10's single-path ownership contract. Full user-managed VM-SHARE editing/migration remains deferred; do not mutate live routes or guess the route model.
-2. Finish explicit V4L2 streaming-open ownership and busy/error reporting around the already-owned mpv process, using fake device/process tests only.
-3. Wire the validated frame-health advisory state into the future Controls/Share Output UI. Keep `unchanged` advisory, and do not claim black input proves cable disconnection.
+2. Wire the validated frame-health advisory state and structured input-open categories into the future Controls/Share Output UI. Keep `unchanged` advisory, and do not claim black input proves cable disconnection.
+3. When the GUV302G is available, verify exclusive-open behavior, actual driver error strings, supported format/size/FPS and signal loss. Do not simulate these as passed without the hardware.
 4. Wire the tested login1 inhibitor and composed `MpvCaptureRuntime` into a lazy Hearth Controls action only after the real route adapter and all Start prerequisites exist. Controls may run one bounded discovery; app startup must remain dormant.
 5. Continue #13 documentation/fixtures only. Real KDE portal, monitor, lock/DPMS and remote Vesktop tests remain deferred until the user explicitly grants a safe interactive window.
 6. Wire active controls and Share Output in #12 only after the owned viewer/session operations work. No inert Start/Stop buttons.
