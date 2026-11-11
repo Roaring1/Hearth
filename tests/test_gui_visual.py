@@ -27,6 +27,7 @@ def test_production_windows_render_and_capture(
 
     from hearth import legacy_core
     from hearth.ui.gtk4 import app as app_mod
+    from hearth.ui.gtk4 import capture_controls as capture_controls_mod
     from hearth.ui.gtk4 import remap as remap_mod
     from hearth.ui.gtk4 import setup as setup_mod
 
@@ -73,6 +74,37 @@ def test_production_windows_render_and_capture(
     monkeypatch.setattr(app_mod.settings_mod, "save", lambda _values: None)
     share_selection = ["game", "music"]
     monkeypatch.setattr(app_mod.share_mod, "selection", lambda: list(share_selection))
+
+    # Capture Controls gets a real GTK window but only a synthetic V4L2
+    # inventory. The visual suite must never inspect host video devices.
+    from hearth.capture_devices import CaptureDevice, CaptureNode, V4L2Capabilities
+    from hearth.capture_provider import CaptureInventory
+    from hearth.capture_session import UsbIdentity, VideoMode
+
+    capture_identity = UsbIdentity("2f00", "0001", serial_number="visual-fixture")
+    capture_node = CaptureNode(
+        "/dev/video-fixture",
+        "IOGEAR UpStream 4K (synthetic)",
+        capture_identity,
+        V4L2Capabilities(
+            video_capture=True, video_capture_multiplanar=False, metadata_capture=False
+        ),
+        (VideoMode("MJPG", 1920, 1080, 60),),
+    )
+    visual_inventory = CaptureInventory(
+        devices=(CaptureDevice(capture_identity, (capture_node,)),),
+        issues=(),
+    )
+
+    class SyntheticV4L2InventoryProvider:
+        def discover(self):
+            return visual_inventory
+
+    monkeypatch.setattr(
+        capture_controls_mod,
+        "V4L2InventoryProvider",
+        SyntheticV4L2InventoryProvider,
+    )
     # Keep the gallery deterministic and fast: app icon resolution has its
     # own tests; this suite is measuring the composition of UI widgets.
     icon_calls: dict[str, int] = {}
@@ -231,11 +263,16 @@ def test_production_windows_render_and_capture(
     # exact same lazy window when the strip is expanded.
     assert window.capture_open_button.get_label() == "SCREEN SHARE"
     assert (
-        "Open Screen Share setup and capture overview"
+        "Open Screen Share setup and capture overview in a separate window"
         in accessible_labels[id(window.capture_open_button)]
     )
     assert share_strip.capture_setup_button is not None
-    assert share_strip.capture_setup_button.get_label() == "SET UP"
+    assert share_strip.capture_setup_label is not None
+    assert share_strip.capture_setup_label.get_text() == "SET UP"
+    assert any(
+        "separate window" in label
+        for label in accessible_labels[id(share_strip.capture_setup_button)]
+    )
     assert window._capture_window is None
     window.capture_open_button.emit("clicked")
     overview = window._capture_window
@@ -268,6 +305,75 @@ def test_production_windows_render_and_capture(
     assert window._capture_window is overview
     capture("screen-share-overview")
     overview.set_visible(False)
+
+    window.open_capture_controls()
+    capture_controls = window._capture_controls_window
+    assert capture_controls is not None
+    assert capture_controls.get_title() == "Hearth - Capture Controls"
+    assert capture_controls.get_hide_on_close()
+    deadline = time.monotonic() + 4.0
+    while capture_controls._checking and time.monotonic() < deadline:
+        pump(0.05)
+    assert not capture_controls._checking
+    assert capture_controls.device_status.get_text() == "1 USB video input found"
+    assert capture_controls.audio_selection_label.get_text() == (
+        "Saved Vesktop audio selection: Game + Music"
+    )
+    assert capture_controls.session_status.get_text() == "Not started"
+    assert not hasattr(capture_controls, "start_button")
+    assert not hasattr(capture_controls, "stop_button")
+    capture("capture-controls")
+
+    # Render the new session-status states against the real Controls widget
+    # tree. These snapshots are synthetic UI fixtures only; they never create
+    # a CaptureSessionManager, open a device, or start a viewer/audio route.
+    from hearth.capture_session import SessionSnapshot, SessionStage, SessionState
+
+    def controls_snapshot(
+        state: SessionState,
+        revision: int,
+        *,
+        no_signal: bool = False,
+        stage: SessionStage | None = None,
+        category: str | None = None,
+        error: str | None = None,
+        cleanup_failures: tuple[str, ...] = (),
+    ) -> SessionSnapshot:
+        return SessionSnapshot(
+            state=state,
+            plan=None,
+            stage=stage,
+            error=error,
+            cleanup_failures=cleanup_failures,
+            revision=revision,
+            no_signal=no_signal,
+            error_category=category,
+        )
+
+    capture_controls._apply_session_snapshot(controls_snapshot(SessionState.RUNNING, 1))
+    assert capture_controls.session_status.get_text() == "Ready to share in Vesktop"
+    capture("capture-controls-running")
+    capture_controls._apply_session_snapshot(
+        controls_snapshot(SessionState.RUNNING, 2, no_signal=True)
+    )
+    assert capture_controls.session_status.get_text() == "Video stopped updating"
+    capture("capture-controls-video-stalled")
+    capture_controls._apply_session_snapshot(
+        controls_snapshot(
+            SessionState.FAILED,
+            3,
+            stage=SessionStage.APPLY_AUDIO,
+            category="unknown_audio_association",
+            error="private adapter detail",
+            cleanup_failures=("private route path",),
+        )
+    )
+    assert capture_controls.session_status.get_text() == "Capture needs attention"
+    assert "private adapter detail" not in capture_controls.session_detail.get_text()
+    capture("capture-controls-failed")
+    capture_controls._apply_session_snapshot(controls_snapshot(SessionState.DORMANT, 4))
+    capture_controls.set_visible(False)
+
     window.present()
     pump(0.15)
     game_meter = game_strip.meter
@@ -753,6 +859,10 @@ def test_production_windows_render_and_capture(
     # root window and contain the expected sample of production GUI states.
     assert {path.name for path in captures} == {
         "screen-share-overview.png",
+        "capture-controls.png",
+        "capture-controls-running.png",
+        "capture-controls-video-stalled.png",
+        "capture-controls-failed.png",
         "mixer-loading.png",
         "mixer-ready.png",
         "mixer-app-move-focus.png",
@@ -837,6 +947,8 @@ def test_production_windows_render_and_capture(
 
     setup_window.set_visible(False)
     remap_window.set_visible(False)
+    if window._capture_controls_window is not None:
+        window._capture_controls_window.shutdown()
     window.set_visible(False)
     application.quit()
 

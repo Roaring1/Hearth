@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 ICON_DIR = ROOT / "src/hearth/ui/gtk4/art"
-EXPECTED = {"collapse.svg", "refresh.svg", "save.svg", "sliders.svg"}
+EXPECTED = {"collapse.svg", "popout.svg", "refresh.svg", "save.svg", "sliders.svg"}
 SVG_NS = "http://www.w3.org/2000/svg"
 
 

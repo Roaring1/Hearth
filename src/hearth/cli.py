@@ -77,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Open the LPD8 controls window in the running instance.",
     )
     parser.add_argument(
+        "--capture-controls",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--unmute",
         action="store_true",
         help="Request an unmute of every bus and exit; state is not synchronously verified.",
@@ -124,6 +129,17 @@ def _dispatch(args: argparse.Namespace) -> int:
         reply = core.ipc_send("quit")
         print("quit" if reply else "no running instance")
         return EXIT_OK
+
+    if args.capture_controls:
+        if core.ipc_send("capture_controls") == "ok":
+            return EXIT_OK
+        # Older running instances know only the original overview request.
+        # Prefer that compatible read-only path over merely raising the mixer.
+        if core.ipc_send("capture_overview") == "ok":
+            return EXIT_OK
+        from hearth.ui import run_app
+
+        return run_app(["hearth", "--open-capture-controls"])
 
     if args.remap:
         reply = core.ipc_send("remap")

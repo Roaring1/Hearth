@@ -24,7 +24,7 @@ The Flathub Vesktop README states that its Flatpak runs through Wayland by defau
 
 ## 2. mpv candidate behavior and Wayland constraints
 
-mpv remains the leading lightweight child-process viewer candidate, but no final command line or viewer choice is accepted yet.
+mpv remains the leading lightweight child-process viewer candidate. Hearth now has a pure argv builder, an explicit `MpvCaptureViewer.start()` adapter, and `proc.spawn_owned()` with a Linux parent-thread death guarantee. The adapter is not yet called by a concrete capture runtime, so Capture Mode still does not launch mpv and no real capture stream exists.
 
 Documented controls useful for a video-only candidate:
 
@@ -50,12 +50,14 @@ Important Wayland limitations from the current mpv manual:
 
 Keep an adapter around the viewer and prototype **mpv as a child process** first. It isolates frame decode/render from GTK's mixer loop and avoids adding a GStreamer/Python media stack before a need is demonstrated.
 
-The initial test command should be derived from the options above only after the viewer adapter can guarantee:
+An isolated Xvfb smoke confirmed mpv 0.40 accepts the clean-window flags and renders a 1280x720 titled test-pattern window. A separate Xvfb check confirmed that the documented `av://v4l2` URL plus lavf mode options reach FFmpeg's V4L2 handler when given a deliberately nonexistent `/dev` path. Exact scope and caveats are recorded below; these are X11/Xvfb command-shape checks only.
+
+The owned-process layer now provides the child-lifetime guarantee. Before Capture Mode launches the viewer, its concrete runtime must also guarantee:
 
 - argv-only invocation through `hearth.proc`, with an explicit title and private config/input file (never user `~/.config/mpv`);
 - no audio output, OSC, OSD, subtitles, menus or default hotkeys;
 - correct aspect handling (letterbox rather than stretch);
-- child lifetime tied to Hearth, with bounded stop and no orphan process;
+- `MpvCaptureViewer.start()` is called only from an explicit session start and its handle is retained through Stop;
 - visible failure/no-signal state in Capture Controls rather than a frozen last frame being reported as ready.
 
 Do not yet decide whether the viewer should always start fullscreen. A reliable windowed-first path may be necessary to let the user select the correct display through the compositor, followed by a fullscreen request. The issue #13 matrix must settle this.
@@ -76,3 +78,61 @@ When an interactive session is explicitly safe, add these precise checks to #13:
 ## 5. Safety boundary for current work
 
 Until the user explicitly provides a safe interactive window, do only code/source review, fixture design, fake-device tests and isolated Xvfb rendering. Do not create a second Wayland session, start a competing desktop, launch Vesktop sharing, switch inputs, lock/blank/DPMS displays, or manipulate the active focus. Xvfb proves GTK composition only; it cannot prove portal source selection, compositor behavior, live rendering cadence, remote capture or actual lock/DPMS behavior.
+
+## Installed mpv command-shape smoke (isolated Xvfb only)
+
+A no-desktop smoke test was run on 2026-11-10 with installed **mpv v0.40.0** and ffmpeg 7.1.2. ffmpeg generated a temporary 1280x720/30fps test pattern under `/tmp`; mpv ran under a private Xvfb display with:
+
+```text
+--no-config
+--vo=x11 --hwdec=no
+--title="Hearth - Share Output"
+--osc=no --osd-level=0
+--cursor-autohide=always
+--input-builtin-bindings=no
+--ao=null
+--loop-file=inf --force-window=yes
+```
+
+Observed in that isolated X11 test only:
+
+- Window title was exactly `Hearth - Share Output`.
+- Window geometry was 1280x720 on the 1600x1200 Xvfb screen.
+- A PNG screenshot of the window was captured.
+- mpv's playback log advanced through the synthetic four-second file.
+- The player was interrupted and waited on by the smoke script; the temporary video, screenshot and log were removed by its cleanup trap.
+
+This confirms that mpv 0.40 accepts the candidate flag set and can produce a titled video window in Xvfb. The test explicitly used `--vo=x11`, so it does **not** prove the `gpu`/Wayland VO, KDE placement/fullscreen, portal selection, minimize/occlusion rendering, remote Vesktop capture or idle-inhibit behavior. No real video device, audio source, logged-in Wayland window, desktop focus, monitor, service or audio route was used. Treat the arguments as a prototype, not a committed viewer command.
+
+
+## V4L2 mpv input command research
+
+The mpv stable manual documents libavdevice input as `av://type:options`, with this explicit example:
+
+```text
+mpv av://v4l2:/dev/video0 --profile=low-latency --untimed
+```
+
+The manual describes `--untimed` as a hack to output each captured frame immediately instead of respecting input timestamps. Do **not** add it by default; frame cadence and A/V synchronization must be measured first. See [mpv av:// input documentation](https://mpv.io/manual/stable/#protocols).
+
+The mpv manual also documents `--demuxer-lavf-o=key=value,...` for passing AVOptions to libavformat. FFmpeg's V4L2 input options include `video_size`, `framerate`, and `input_format`; the latter accepts a codec name for compressed video or a pixel format for raw video. See [mpv demuxer-lavf options](https://mpv.io/manual/stable/#demuxer) and [FFmpeg V4L2 options](https://www.ffmpeg.org/ffmpeg-devices.html#video4linux2_002c-v4l2).
+
+Hearth's pure `build_mpv_viewer_argv()` builder has an allow-list mapping for common FourCCs (`MJPG`, `JPEG`, `H264`, `HEVC`, `YUYV`, `UYVY`, `NV12`, `YU12`, `RGB3`, `BGR3`). YV12 and unknown FourCC values fail closed until a correct FFmpeg mapping is verified. The builder sets `--audio=no`, disables OSC/OSD/subtitles/built-in keys, pins the selected size/rate/input format, and uses the resolved ephemeral node path. `MpvCaptureViewer.start()` delegates the argv to `proc.spawn_owned`; no production runtime calls that method yet. The fullscreen request is configurable; the default asks for fullscreen, but the Wayland compositor still controls actual output placement.
+
+The installed mpv 0.40.0 + FFmpeg build was tested with a deliberately nonexistent path under Xvfb using the exact `av://v4l2` form and explicit lavf options from the builder. mpv reported `Cannot open video device /dev/hearth-no-such-video-device`, proving that the URL reached FFmpeg's V4L2 input handler rather than failing as an unknown protocol. A follow-on `Failed to recognize file format` is mpv's terminal response after the demuxer's expected missing-node failure. This did not open any real node. The build's `ffmpeg -devices` lists `video4linux2,v4l2` as an input device.
+
+The command builder, adapter, owned process primitive, bounded first-frame IPC check, active-session timestamp-progress monitor and conditional **Video stopped updating** overlay are implemented. No actual capture stream has been opened and no input-format mapping has been verified against the target card. `proc.spawn_owned()` waits for the PDEATHSIG/exec handshake and keeps the creating thread alive through child exit. The synthetic `av://lavfi` Xvfb run confirms that observed `time-pos` events advance while frames are delivered and the monitor returns on normal process exit; fake IPC tests cover no-signal entry and recovery. The pixel-health probe exposes advisory changing/mostly-black/unchanged metadata without persisting screenshots. A timestamp stall displays a centered **Video stopped updating** label while keeping the mpv window and session alive; resumed timestamps clear it. Physical capture-card behavior remains unverified.
+
+
+## mpv libavdevice command-construction smoke (Xvfb)
+
+A second isolated check used the mpv v0.40.0 `av://` input handler with `av://lavfi:testsrc=size=1280x720:rate=30`, running under private Xvfb and `--vo=x11`. The window title was `Hearth - Share Output`, geometry 1280x720, with audio, OSC, OSD, subtitles and built-in bindings disabled. The player and Xvfb session were stopped by the test wrapper. This validates only the libavdevice URL path and presentation shell with a synthetic lavfi source. It is not a V4L2 device test and not a Wayland/portal test.
+
+The candidate viewer argv is now assembled in `src/hearth/capture_viewer.py`. It uses mpv's documented `av://v4l2:/dev/videoN` form and `--demuxer-lavf-o` for exact input options. `docs/CAPTURE_MODE_SESSION_CORE.md` records the current option policy and remaining process-ownership requirements. The actual viewer adapter has not started mpv against a real `/dev/videoN`.
+
+
+## First-frame readiness check (synthetic Xvfb)
+
+The mpv viewer wrapper now creates a unique IPC socket under a private 0700 directory in `XDG_RUNTIME_DIR`. It does not use a shared `/tmp` socket. After launch, `wait_for_first_frame()` opens a bounded local JSON IPC connection and queries `video-frame-info/picture-type`, `video-params` and `vo-configured`. It only returns Ready when a current decoded frame has type I/P/B, dimensions are positive, and the VO is configured. After first frame, `monitor_until_exit()` uses `observe_property(time-pos)` on one active-session IPC connection. A timestamp stall sets the private no-signal property and the Lua overlay displays a centered label; mpv's forced idle window remains open and the session stays RUNNING. When timestamps resume, the label clears. The monitor is event-driven, not timer polling. A child exit or readiness deadline becomes a failure; the socket directory is removed only after Stop reaps the child.
+
+This was exercised with mpv 0.40.0 under Xvfb using the synthetic `av://lavfi:testsrc=size=640x360:rate=30` source: the readiness result was 640x360, picture type I. A second run received live `time-pos` notifications, sent an orderly quit and observed exit code 0; both runs removed the private runtime directory. No real V4L2 device or Wayland session was used. This confirms first-frame and event-monitor IPC mechanics only, not capture-card mode correctness or remote stream health on Wayland.

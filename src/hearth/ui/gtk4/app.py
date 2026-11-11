@@ -36,7 +36,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 
-from gi.repository import Gdk, GLib, Gtk  # noqa: E402 - must follow require_version
+from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402 - must follow require_version
 
 from hearth import APP_ID, collector as collector_mod  # noqa: E402
 from hearth import control  # noqa: E402
@@ -439,16 +439,20 @@ class Strip(Gtk.Box):
         self.append(self.listeners)
         self.listeners.set_visible(window.expanded)
         self.capture_setup_button: Gtk.Button | None = None
+        self.capture_setup_label: Gtk.Label | None = None
         if channel.master:
             self._fill_share_details()
-            self.capture_setup_button = Gtk.Button(label="SET UP")
+            self.capture_setup_button = Gtk.Button()
             self.capture_setup_button.add_css_class("capture-setup")
+            self.capture_setup_label = action_icons.button(
+                self.capture_setup_button, "popout", "SET UP", size=13
+            )
             action_icons.accessible_label(
                 self.capture_setup_button,
-                "Open Screen Share setup and capture overview",
+                "Open Screen Share setup and capture overview in a separate window",
             )
             self.capture_setup_button.set_tooltip_text(
-                "Set up the video friends see and the audio they hear"
+                "Open the separate Screen Share setup and capture overview"
             )
             self.capture_setup_button.connect(
                 "clicked", lambda _button: window.open_capture_overview()
@@ -1589,9 +1593,9 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.capture_open_button.add_css_class("capture-launch")
         action_icons.accessible_label(
             self.capture_open_button,
-            "Open Screen Share setup and capture overview",
+            "Open Screen Share setup and capture overview in a separate window",
         )
-        self.capture_open_button.set_tooltip_text("Set up what friends see and hear")
+        self.capture_open_button.set_tooltip_text("Open the separate Screen Share setup window")
         self.capture_open_button.connect("clicked", lambda _button: self.open_capture_overview())
         capture_entry.append(self.capture_open_button)
         capture_hint = Gtk.Label(label="Set up the video window and audio friends hear", xalign=0.0)
@@ -1630,6 +1634,7 @@ class MixerWindow(Gtk.ApplicationWindow):
         self._setup_window: Gtk.Window | None = None
         self._remap_window: Gtk.Window | None = None
         self._capture_window: Gtk.Window | None = None
+        self._capture_controls_window: Gtk.Window | None = None
         self._menu: Gtk.Popover | None = None
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key)
@@ -2392,6 +2397,15 @@ class MixerWindow(Gtk.ApplicationWindow):
             self._capture_window.refresh()
         self._capture_window.present()
 
+    def open_capture_controls(self) -> None:
+        """Show Capture Controls and perform one explicit device inventory."""
+        if self._capture_controls_window is None:
+            from hearth.ui.gtk4.capture_controls import CaptureControlsWindow
+
+            self._capture_controls_window = CaptureControlsWindow(self)
+        self._capture_controls_window.refresh()
+        self._capture_controls_window.present()
+
     # -- setup -----------------------------------------------------------
     def open_setup(self) -> None:
         """Build the Setup window the first time it is wanted, then show it.
@@ -2480,6 +2494,11 @@ class MixerWindow(Gtk.ApplicationWindow):
         if capture_window is not None:
             capture_window.destroy()
             self._capture_window = None
+        capture_controls_window = getattr(self, "_capture_controls_window", None)
+        if capture_controls_window is not None:
+            capture_controls_window.shutdown()
+            capture_controls_window.destroy()
+            self._capture_controls_window = None
         if getattr(self, "_frame_id", None):
             GLib.source_remove(self._frame_id)
             self._frame_id = 0
@@ -2493,7 +2512,10 @@ class MixerWindow(Gtk.ApplicationWindow):
 
 class MixerApp(Gtk.Application):
     def __init__(self) -> None:
-        super().__init__(application_id=APP_ID)
+        super().__init__(
+            application_id=APP_ID,
+            flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE,
+        )
         self.pal = style_mod.palette()
         self.window: MixerWindow | None = None
         self._ipc: ipc_mod.Server | None = None
@@ -2508,6 +2530,18 @@ class MixerApp(Gtk.Application):
                 display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
             )
         self._start_control_socket()
+
+    def do_command_line(self, command_line) -> int:
+        """Route desktop-only launch intents through the single GApplication."""
+        arguments = command_line.get_arguments()
+        if "--open-capture-controls" in arguments:
+            self._show_capture_controls()
+        elif "--open-capture-overview" in arguments:
+            self._show_capture_overview()
+        else:
+            self.activate()
+        command_line.set_exit_status(0)
+        return 0
 
     def do_activate(self) -> None:
         if self.window is None:
@@ -2559,6 +2593,8 @@ class MixerApp(Gtk.Application):
             request,
             {
                 "show": self._ctl_show,
+                "capture_overview": self._ctl_capture_overview,
+                "capture_controls": self._ctl_capture_controls,
                 "quit": self._ctl_quit,
                 "unmute": self._ctl_unmute,
                 "get_sinks": self._ctl_sinks,
@@ -2570,6 +2606,30 @@ class MixerApp(Gtk.Application):
 
     def _ctl_show(self) -> str:
         GLib.idle_add(self.activate)
+        return "ok"
+
+    def _show_capture_overview(self) -> bool:
+        """Open the lazy Screen Share setup window without starting capture."""
+        if self.window is None:
+            self.window = MixerWindow(self)
+        self.window.open_capture_overview()
+        return False
+
+    def _ctl_capture_overview(self) -> str:
+        """Open the same overview from an existing instance's control socket."""
+        GLib.idle_add(self._show_capture_overview)
+        return "ok"
+
+    def _show_capture_controls(self) -> bool:
+        """Open Capture Controls in the existing or lazily-created mixer app."""
+        if self.window is None:
+            self.window = MixerWindow(self)
+        self.window.open_capture_controls()
+        return False
+
+    def _ctl_capture_controls(self) -> str:
+        """Route the desktop launcher to Capture Controls in the main context."""
+        GLib.idle_add(self._show_capture_controls)
         return "ok"
 
     def _ctl_quit(self) -> str:
