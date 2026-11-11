@@ -343,11 +343,12 @@ class CaptureSessionManager:
         """Wait only while RUNNING; no polling or dormant watcher exists."""
         try:
             try:
-                returncode = viewer.wait()
+                monitor = getattr(viewer, "monitor_until_exit", None)
+                returncode = monitor() if callable(monitor) else viewer.wait()
             except Exception as exc:
                 self.viewer_exited(
                     -1,
-                    detail=f"viewer exit status unavailable: {exc}",
+                    detail=f"viewer stream/process monitor failed: {exc}",
                     ignore_if_not_running=True,
                 )
             else:
