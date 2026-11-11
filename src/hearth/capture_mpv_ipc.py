@@ -16,7 +16,7 @@ import socket
 import stat
 import tempfile
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -194,6 +194,7 @@ class MpvViewerProcess:
         self._cleaned = False
         self._frame_health: FrameHealthSnapshot | None = None
         self._no_signal = False
+        self._no_signal_callback: Callable[[bool], None] | None = None
         self.mpv_log_path = runtime_directory / "mpv.log"
 
     @property
@@ -212,6 +213,20 @@ class MpvViewerProcess:
     def no_signal(self) -> bool:
         """Whether the active viewer currently displays its No signal card."""
         return self._no_signal
+
+    def set_no_signal_callback(self, callback: Callable[[bool], None] | None) -> None:
+        """Register an optional event callback for no-signal state transitions."""
+        self._no_signal_callback = callback
+
+    def _set_no_signal(self, value: bool) -> None:
+        if self._no_signal == value:
+            return
+        self._no_signal = value
+        callback = self._no_signal_callback
+        if callback is not None:
+            # UI observers must never break the stream monitor or session.
+            with suppress(Exception):
+                callback(value)
 
     @staticmethod
     def _send_no_signal(connection: socket.socket, value: bool) -> None:
@@ -278,7 +293,7 @@ class MpvViewerProcess:
                 readable, _, _ = select.select([connection], [], [], timeout)
                 if not readable:
                     self._send_no_signal(connection, True)
-                    self._no_signal = True
+                    self._set_no_signal(True)
                     no_signal = True
                     continue
                 chunk = connection.recv(4096)
@@ -310,7 +325,7 @@ class MpvViewerProcess:
                     if message.get("event") == "end-file" and message.get("reason") == "error":
                         if not no_signal:
                             self._send_no_signal(connection, True)
-                            self._no_signal = True
+                            self._set_no_signal(True)
                             no_signal = True
                         continue
                     if message.get("event") != "property-change":
@@ -336,7 +351,7 @@ class MpvViewerProcess:
                             last_progress = time.monotonic()
                             if no_signal:
                                 self._send_no_signal(connection, False)
-                                self._no_signal = False
+                                self._set_no_signal(False)
                                 no_signal = False
         except (ConnectionError, OSError) as exc:
             if self.poll() is not None:
