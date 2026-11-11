@@ -304,6 +304,33 @@ def carla_enabled(values: dict[str, str], bus: str) -> bool:
     return raw.strip().lower() in _TRUE
 
 
+def carla_edits(values: dict[str, str], bus: str, on: bool) -> dict[str, str]:
+    """Update Carla and the bus activation gate as one config transaction.
+
+    The router daemon treats *_ACTIVE as the top-level authority for both raw
+    and Carla feeds. Enabling Carla must open that gate. If it was closed,
+    discard a stale raw route before opening it so a disabled source is not
+    unexpectedly re-enabled. Disabling Carla leaves the gate open only when
+    an already-active raw route remains.
+    """
+    key = carla_key(bus)
+    prefix = BUS_PREFIX.get(bus)
+    if key is None or prefix is None:
+        return {}
+
+    active_key = f"{prefix}_ACTIVE"
+    route_key = f"{prefix}_ROUTE"
+    gate_was_open = values.get(active_key, "").strip().lower() in _TRUE
+    raw_route = values.get(route_key, "none") if gate_was_open else "none"
+    updates = {
+        key: "true" if on else "false",
+        active_key: "true" if on or tokens(raw_route) else "false",
+    }
+    if on and not gate_was_open:
+        updates[route_key] = "none"
+    return updates
+
+
 def set_carla(bus: str, on: bool, *, path: Path | None = None) -> bool:
     """Record the Carla feed for a bus and apply it to the live graph.
 
@@ -312,10 +339,10 @@ def set_carla(bus: str, on: bool, *, path: Path | None = None) -> bool:
     Carla not running, say -- does not undo the stored choice: the patch
     script will honour it the next time Carla starts.
     """
-    key = carla_key(bus)
-    if key is None:
+    updates = carla_edits(read(path), bus, on)
+    if not updates:
         return False
-    stored = write({key: "true" if on else "false"}, path)
+    stored = write(updates, path)
     if not stored:
         # The router daemon reads this same file every three seconds. If the
         # choice was not persisted, applying it live would only be temporary
