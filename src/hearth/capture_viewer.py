@@ -13,6 +13,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from hearth import proc
+from hearth.capture_frame_health import write_frame_health_script
 from hearth.capture_mpv_ipc import MpvViewerProcess, create_private_ipc_directory
 from hearth.capture_session import ResolvedCaptureDevice, ViewerHandle
 from hearth.errors import HearthError
@@ -44,6 +45,7 @@ def build_mpv_viewer_argv(
     executable: str = "mpv",
     fullscreen: bool = True,
     ipc_socket_path: str | Path | None = None,
+    frame_health_script_path: str | Path | None = None,
 ) -> list[str]:
     """Build a no-audio, no-OSD mpv command for one resolved V4L2 mode.
 
@@ -85,6 +87,11 @@ def build_mpv_viewer_argv(
         if len(os.fsencode(ipc_path)) >= 100:
             raise ValueError("mpv IPC socket path is too long")
         argv.append(f"--input-ipc-server={ipc_path}")
+    if frame_health_script_path is not None:
+        script_path = str(frame_health_script_path)
+        if not script_path.startswith("/"):
+            raise ValueError("mpv frame-health script path must be absolute")
+        argv.append(f"--script={script_path}")
     if fullscreen:
         argv.append("--fullscreen")
     argv.extend(("--", f"av://v4l2:{device.video_node_path}"))
@@ -114,12 +121,15 @@ class MpvCaptureViewer:
         """Build the explicit V4L2 command and return its owned IPC/process handle."""
         runtime_directory = create_private_ipc_directory()
         ipc_socket = runtime_directory / "mpv.sock"
+        frame_health_script = None
         try:
+            frame_health_script = write_frame_health_script(runtime_directory)
             argv = build_mpv_viewer_argv(
                 device,
                 executable=self._executable,
                 fullscreen=self._fullscreen,
                 ipc_socket_path=ipc_socket,
+                frame_health_script_path=frame_health_script,
             )
             process = self._process_factory(argv)
         except Exception:
