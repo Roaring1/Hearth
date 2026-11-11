@@ -47,7 +47,7 @@ def test_spawn_owned_surfaces_exec_failure() -> None:
         proc.spawn_owned(["hearth-capture-no-such-executable"])
 
 
-def test_spawn_owned_parent_thread_exit_terminates_child() -> None:
+def test_spawn_owned_parent_thread_exit_terminates_child(tmp_path: Path) -> None:
     """An owner subprocess exits without Stop; its child must receive SIGTERM."""
     helper = r"""
 import os
@@ -64,6 +64,7 @@ os._exit(0)
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
+        cwd=tmp_path,
     )
     try:
         assert parent.stdout is not None
