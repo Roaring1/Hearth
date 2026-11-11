@@ -24,7 +24,8 @@ def _proc_state(pid: int) -> str | None:
     """Return process state from /proc; Z means it is no longer executing."""
     try:
         raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # The kernel may remove /proc/<pid> between the stat lookup and read.
         return None
     end = raw.rfind(")")
     return raw[end + 2 : end + 3] if end >= 0 else "?"
