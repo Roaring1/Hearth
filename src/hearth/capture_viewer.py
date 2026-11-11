@@ -52,7 +52,7 @@ def build_mpv_viewer_argv(
     frame_health_script_path: str | Path | None = None,
     log_file_path: str | Path | None = None,
 ) -> list[str]:
-    """Build a no-audio, no-OSD mpv command for one resolved V4L2 mode.
+    """Build a no-audio, video-only mpv command with a conditional No signal OSD.
 
     The selected mode is passed explicitly to FFmpeg's V4L2 libavdevice
     demuxer. The device path is ephemeral and comes from a fresh probe, never
@@ -84,6 +84,8 @@ def build_mpv_viewer_argv(
         "--input-builtin-bindings=no",
         f"--demuxer-lavf-o={lavf_options}",
         "--force-window=yes",
+        "--idle=yes",
+        "--keep-open=yes",
     ]
     if ipc_socket_path is not None:
         ipc_path = str(ipc_socket_path)

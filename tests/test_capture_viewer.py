@@ -98,6 +98,11 @@ def test_frame_health_script_is_an_explicit_absolute_mpv_argument() -> None:
     )
 
     assert "--script=/run/user/1000/hearth/frame-health.lua" in argv
+    assert "--osd-level=0" in argv
+    assert "--no-osc" in argv
+    assert "--force-window=yes" in argv
+    assert "--idle=yes" in argv
+    assert "--keep-open=yes" in argv
     assert "--log-file=/run/user/1000/hearth/mpv.log" in argv
     assert "--msg-level=all=warn" in argv
     with pytest.raises(ValueError, match="script path must be absolute"):
