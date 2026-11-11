@@ -94,11 +94,16 @@ def test_frame_health_script_is_an_explicit_absolute_mpv_argument() -> None:
         _device(),
         ipc_socket_path="/run/user/1000/hearth/mpv.sock",
         frame_health_script_path="/run/user/1000/hearth/frame-health.lua",
+        log_file_path="/run/user/1000/hearth/mpv.log",
     )
 
     assert "--script=/run/user/1000/hearth/frame-health.lua" in argv
+    assert "--log-file=/run/user/1000/hearth/mpv.log" in argv
+    assert "--msg-level=all=warn" in argv
     with pytest.raises(ValueError, match="script path must be absolute"):
         build_mpv_viewer_argv(_device(), frame_health_script_path="relative.lua")
+    with pytest.raises(ValueError, match="log file path must be absolute"):
+        build_mpv_viewer_argv(_device(), log_file_path="relative.log")
 
 
 def test_mpv_viewer_adapter_builds_and_delegates_to_owned_process_factory(
@@ -129,10 +134,14 @@ def test_mpv_viewer_adapter_builds_and_delegates_to_owned_process_factory(
     session_dir = Path(ipc_arg.split("=", 1)[1]).parent
     script_arg = next(arg for arg in calls[0] if arg.startswith("--script="))
     script_path = Path(script_arg.split("=", 1)[1])
+    log_arg = next(arg for arg in calls[0] if arg.startswith("--log-file="))
+    log_path = Path(log_arg.split("=", 1)[1])
     assert session_dir.parent == runtime and session_dir.exists()
     assert script_path.parent == session_dir and script_path.exists()
     assert script_path.stat().st_mode & 0o777 == 0o600
     assert "screenshot-raw" in script_path.read_text(encoding="utf-8")
+    assert log_path.parent == session_dir and log_path.exists()
+    assert log_path.stat().st_mode & 0o777 == 0o600
     handle.stop()
     assert not session_dir.exists()
     assert calls[-1] == ["STOP", "1.0"]

@@ -16,13 +16,13 @@ import pytest
 from hearth.capture_mpv_ipc import (
     FirstFrame,
     MpvViewerProcess,
-    ViewerExitedBeforeFirstFrame,
     ViewerInputOpenError,
     ViewerIPCError,
     ViewerReadinessTimeout,
     ViewerStreamStalled,
     classify_mpv_input_error,
     create_private_ipc_directory,
+    create_private_mpv_log_file,
 )
 
 
@@ -133,6 +133,23 @@ def test_private_ipc_directory_requires_current_users_private_runtime_dir(
         directory.rmdir()
 
 
+def test_private_mpv_log_file_is_created_mode_0600_and_never_overwritten(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    runtime.chmod(0o700)
+
+    log_path = create_private_mpv_log_file(runtime)
+
+    assert log_path.exists()
+    assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
+    log_path.write_text("existing", encoding="utf-8")
+    with pytest.raises(ViewerIPCError, match="File exists"):
+        create_private_mpv_log_file(runtime)
+    assert log_path.read_text(encoding="utf-8") == "existing"
+
+
 def test_private_ipc_directory_rejects_group_or_world_access(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -194,9 +211,66 @@ def test_mpv_end_file_errors_map_to_actionable_device_categories(
     assert error.user_message
 
 
+def test_mpv_error_classifier_uses_private_log_detail_when_ipc_error_is_generic() -> None:
+    error = classify_mpv_input_error(
+        "error",
+        "loading failed",
+        "[e][file] Cannot open file '/dev/video999': No such file or directory",
+    )
+
+    assert isinstance(error, ViewerInputOpenError)
+    assert error.category == "device_unavailable"
+    assert "No such file" in error.detail
+
+
 def test_non_error_end_file_event_is_not_misclassified() -> None:
     assert classify_mpv_input_error("eof", None) is None
     assert classify_mpv_input_error("stop", "") is None
+    stale_log = "[e][file] stale prior failure: No such file or directory"
+    assert classify_mpv_input_error("eof", "loading failed", stale_log) is None
+    assert classify_mpv_input_error(None, "loading failed", stale_log) is None
+    assert classify_mpv_input_error(7, "loading failed", stale_log) is None
+
+
+def test_first_frame_uses_private_mpv_log_to_classify_generic_loading_failed(
+    tmp_path: Path,
+) -> None:
+    viewer = _viewer(tmp_path)
+    (viewer.runtime_directory / "mpv.log").write_text(
+        "[e][file] Cannot open file '/dev/video999': No such file or directory\n"
+        "[e][stream] Failed to open /dev/video999.\n",
+        encoding="utf-8",
+    )
+
+    def handler(_request: dict[str, Any]) -> dict[str, object]:
+        return {"event": "end-file", "reason": "error", "file_error": "loading failed"}
+
+    with (
+        FakeMpvIpcServer(viewer.ipc_socket, handler),
+        pytest.raises(ViewerInputOpenError) as caught,
+    ):
+        viewer.wait_for_first_frame(timeout_s=1.0)
+
+    assert caught.value.category == "device_unavailable"
+
+
+def test_first_frame_timeout_does_not_classify_log_without_end_file_error(
+    tmp_path: Path,
+) -> None:
+    viewer = _viewer(tmp_path)
+    (viewer.runtime_directory / "mpv.log").write_text(
+        "[e][v4l2] Device or resource busy\n",
+        encoding="utf-8",
+    )
+
+    def handler(request: dict[str, Any]) -> dict[str, object]:
+        return {"request_id": request["request_id"], "error": "property unavailable"}
+
+    with (
+        FakeMpvIpcServer(viewer.ipc_socket, handler),
+        pytest.raises(ViewerReadinessTimeout),
+    ):
+        viewer.wait_for_first_frame(timeout_s=0.1)
 
 
 def test_first_frame_surfaces_device_busy_from_mpv_end_file_event(tmp_path: Path) -> None:
@@ -270,11 +344,15 @@ def test_first_frame_rejects_partial_readiness(
         viewer.wait_for_first_frame(timeout_s=0.12)
 
 
-def test_first_frame_aborts_if_owned_viewer_exits(tmp_path: Path) -> None:
+def test_first_frame_reports_generic_input_error_when_mpv_exits_nonzero(
+    tmp_path: Path,
+) -> None:
     viewer = _viewer(tmp_path, process=FakeProcess(exit_code=7))
 
-    with pytest.raises(ViewerExitedBeforeFirstFrame):
+    with pytest.raises(ViewerInputOpenError) as caught:
         viewer.wait_for_first_frame(timeout_s=1.0)
+
+    assert caught.value.category == "open_failed"
 
 
 def test_first_frame_timeout_when_ipc_socket_never_appears(tmp_path: Path) -> None:
