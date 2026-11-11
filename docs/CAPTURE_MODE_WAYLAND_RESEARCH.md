@@ -24,7 +24,7 @@ The Flathub Vesktop README states that its Flatpak runs through Wayland by defau
 
 ## 2. mpv candidate behavior and Wayland constraints
 
-mpv remains the leading lightweight child-process viewer candidate, but no final command line or viewer choice is accepted yet.
+mpv remains the leading lightweight child-process viewer candidate. Hearth now has a pure argv builder, an explicit `MpvCaptureViewer.start()` adapter, and `proc.spawn_owned()` with a Linux parent-thread death guarantee. The adapter is not yet called by a concrete capture runtime, so Capture Mode still does not launch mpv and no real capture stream exists.
 
 Documented controls useful for a video-only candidate:
 
@@ -50,14 +50,14 @@ Important Wayland limitations from the current mpv manual:
 
 Keep an adapter around the viewer and prototype **mpv as a child process** first. It isolates frame decode/render from GTK's mixer loop and avoids adding a GStreamer/Python media stack before a need is demonstrated.
 
-A later isolated Xvfb smoke confirmed mpv 0.40 accepts the candidate flags and renders a 1280x720 titled test-pattern window. Exact scope and caveats are recorded under **Installed mpv command-shape smoke** below; this is X11/Xvfb evidence only.
+An isolated Xvfb smoke confirmed mpv 0.40 accepts the clean-window flags and renders a 1280x720 titled test-pattern window. A separate Xvfb check confirmed that the documented `av://v4l2` URL plus lavf mode options reach FFmpeg's V4L2 handler when given a deliberately nonexistent `/dev` path. Exact scope and caveats are recorded below; these are X11/Xvfb command-shape checks only.
 
-The initial test command should be derived from the options above only after the viewer adapter can guarantee:
+The owned-process layer now provides the child-lifetime guarantee. Before Capture Mode launches the viewer, its concrete runtime must also guarantee:
 
 - argv-only invocation through `hearth.proc`, with an explicit title and private config/input file (never user `~/.config/mpv`);
 - no audio output, OSC, OSD, subtitles, menus or default hotkeys;
 - correct aspect handling (letterbox rather than stretch);
-- child lifetime tied to Hearth, with bounded stop and no orphan process;
+- `MpvCaptureViewer.start()` is called only from an explicit session start and its handle is retained through Stop;
 - visible failure/no-signal state in Capture Controls rather than a frozen last frame being reported as ready.
 
 Do not yet decide whether the viewer should always start fullscreen. A reliable windowed-first path may be necessary to let the user select the correct display through the compositor, followed by a fullscreen request. The issue #13 matrix must settle this.
@@ -117,11 +117,11 @@ The manual describes `--untimed` as a hack to output each captured frame immedia
 
 The mpv manual also documents `--demuxer-lavf-o=key=value,...` for passing AVOptions to libavformat. FFmpeg's V4L2 input options include `video_size`, `framerate`, and `input_format`; the latter accepts a codec name for compressed video or a pixel format for raw video. See [mpv demuxer-lavf options](https://mpv.io/manual/stable/#demuxer) and [FFmpeg V4L2 options](https://www.ffmpeg.org/ffmpeg-devices.html#video4linux2_002c-v4l2).
 
-Hearth now has a pure `build_mpv_viewer_argv()` prototype with an allow-list mapping for common FourCCs (`MJPG`, `H264`, `HEVC`, `YUYV`, `UYVY`, `NV12`, `YU12`, `RGB3`, `BGR3`). Unknown FourCC values fail closed. The builder sets `--audio=no`, disables OSC/OSD/subtitles/built-in keys, pins the selected size/rate/input format, and uses the resolved ephemeral node path. It does not launch a process. The fullscreen request is configurable; the default asks for fullscreen, but the Wayland compositor still controls actual output placement.
+Hearth's pure `build_mpv_viewer_argv()` builder has an allow-list mapping for common FourCCs (`MJPG`, `JPEG`, `H264`, `HEVC`, `YUYV`, `UYVY`, `NV12`, `YU12`, `RGB3`, `BGR3`). YV12 and unknown FourCC values fail closed until a correct FFmpeg mapping is verified. The builder sets `--audio=no`, disables OSC/OSD/subtitles/built-in keys, pins the selected size/rate/input format, and uses the resolved ephemeral node path. `MpvCaptureViewer.start()` delegates the argv to `proc.spawn_owned`; no production runtime calls that method yet. The fullscreen request is configurable; the default asks for fullscreen, but the Wayland compositor still controls actual output placement.
 
-The installed mpv 0.40.0 + FFmpeg build was tested with a deliberately nonexistent path under Xvfb using the `av://v4l2` form and explicit lavf options. mpv reported `Cannot open video device /dev/hearth-no-such-video-device`, proving that the URL reached FFmpeg's V4L2 input handler rather than failing as an unknown demuxer. This did not open any real node. The build's `ffmpeg -devices` lists `video4linux2,v4l2` as both input and output capable.
+The installed mpv 0.40.0 + FFmpeg build was tested with a deliberately nonexistent path under Xvfb using the exact `av://v4l2` form and explicit lavf options from the builder. mpv reported `Cannot open video device /dev/hearth-no-such-video-device`, proving that the URL reached FFmpeg's V4L2 input handler rather than failing as an unknown protocol. A follow-on `Failed to recognize file format` is mpv's terminal response after the demuxer's expected missing-node failure. This did not open any real node. The build's `ffmpeg -devices` lists `video4linux2,v4l2` as an input device.
 
-The command builder is still a prototype. No actual capture stream has been opened, and no input-format mapping has been verified against the target card. The child process must not be launched until an owned process wrapper with correct parent-death semantics and bounded Stop exists. `hearth.proc.spawn()` uses a detached session; a simple fire-and-forget launch could leave a frozen viewer after Hearth exits.
+The command builder, adapter and owned process primitive are implemented, but no actual capture stream has been opened and no input-format mapping has been verified against the target card. `proc.spawn_owned()` waits for the PDEATHSIG/exec handshake and keeps the creating thread alive through child exit; its synthetic tests cover owner-thread death, the pre-prctl race, setup failure and bounded Stop. The remaining work is to wire the adapter into the session runtime and monitor first/last frames before reporting Ready.
 
 
 ## mpv libavdevice command-construction smoke (Xvfb)

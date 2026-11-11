@@ -1,6 +1,6 @@
 # Capture Mode session and adapter contract
 
-**Checkpoint: 2026-11-11.** This is the current no-card engineering checkpoint. The transaction coordinator, fixture parsers, one-shot inventory adapters and pure viewer argv builder exist. No real capture session has been started and no adapter has been invoked against a capture card or the live PipeWire graph.
+**Checkpoint: 2026-11-11.** This is the current no-card engineering checkpoint. The transaction coordinator, fixture parsers, one-shot inventory adapters and pure viewer argv builder exist. No real capture session has been started. The one-shot providers and viewer argv builder have not been invoked against a capture card or the live PipeWire graph.
 
 ## Implemented
 
@@ -39,9 +39,13 @@ On failure it attempts cleanup in reverse ownership order: viewer/device handle,
 - Outcomes are `unknown`, `none`, `matched`, and `ambiguous`. Missing/unverifiable metadata makes the inventory incomplete/unknown; multiple matching audio endpoints require user choice.
 - Both parser and provider have synthetic JSON/fake-runner tests. The provider has not been run against the user's live graph. The actual GUV302G audio source topology and whether its video/audio functions expose the same udev identity remain unknown.
 
-### mpv command construction
+### mpv command construction and owned process
 
-`hearth.capture_viewer.build_mpv_viewer_argv()` is a pure argv builder, not a process launcher. It takes one freshly resolved node/mode, uses `av://v4l2:/dev/videoN`, passes the selected discrete `input_format`, `video_size` and rational `framerate`, and uses an explicit FourCC allow-list. Unknown formats raise `UnsupportedCaptureFormat`. The command disables audio, OSC, OSD, subtitles and built-in keys, uses no user mpv config, hides the cursor, sets the exact `Hearth - Share Output` title and can request fullscreen.
+`hearth.capture_viewer.build_mpv_viewer_argv()` is a pure argv builder. It takes one freshly resolved node/mode, uses `av://v4l2:/dev/videoN`, passes the selected discrete `input_format`, `video_size` and rational `framerate`, and uses an explicit FourCC allow-list. Unknown formats raise `UnsupportedCaptureFormat`. The command disables audio, OSC, OSD, subtitles and built-in keys, uses no user mpv config, hides the cursor, sets the exact `Hearth - Share Output` title and can request fullscreen.
+
+`hearth.proc.spawn_owned()` and `hearth.proc.OwnedProcess` provide the process-ownership layer. All `Popen` creation remains in `hearth.proc`. It starts a small standard-library exec wrapper, waits for a status-pipe handshake proving that Linux `PR_SET_PDEATHSIG` was installed and the requested executable successfully replaced the wrapper, then keeps the creating daemon thread blocked in `wait()` for the entire child lifetime. The wrapper uses SIGTERM on parent-thread death and checks the parent PID to cover the process-death-before-prctl race. Explicit Stop is bounded and escalates to SIGKILL before reaping.
+
+The creation-thread requirement is verified by a synthetic integration test: the test creates a sleeping Python child from a dedicated thread, exits that thread while the test process remains alive, and confirms the child receives SIGTERM. Other tests cover normal Stop/reap, unexpected exit and exec failure. These tests launch only short-lived synthetic Python children, not mpv, a video device, GTK or audio.
 
 Two isolated Xvfb checks have been performed:
 
@@ -52,8 +56,8 @@ These checks prove command shape/compiled input support only. They do not verify
 
 ## Not implemented yet
 
-- A parent-death-safe owned viewer process supervisor with stable creation-thread lifetime, PID race checking, bounded Stop and verified exit. `hearth.proc.spawn()` detaches children into a new session; a fire-and-forget launch could leave a frozen viewer after Hearth exits. Do not launch the argv builder until an owned-process boundary exists.
-- The active viewer/streaming device open, frame/stall monitor and No signal integration. Inventory ioctls must close before the viewer takes the streaming open; one component must clearly own the active device handle.
+- Connect `MpvCaptureViewer.start()` to a concrete `CaptureRuntime.start_viewer()` implementation and `CaptureSessionManager`. The adapter already delegates to `proc.spawn_owned`, but no runtime currently calls it and no mpv process has been started.
+- The active viewer/streaming device open, first/last-frame and stall monitor, and No signal integration. Inventory ioctls must close before the viewer takes the streaming open; one component must clearly own the active device handle.
 - A real idle-inhibit lease adapter and its Stop/crash cleanup.
 - A live audio safety/route adapter, owner metadata or `pw-dump` route verification. Full user-managed VM-SHARE source editing and single-path migration remain explicitly deferred in #10. No live audio routes are changed by this work.
 - Active Capture Controls/Share Output UI integration. Do not show Start/Stop until the underlying operations exist.
@@ -61,7 +65,7 @@ These checks prove command shape/compiled input support only. They do not verify
 
 ## Next no-card work
 
-1. Implement the owned viewer-process supervisor and synthetic-child tests before any viewer launch. Linux parent-death signaling is tied to the creating thread, so the owner thread must live for the entire active session; also cover the parent-death race before the child installs its signal.
+1. Connect `MpvCaptureViewer.start()` to a concrete `CaptureRuntime` and the session manager. Keep first-frame and stream-health checks as explicit gates before Ready.
 2. Make the UI-safe wrapper around the one-shot V4L2/PipeWire inventory adapters explicit: no automatic open on app launch, one bounded check on entering Capture Controls, and clear `unknown` vs. `not found` results.
 3. Add no-card tests for transactional cleanup when the viewer exits unexpectedly, first-frame timeout, and session state after child termination.
 4. Continue #13 documentation/fixtures only. Real KDE portal, monitor, lock/DPMS and remote Vesktop tests remain deferred until the user explicitly grants a safe interactive window.
