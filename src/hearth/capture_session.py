@@ -116,11 +116,20 @@ class ResolvedCaptureDevice:
     identity: UsbIdentity
     video_node_path: str
     mode: VideoMode
-    audio_source_id: str | None = None
+    # Resolved stable selector only; never a numeric PipeWire/ALSA object id.
+    audio_source_selector: str | None = None
 
     def __post_init__(self) -> None:
         if not self.video_node_path.startswith("/dev/"):
             raise ValueError("resolved video node must be an absolute /dev path")
+        if self.audio_source_selector is not None:
+            selector = self.audio_source_selector.strip()
+            if (
+                not selector
+                or selector.isdecimal()
+                or re.fullmatch(r"(?:card|alsa_card|node[._-]?id)[=:]?\d+", selector, re.IGNORECASE)
+            ):
+                raise ValueError("audio source selector must be stable, not a volatile numeric ID")
 
 
 class ViewerHandle(Protocol):
