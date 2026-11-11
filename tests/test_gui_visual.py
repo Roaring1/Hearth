@@ -231,11 +231,16 @@ def test_production_windows_render_and_capture(
     # exact same lazy window when the strip is expanded.
     assert window.capture_open_button.get_label() == "SCREEN SHARE"
     assert (
-        "Open Screen Share setup and capture overview"
+        "Open Screen Share setup and capture overview in a separate window"
         in accessible_labels[id(window.capture_open_button)]
     )
     assert share_strip.capture_setup_button is not None
-    assert share_strip.capture_setup_button.get_label() == "SET UP"
+    assert share_strip.capture_setup_label is not None
+    assert share_strip.capture_setup_label.get_text() == "SET UP"
+    assert any(
+        "separate window" in label
+        for label in accessible_labels[id(share_strip.capture_setup_button)]
+    )
     assert window._capture_window is None
     window.capture_open_button.emit("clicked")
     overview = window._capture_window

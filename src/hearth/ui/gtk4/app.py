@@ -439,16 +439,20 @@ class Strip(Gtk.Box):
         self.append(self.listeners)
         self.listeners.set_visible(window.expanded)
         self.capture_setup_button: Gtk.Button | None = None
+        self.capture_setup_label: Gtk.Label | None = None
         if channel.master:
             self._fill_share_details()
-            self.capture_setup_button = Gtk.Button(label="SET UP")
+            self.capture_setup_button = Gtk.Button()
             self.capture_setup_button.add_css_class("capture-setup")
+            self.capture_setup_label = action_icons.button(
+                self.capture_setup_button, "popout", "SET UP", size=13
+            )
             action_icons.accessible_label(
                 self.capture_setup_button,
-                "Open Screen Share setup and capture overview",
+                "Open Screen Share setup and capture overview in a separate window",
             )
             self.capture_setup_button.set_tooltip_text(
-                "Set up the video friends see and the audio they hear"
+                "Open the separate Screen Share setup and capture overview"
             )
             self.capture_setup_button.connect(
                 "clicked", lambda _button: window.open_capture_overview()
@@ -1589,9 +1593,9 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.capture_open_button.add_css_class("capture-launch")
         action_icons.accessible_label(
             self.capture_open_button,
-            "Open Screen Share setup and capture overview",
+            "Open Screen Share setup and capture overview in a separate window",
         )
-        self.capture_open_button.set_tooltip_text("Set up what friends see and hear")
+        self.capture_open_button.set_tooltip_text("Open the separate Screen Share setup window")
         self.capture_open_button.connect("clicked", lambda _button: self.open_capture_overview())
         capture_entry.append(self.capture_open_button)
         capture_hint = Gtk.Label(label="Set up the video window and audio friends hear", xalign=0.0)

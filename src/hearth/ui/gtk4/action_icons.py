@@ -15,7 +15,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk  # noqa: E402
 
 _ART = Path(__file__).with_name("art")
-_ALLOWED = frozenset({"collapse", "refresh", "save", "sliders"})
+_ALLOWED = frozenset({"collapse", "popout", "refresh", "save", "sliders"})
 
 
 def image(name: str, size: int = 12) -> Gtk.Image:
