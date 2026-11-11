@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import shutil
+import tempfile
+from pathlib import Path
+
 import pytest
 
+from hearth.capture_mpv_ipc import MpvViewerProcess
 from hearth.capture_session import ResolvedCaptureDevice, UsbIdentity, VideoMode
 from hearth.capture_viewer import (
     MpvCaptureViewer,
@@ -84,12 +89,18 @@ def test_executable_path_is_trimmed_before_argv_construction() -> None:
     assert argv[0] == "/usr/bin/mpv"
 
 
-def test_mpv_viewer_adapter_builds_and_delegates_to_owned_process_factory() -> None:
+def test_mpv_viewer_adapter_builds_and_delegates_to_owned_process_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = Path(tempfile.mkdtemp(prefix="hearth-test-runtime-"))
+    runtime.chmod(0o700)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
     calls: list[list[str]] = []
 
     class FakeHandle:
-        def stop(self) -> None:
-            calls.append(["STOP"])
+        def stop(self, *, timeout: float = 1.0) -> int:
+            calls.append(["STOP", str(timeout)])
+            return 0
 
     def factory(argv):
         calls.append(list(argv))
@@ -98,9 +109,32 @@ def test_mpv_viewer_adapter_builds_and_delegates_to_owned_process_factory() -> N
     adapter = MpvCaptureViewer(executable="/usr/bin/mpv", fullscreen=False, process_factory=factory)
     handle = adapter.start(_device())
 
-    assert isinstance(handle, FakeHandle)
+    assert isinstance(handle, MpvViewerProcess)
     assert calls[0][0] == "/usr/bin/mpv"
     assert calls[0][-2:] == ["--", "av://v4l2:/dev/video42"]
     assert "--fullscreen" not in calls[0]
+    ipc_arg = next(arg for arg in calls[0] if arg.startswith("--input-ipc-server="))
+    session_dir = Path(ipc_arg.split("=", 1)[1]).parent
+    assert session_dir.parent == runtime and session_dir.exists()
     handle.stop()
-    assert calls[-1] == ["STOP"]
+    assert not session_dir.exists()
+    assert calls[-1] == ["STOP", "1.0"]
+    shutil.rmtree(runtime)
+
+
+def test_mpv_viewer_adapter_removes_private_directory_when_process_start_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = Path(tempfile.mkdtemp(prefix="hearth-test-runtime-fail-"))
+    runtime.chmod(0o700)
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+
+    def fail_factory(_argv):
+        raise RuntimeError("synthetic exec failure")
+
+    adapter = MpvCaptureViewer(process_factory=fail_factory)
+    with pytest.raises(RuntimeError, match="synthetic exec failure"):
+        adapter.start(_device())
+
+    assert list(runtime.iterdir()) == []
+    shutil.rmtree(runtime)

@@ -1,6 +1,6 @@
 # Capture Mode session and adapter contract
 
-**Checkpoint: 2026-11-11.** This is the current no-card engineering checkpoint. The transaction coordinator, fixture parsers, one-shot inventory adapters and pure viewer argv builder exist. No real capture session has been started. The one-shot providers and viewer argv builder have not been invoked against a capture card or the live PipeWire graph.
+**Checkpoint: 2026-11-11.** This is the current no-card engineering checkpoint. The transaction coordinator, fixture parsers, one-shot inventory adapters, owned viewer process, private mpv IPC first-frame check and active-session exit watcher exist. No real capture session has been started. The one-shot providers and viewer adapter have not been invoked against a capture card or the live PipeWire graph.
 
 ## Implemented
 
@@ -19,7 +19,7 @@ The module is toolkit-free and owns lifecycle order/state, not the operating-sys
 7. Verify the expected audio-route state.
 8. Only then report `RUNNING` / Ready.
 
-While RUNNING, an active-session waiter observes the owned viewer handle. If it exits unexpectedly, it calls `CaptureSessionManager.viewer_exited(returncode)`. The manager cleans up remaining resources in the normal order, records the exit and enters `FAILED` even if cleanup succeeds. This prevents the mixer from continuing to show a ready-looking state while the share window is gone. An explicit Stop acknowledges the failure and returns to `DORMANT`; if cleanup failed, Stop retries only the retained leases. The waiter exists only while the session is active.
+While RUNNING, an active-session waiter observes the owned viewer handle. If it exits unexpectedly, it calls `CaptureSessionManager.viewer_exited(returncode)`. The manager cleans up remaining resources in the normal order, records the exit and enters `FAILED` even if cleanup succeeds. This prevents the mixer from continuing to show a ready-looking state while the share window is gone. An explicit Stop acknowledges the failure and returns to `DORMANT`; if cleanup failed, Stop retries only the retained leases. The waiter exists only while the session is active. Stale waiter completion after an intentional Stop is ignored internally; a direct external exit report outside RUNNING is rejected.
 
 On failure it attempts cleanup in reverse ownership order: viewer/device handle, idle inhibitor, session routes. A failed cleanup lease remains retained and the manager reports `FAILED`; Stop retries it. New Start is refused until all leases are cleaned and the state returns to `DORMANT`. The tests inject failure at every startup phase and exercise rollback/retry.
 
@@ -45,21 +45,28 @@ On failure it attempts cleanup in reverse ownership order: viewer/device handle,
 
 `hearth.capture_viewer.build_mpv_viewer_argv()` is a pure argv builder. It takes one freshly resolved node/mode, uses `av://v4l2:/dev/videoN`, passes the selected discrete `input_format`, `video_size` and rational `framerate`, and uses an explicit FourCC allow-list. Unknown formats raise `UnsupportedCaptureFormat`. The command disables audio, OSC, OSD, subtitles and built-in keys, uses no user mpv config, hides the cursor, sets the exact `Hearth - Share Output` title and can request fullscreen.
 
+`MpvCaptureViewer.start()` creates a unique private 0700 directory under the current user's `XDG_RUNTIME_DIR`, adds `--input-ipc-server=<private socket>` to the command, starts the child through `proc.spawn_owned()`, and returns an `MpvViewerProcess`. If startup fails, its private directory is removed.
+
 `hearth.proc.spawn_owned()` and `hearth.proc.OwnedProcess` provide the process-ownership layer. All `Popen` creation remains in `hearth.proc`. It starts a small standard-library exec wrapper, waits for a status-pipe handshake proving that Linux `PR_SET_PDEATHSIG` was installed and the requested executable successfully replaced the wrapper, then keeps the creating daemon thread blocked in `wait()` for the entire child lifetime. The wrapper uses SIGTERM on parent-thread death and checks the parent PID to cover the process-death-before-prctl race. Explicit Stop is bounded and escalates to SIGKILL before reaping.
 
 The creation-thread requirement is verified by a synthetic integration test: the test creates a sleeping Python child from a dedicated thread, exits that thread while the test process remains alive, and confirms the child receives SIGTERM. Other tests cover normal Stop/reap, unexpected exit and exec failure. These tests launch only short-lived synthetic Python children, not mpv, a video device, GTK or audio.
 
-Two isolated Xvfb checks have been performed:
+`MpvViewerProcess.wait_for_first_frame(timeout_s)` uses bounded local JSON IPC requests. It requires all three conditions: `video-frame-info/picture-type` is `I`, `P` or `B`; `video-params` reports positive decoded width/height; and `vo-configured` is true. A still-running PID or an open V4L2 input is not sufficient. It reports timeout and early process exit distinctly. The IPC client exists only during this bounded first-frame check; no persistent IPC watcher is created. Stop reaps mpv before deleting the private socket directory.
+
+The IPC socket is powerful and unauthenticated by design. It is therefore local-only and protected by a 0700 directory inside the verified, owner-controlled `XDG_RUNTIME_DIR`; the implementation refuses a shared `/tmp` fallback. mpv's [JSON IPC documentation](https://github.com/mpv-player/mpv/blob/master/DOCS/man/ipc.rst) describes this interface and its trust boundary. The readiness properties are documented in the [mpv property list](https://mpv.io/manual/stable/#property-list).
+
+Three isolated Xvfb checks have been performed:
 
 - mpv 0.40.0 played a generated 1280x720 test file with the clean-window flags, opened the exact title and yielded a screenshot. This was X11/Xvfb, not Wayland.
 - The installed mpv/FFmpeg build accepted the `av://v4l2` + lavf option shape with a deliberately nonexistent `/dev` path and reached FFmpeg's V4L2 handler, which returned the expected missing-node error. No actual video node was opened.
+- `proc.spawn_owned()` launched mpv against a synthetic `av://lavfi:testsrc` source under Xvfb. The private IPC check returned a decoded 640x360 I-frame; Stop reaped the child and removed its IPC directory. This proves the IPC/readiness mechanics with a synthetic source only.
 
-These checks prove command shape/compiled input support only. They do not verify the FourCC mapping against the target card, actual frames, frame cadence, fullscreen placement, portal capture or remote Vesktop video. `--untimed` is not included by default; its timing impact needs measurement.
+These checks prove command shape, the local IPC readiness condition with a synthetic source, and compiled input support only. They do not verify the FourCC mapping against the target card, actual card frames, frame cadence/ongoing health, fullscreen placement, portal capture or remote Vesktop video. `--untimed` is not included by default; its timing impact needs measurement.
 
 ## Not implemented yet
 
 - Connect `MpvCaptureViewer.start()` to a concrete `CaptureRuntime.start_viewer()` implementation and `CaptureSessionManager`. The adapter already delegates to `proc.spawn_owned`, but no runtime currently calls it and no mpv process has been started.
-- The active viewer/streaming device open, first/last-frame and stall monitor, and No signal integration. Inventory ioctls must close before the viewer takes the streaming open; one component must clearly own the active device handle.
+- The active viewer/streaming device open and continuous last-frame/stall monitor, plus No signal integration. First-frame readiness now exists in `MpvViewerProcess`, but no concrete `CaptureRuntime` calls it yet. Inventory ioctls must close before the viewer takes the streaming open; one component must clearly own the active device handle.
 - A real idle-inhibit lease adapter and its Stop/crash cleanup.
 - A live audio safety/route adapter, owner metadata or `pw-dump` route verification. Full user-managed VM-SHARE source editing and single-path migration remain explicitly deferred in #10. No live audio routes are changed by this work.
 - Active Capture Controls/Share Output UI integration. Do not show Start/Stop until the underlying operations exist.
@@ -67,9 +74,9 @@ These checks prove command shape/compiled input support only. They do not verify
 
 ## Next no-card work
 
-1. Connect `MpvCaptureViewer.start()` to a concrete `CaptureRuntime` and the session manager. Keep first-frame and stream-health checks as explicit gates before Ready.
-2. Make the UI-safe wrapper around the one-shot V4L2/PipeWire inventory adapters explicit: no automatic open on app launch, one bounded check on entering Capture Controls, and clear `unknown` vs. `not found` results.
-3. Add no-card tests for transactional cleanup when the viewer exits unexpectedly, first-frame timeout, and session state after child termination.
+1. Connect `MpvCaptureViewer.start()` and `MpvViewerProcess.wait_for_first_frame()` to a concrete `CaptureRuntime` and the session manager. First-frame gating exists, but remains unwired at the runtime layer.
+2. Add active-session frame-loss/stall monitoring and a clean No signal feedback path; do not leave a frozen last frame looking live.
+3. Make the UI-safe wrapper around the one-shot V4L2/PipeWire inventory adapters explicit: no automatic open on app launch, one bounded check on entering Capture Controls, and clear `unknown` vs. `not found` results.
 4. Continue #13 documentation/fixtures only. Real KDE portal, monitor, lock/DPMS and remote Vesktop tests remain deferred until the user explicitly grants a safe interactive window.
 5. Keep #10 deferred. All session route operations remain abstract; no live route adapter is supplied in this tranche.
 6. Wire active controls and Share Output in #12 only after the owned viewer/session operations work. No inert Start/Stop buttons.
