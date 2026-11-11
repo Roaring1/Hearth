@@ -276,9 +276,13 @@ def parse_v4l2_discrete_modes(text: str) -> tuple[VideoMode, ...]:
             current_format = format_match.group("fourcc")
             current_size = None
             continue
-        size_match = _SIZE.match(line)
-        if size_match and current_format is not None:
-            current_size = (int(size_match.group("width")), int(size_match.group("height")))
+        if line.lstrip().startswith("Size:"):
+            # A stepwise/continuous size invalidates the previous discrete size.
+            # Never attach its frame intervals to a stale discrete resolution.
+            current_size = None
+            size_match = _SIZE.match(line)
+            if size_match and current_format is not None:
+                current_size = (int(size_match.group("width")), int(size_match.group("height")))
             continue
         if "Interval: Discrete" not in line or current_format is None or current_size is None:
             continue

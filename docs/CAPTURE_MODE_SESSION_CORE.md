@@ -39,7 +39,7 @@ A process crash still needs a real viewer parent-death/owner strategy and a one-
 
 ## Deliberately not implemented here
 
-- No live udev/V4L2 provider or actual `open()` call yet. The fixture-friendly parser in `hearth.capture_devices` is implemented, but no real command or device node is queried. Hardware identity, capabilities and busy behavior remain unverified.
+- The read-only V4L2 inventory provider is implemented but has **not** been invoked on the target machine. No explicit `open()` call or stream handle is opened by Hearth yet. Hardware identity, capability output, permissions and busy behavior remain unverified.
 - No live PipeWire audio inventory or route safety/mutation, link ownership tags or `pw-dump` verification. `associate_audio_source()` only tests USB-parent identity against fixture candidates; it does not inspect the PipeWire graph. The full user-managed routing work remains deferred in #10.
 - No mpv or other viewer adapter, idle-inhibit adapter, systemd unit, timer, watcher, polling loop or background process.
 - No GTK import, UI, real process launch, device fd, audio route or machine-state change.
@@ -69,7 +69,7 @@ Do not add a permanent service, timer, hotplug watcher or polling loop to solve 
 - Parses only discrete pixel format, frame size and FPS combinations from `v4l2-ctl --list-formats-ext`. Stepwise/continuous ranges are not guessed or expanded.
 - Groups nodes by stable USB key. It chooses a capture node only when exactly one eligible node exists; multiple eligible nodes require an explicit path selection.
 
-The provider that gathers those command/sysfs outputs is still not implemented. These functions accept strings and mappings only; they do not run `udevadm`, `v4l2-ctl`, open `/dev/videoN`, or touch hardware. The tests use representative fixture text for a card with video and metadata nodes, not a record from the absent GUV302G.
+The parser functions accept strings and mappings only; the provider above gathers those values through bounded read-only commands. Neither parser nor provider opens `/dev/videoN`. Provider tests use synthetic command output for a card with video and metadata nodes, not a record from the absent GUV302G. The provider itself has not been invoked on the user's desktop.
 
 ## USB audio-source association (fixture-backed only)
 
@@ -82,3 +82,16 @@ The device module provides `parse_udev_usb_identity()` and `associate_audio_sour
 - Friendly names, ALSA card numbers and numeric PipeWire object IDs are never used to associate endpoints. The future adapter supplies a stable source selector for a matched endpoint; obvious volatile numeric selectors are rejected.
 
 This is pure matching logic over udev-property fixtures and fake source candidates. It does not parse a live `pw-dump`, `pactl` or ALSA inventory and does not open or mutate an audio device. The future adapter must establish that PipeWire source metadata carries the matching udev parent identity before this association can be trusted on the target system. Real GUV302G audio topology is still unknown and must be measured when the card is available.
+
+## One-shot live V4L2 provider (implemented, not invoked on this machine)
+
+`hearth.capture_provider.V4L2InventoryProvider` now gathers the parser inputs with the existing `hearth.proc.run` argv-only subprocess seam:
+
+1. `v4l2-ctl --list-devices` lists current video nodes.
+2. `udevadm info --query=property --name=/dev/videoN` resolves USB parent identity for each listed node.
+3. `v4l2-ctl --device=/dev/videoN --all` reads the per-node `Device Caps` block.
+4. Only capture-capable nodes receive `v4l2-ctl --device=/dev/videoN --list-formats-ext`.
+
+Every command has a configurable positive timeout (3 seconds by default). A top-level listing failure raises `CaptureDiscoveryError`. A per-node failure is returned as a `CaptureProbeIssue` alongside the other discovered nodes; it does not cause another node to be silently substituted. The inventory is a one-shot snapshot and creates no watcher, timer, service, device fd or persistent process.
+
+Provider tests inject a fake `proc` runner and assert the exact commands, timeout and output handling. The provider has **not** been called on the target machine, so command availability, udev property shape, device permissions, busy behavior and the GUV302G's actual nodes/modes remain unverified.
