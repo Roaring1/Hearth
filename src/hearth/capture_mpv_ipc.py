@@ -8,7 +8,9 @@ waiting for the first frame; it does not create a watcher or background thread.
 from __future__ import annotations
 
 import json
+import math
 import os
+import select
 import shutil
 import socket
 import stat
@@ -42,6 +44,10 @@ class ViewerReadinessTimeout(HearthError):
 
 class ViewerExitedBeforeFirstFrame(HearthError):
     """The owned mpv process exited before a decoded frame was available."""
+
+
+class ViewerStreamStalled(HearthError):
+    """mpv stopped reporting video timestamp progress during an active session."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +106,103 @@ class MpvViewerProcess:
 
     def wait(self, timeout: float | None = None) -> int:
         return self._process.wait(timeout=timeout)
+
+    def monitor_until_exit(self, stall_timeout_s: float = 2.0) -> int:
+        """Wait for child exit while observing event-driven video timestamp progress.
+
+        This monitor is intended to run only in the active session's existing
+        viewer-wait thread, after `wait_for_first_frame()` succeeded. It keeps
+        one local IPC connection open and uses `observe_property(time-pos)`;
+        there is no timer-driven query loop. If timestamps stop changing for
+        `stall_timeout_s`, it raises `ViewerStreamStalled` so the session manager
+        can transition to FAILED and perform normal resource cleanup.
+        """
+        if stall_timeout_s <= 0:
+            raise ValueError("stall_timeout_s must be positive")
+        if self.poll() is not None:
+            return self._process.wait(timeout=1.0)
+        socket_path = os.fsencode(self.ipc_socket)
+        if len(socket_path) >= 100:
+            raise ViewerIPCError("mpv IPC socket path is too long for a Unix-domain socket")
+
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            connection.connect(str(self.ipc_socket))
+        except OSError as exc:
+            connection.close()
+            if self.poll() is not None:
+                return self._process.wait(timeout=1.0)
+            raise ViewerIPCError(f"Could not connect to mpv stream monitor: {exc}") from exc
+
+        buffer = bytearray()
+        last_position: float | None = None
+        last_progress = time.monotonic()
+        request_id = 4001
+        try:
+            connection.sendall(
+                (
+                    json.dumps(
+                        {
+                            "command": ["observe_property", 1, "time-pos"],
+                            "request_id": request_id,
+                        },
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                ).encode("utf-8")
+            )
+            acknowledged = False
+            while True:
+                remaining = stall_timeout_s - (time.monotonic() - last_progress)
+                readable, _, _ = select.select([connection], [], [], max(0.0, remaining))
+                if not readable:
+                    raise ViewerStreamStalled(
+                        "Share Output video timestamps stopped advancing "
+                        f"for {stall_timeout_s:.1f}s"
+                    )
+                chunk = connection.recv(4096)
+                if not chunk:
+                    return self._process.wait(timeout=1.0)
+                buffer.extend(chunk)
+                while b"\n" in buffer:
+                    line, _, rest = buffer.partition(b"\n")
+                    buffer = bytearray(rest)
+                    try:
+                        message = json.loads(line)
+                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                        raise ViewerIPCError("mpv sent invalid stream-monitor JSON") from exc
+                    if not isinstance(message, Mapping):
+                        continue
+                    if message.get("request_id") == request_id:
+                        if message.get("error") != "success":
+                            raise ViewerIPCError(
+                                f"mpv could not observe video timestamps: {message.get('error')}"
+                            )
+                        acknowledged = True
+                        last_progress = time.monotonic()
+                        continue
+                    if message.get("event") != "property-change" or message.get("id") != 1:
+                        continue
+                    position = message.get("data")
+                    if (
+                        isinstance(position, bool)
+                        or not isinstance(position, (int, float))
+                        or not math.isfinite(position)
+                    ):
+                        continue
+                    numeric_position = float(position)
+                    if last_position is None or numeric_position != last_position:
+                        last_position = numeric_position
+                        if acknowledged:
+                            last_progress = time.monotonic()
+        except ViewerStreamStalled:
+            raise
+        except (ConnectionError, OSError) as exc:
+            if self.poll() is not None:
+                return self._process.wait(timeout=1.0)
+            raise ViewerIPCError(f"mpv stream monitor connection failed: {exc}") from exc
+        finally:
+            connection.close()
 
     def wait_for_first_frame(self, timeout_s: float) -> FirstFrame:
         """Wait for decoded frame metadata and a configured video output.

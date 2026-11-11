@@ -31,7 +31,8 @@ On failure it attempts cleanup in reverse ownership order: viewer/device handle,
 - It requires `ID_BUS=usb` and per-node Device Caps. Aggregate card capabilities alone are insufficient. Metadata-only nodes are excluded. Stepwise/continuous mode ranges are not guessed.
 - Nodes are grouped by USB identity. A single eligible capture node can be selected automatically; multiple eligible nodes require explicit user choice.
 - `hearth.capture_provider.V4L2InventoryProvider` performs one bounded sequence when explicitly called: list nodes, resolve each node's udev properties, query per-node caps, then enumerate formats only for capture-capable nodes. A top-level listing failure aborts; per-node failures are returned as issues without substituting another node.
-- Each `v4l2-ctl` ioctl command transiently opens its node and closes on process exit. Hearth does not open/hold a streaming handle in this inventory path. The provider has not been invoked on the user's machine; only fake process-runner tests exist. The absent GUV302G's node list, permissions, busy behavior and modes remain unknown.
+- `hearth.capture_runtime.V4L2CaptureResolver.probe_device()` is the Start-time seam: it takes exactly one inventory snapshot, selects by saved stable USB identity, requires one eligible capture node and the exact enumerated preferred mode. Any incomplete inventory or ambiguous node selection fails closed. It returns only the current ephemeral `/dev/videoN` to the active operation and does not persist it.
+- Each `v4l2-ctl` ioctl command transiently opens its node and closes on process exit. Hearth does not open/hold a streaming handle in this inventory/resolution path. The provider/resolver have not been invoked on the user's machine; only fake inventory/process-runner tests exist. The absent GUV302G's node list, permissions, busy behavior and modes remain unknown.
 
 ### PipeWire audio inventory and USB association
 
@@ -51,22 +52,24 @@ On failure it attempts cleanup in reverse ownership order: viewer/device handle,
 
 The creation-thread requirement is verified by a synthetic integration test: the test creates a sleeping Python child from a dedicated thread, exits that thread while the test process remains alive, and confirms the child receives SIGTERM. Other tests cover normal Stop/reap, unexpected exit and exec failure. These tests launch only short-lived synthetic Python children, not mpv, a video device, GTK or audio.
 
-`MpvViewerProcess.wait_for_first_frame(timeout_s)` uses bounded local JSON IPC requests. It requires all three conditions: `video-frame-info/picture-type` is `I`, `P` or `B`; `video-params` reports positive decoded width/height; and `vo-configured` is true. A still-running PID or an open V4L2 input is not sufficient. It reports timeout and early process exit distinctly. The IPC client exists only during this bounded first-frame check; no persistent IPC watcher is created. Stop reaps mpv before deleting the private socket directory.
+`MpvViewerProcess.wait_for_first_frame(timeout_s)` uses bounded local JSON IPC requests. It requires all three conditions: `video-frame-info/picture-type` is `I`, `P` or `B`; `video-params` reports positive decoded width/height; and `vo-configured` is true. A still-running PID or an open V4L2 input is not sufficient. It reports timeout and early process exit distinctly.
+
+After first-frame readiness, `MpvViewerProcess.monitor_until_exit(stall_timeout_s)` opens one IPC connection and subscribes to mpv's `time-pos` property with `observe_property`. The existing session waiter uses this method while RUNNING, so frame-progress monitoring exists only while a capture session is active. When timestamps stop changing for the configured interval (2 seconds by default), it raises `ViewerStreamStalled`; the session manager transitions to FAILED and runs its normal cleanup. This is event-driven, not timer polling. Stop reaps mpv before deleting the private socket directory.
 
 The IPC socket is powerful and unauthenticated by design. It is therefore local-only and protected by a 0700 directory inside the verified, owner-controlled `XDG_RUNTIME_DIR`; the implementation refuses a shared `/tmp` fallback. mpv's [JSON IPC documentation](https://github.com/mpv-player/mpv/blob/master/DOCS/man/ipc.rst) describes this interface and its trust boundary. The readiness properties are documented in the [mpv property list](https://mpv.io/manual/stable/#property-list).
 
-Three isolated Xvfb checks have been performed:
+Four isolated Xvfb checks have been performed:
 
 - mpv 0.40.0 played a generated 1280x720 test file with the clean-window flags, opened the exact title and yielded a screenshot. This was X11/Xvfb, not Wayland.
 - The installed mpv/FFmpeg build accepted the `av://v4l2` + lavf option shape with a deliberately nonexistent `/dev` path and reached FFmpeg's V4L2 handler, which returned the expected missing-node error. No actual video node was opened.
-- `proc.spawn_owned()` launched mpv against a synthetic `av://lavfi:testsrc` source under Xvfb. The private IPC check returned a decoded 640x360 I-frame; Stop reaped the child and removed its IPC directory. This proves the IPC/readiness mechanics with a synthetic source only.
+- `proc.spawn_owned()` launched mpv against a synthetic `av://lavfi:testsrc` source under Xvfb. The private IPC check returned a decoded 640x360 I-frame; Stop reaped the child and removed its IPC directory. A second synthetic end-to-end run then monitored `time-pos` events, sent an orderly quit, observed exit code 0 and removed the private IPC directory. These prove the IPC/readiness/progress mechanics with a synthetic source only.
 
-These checks prove command shape, the local IPC readiness condition with a synthetic source, and compiled input support only. They do not verify the FourCC mapping against the target card, actual card frames, frame cadence/ongoing health, fullscreen placement, portal capture or remote Vesktop video. `--untimed` is not included by default; its timing impact needs measurement.
+These checks prove command shape, local IPC first-frame/progress behavior with synthetic sources, and compiled input support only. They do not verify the FourCC mapping against the target card, actual card frames, real-card cadence, pixel-level freeze/no-signal detection, fullscreen placement, portal capture or remote Vesktop video. `time-pos` proves stream timestamps advance; it does not prove that changing image content is visible. `--untimed` is not included by default; its timing impact needs measurement.
 
 ## Not implemented yet
 
 - Connect `MpvCaptureViewer.start()` to a concrete `CaptureRuntime.start_viewer()` implementation and `CaptureSessionManager`. The adapter already delegates to `proc.spawn_owned`, but no runtime currently calls it and no mpv process has been started.
-- The active viewer/streaming device open and continuous last-frame/stall monitor, plus No signal integration. First-frame readiness now exists in `MpvViewerProcess`, but no concrete `CaptureRuntime` calls it yet. Inventory ioctls must close before the viewer takes the streaming open; one component must clearly own the active device handle.
+- The active viewer/streaming device open and No signal UI integration. First-frame and active-session timestamp-stall monitoring now exist in `MpvViewerProcess`, but no concrete `CaptureRuntime` calls the viewer adapter yet. Inventory ioctls must close before the viewer takes the streaming open; one component must clearly own the active device handle.
 - A real idle-inhibit lease adapter and its Stop/crash cleanup.
 - A live audio safety/route adapter, owner metadata or `pw-dump` route verification. Full user-managed VM-SHARE source editing and single-path migration remain explicitly deferred in #10. No live audio routes are changed by this work.
 - Active Capture Controls/Share Output UI integration. Do not show Start/Stop until the underlying operations exist.
@@ -75,7 +78,7 @@ These checks prove command shape, the local IPC readiness condition with a synth
 ## Next no-card work
 
 1. Connect `MpvCaptureViewer.start()` and `MpvViewerProcess.wait_for_first_frame()` to a concrete `CaptureRuntime` and the session manager. First-frame gating exists, but remains unwired at the runtime layer.
-2. Add active-session frame-loss/stall monitoring and a clean No signal feedback path; do not leave a frozen last frame looking live.
+2. Wire the existing event-driven `time-pos` stall monitor into the concrete runtime, and add clean No signal feedback; do not leave a frozen last frame looking live.
 3. Make the UI-safe wrapper around the one-shot V4L2/PipeWire inventory adapters explicit: no automatic open on app launch, one bounded check on entering Capture Controls, and clear `unknown` vs. `not found` results.
 4. Continue #13 documentation/fixtures only. Real KDE portal, monitor, lock/DPMS and remote Vesktop tests remain deferred until the user explicitly grants a safe interactive window.
 5. Keep #10 deferred. All session route operations remain abstract; no live route adapter is supplied in this tranche.

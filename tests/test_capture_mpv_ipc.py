@@ -7,6 +7,7 @@ import os
 import socket
 import stat
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from hearth.capture_mpv_ipc import (
     ViewerExitedBeforeFirstFrame,
     ViewerIPCError,
     ViewerReadinessTimeout,
+    ViewerStreamStalled,
     create_private_ipc_directory,
 )
 
@@ -254,3 +256,108 @@ def test_socket_response_matching_ignores_unrelated_events(tmp_path: Path) -> No
 
     with FakeMpvIpcServer(viewer.ipc_socket, handler), pytest.raises(ViewerReadinessTimeout):
         viewer.wait_for_first_frame(timeout_s=0.1)
+
+
+class FakeFrameMonitorServer:
+    """Serve one observe_property subscription, then exit or hold without frames."""
+
+    def __init__(
+        self,
+        path: Path,
+        process: FakeProcess,
+        positions: list[float],
+        *,
+        hold_open: bool,
+    ) -> None:
+        self.path = path
+        self.process = process
+        self.positions = positions
+        self.hold_open = hold_open
+        self.stop_event = threading.Event()
+        self.errors: list[BaseException] = []
+        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.server.bind(str(path))
+        self.server.listen(1)
+        self.server.settimeout(0.05)
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self) -> None:
+        try:
+            client, _ = self.server.accept()
+            with client:
+                client.settimeout(1.0)
+                request_buffer = b""
+                while b"\n" not in request_buffer:
+                    request_buffer += client.recv(4096)
+                request_line, _, _ = request_buffer.partition(b"\n")
+                request = json.loads(request_line)
+                assert request["command"] == ["observe_property", 1, "time-pos"]
+                client.sendall(
+                    (
+                        json.dumps(
+                            {
+                                "request_id": request["request_id"],
+                                "error": "success",
+                            }
+                        )
+                        + "\n"
+                    ).encode()
+                )
+                for position in self.positions:
+                    if self.stop_event.is_set():
+                        break
+                    client.sendall(
+                        (
+                            json.dumps(
+                                {
+                                    "event": "property-change",
+                                    "id": 1,
+                                    "name": "time-pos",
+                                    "data": position,
+                                }
+                            )
+                            + "\n"
+                        ).encode()
+                    )
+                    time.sleep(0.02)
+                if self.hold_open:
+                    self.stop_event.wait(2.0)
+                else:
+                    self.process.exit_code = 0
+        except BaseException as exc:
+            self.errors.append(exc)
+        finally:
+            self.server.close()
+
+    def close(self) -> None:
+        self.stop_event.set()
+        self.thread.join(timeout=1.0)
+
+    def __enter__(self) -> FakeFrameMonitorServer:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+        assert self.errors == []
+
+
+def test_stream_monitor_uses_time_pos_events_and_returns_when_player_exits(
+    tmp_path: Path,
+) -> None:
+    process = FakeProcess()
+    viewer = _viewer(tmp_path, process=process)
+
+    with FakeFrameMonitorServer(viewer.ipc_socket, process, [0.1, 0.2, 0.3, 0.4], hold_open=False):
+        assert viewer.monitor_until_exit(stall_timeout_s=0.2) == 0
+
+
+def test_stream_monitor_fails_when_time_pos_stops_advancing(tmp_path: Path) -> None:
+    process = FakeProcess()
+    viewer = _viewer(tmp_path, process=process)
+
+    with (
+        FakeFrameMonitorServer(viewer.ipc_socket, process, [0.1], hold_open=True),
+        pytest.raises(ViewerStreamStalled, match="timestamps stopped advancing"),
+    ):
+        viewer.monitor_until_exit(stall_timeout_s=0.12)
