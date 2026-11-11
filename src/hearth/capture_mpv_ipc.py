@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from hearth.capture_frame_health import FrameHealthSnapshot, parse_frame_health_payload
 from hearth.errors import HearthError
 
 
@@ -96,6 +97,7 @@ class MpvViewerProcess:
         self.runtime_directory = runtime_directory
         self.ipc_socket = ipc_socket
         self._cleaned = False
+        self._frame_health: FrameHealthSnapshot | None = None
 
     @property
     def pid(self) -> int | None:
@@ -103,6 +105,11 @@ class MpvViewerProcess:
 
     def poll(self) -> int | None:
         return self._process.poll()
+
+    @property
+    def frame_health(self) -> FrameHealthSnapshot | None:
+        """Latest validated pixel-health metadata, if the Lua probe is available."""
+        return self._frame_health
 
     def wait(self, timeout: float | None = None) -> int:
         return self._process.wait(timeout=timeout)
@@ -138,19 +145,24 @@ class MpvViewerProcess:
         last_position: float | None = None
         last_progress = time.monotonic()
         request_id = 4001
+        frame_health_request_id = 4002
         try:
-            connection.sendall(
-                (
-                    json.dumps(
-                        {
-                            "command": ["observe_property", 1, "time-pos"],
-                            "request_id": request_id,
-                        },
-                        separators=(",", ":"),
-                    )
-                    + "\n"
-                ).encode("utf-8")
-            )
+            for subscription_id, property_id, property_name in (
+                (request_id, 1, "time-pos"),
+                (frame_health_request_id, 2, "user-data/hearth/frame-health"),
+            ):
+                connection.sendall(
+                    (
+                        json.dumps(
+                            {
+                                "command": ["observe_property", property_id, property_name],
+                                "request_id": subscription_id,
+                            },
+                            separators=(",", ":"),
+                        )
+                        + "\n"
+                    ).encode("utf-8")
+                )
             acknowledged = False
             while True:
                 remaining = stall_timeout_s - (time.monotonic() - last_progress)
@@ -181,7 +193,19 @@ class MpvViewerProcess:
                         acknowledged = True
                         last_progress = time.monotonic()
                         continue
-                    if message.get("event") != "property-change" or message.get("id") != 1:
+                    if message.get("request_id") == frame_health_request_id:
+                        # Frame health is advisory; older or restricted mpv builds
+                        # may not expose the user-data property. Timestamp
+                        # monitoring remains the required liveness signal.
+                        continue
+                    if message.get("event") != "property-change":
+                        continue
+                    if message.get("id") == 2:
+                        health = parse_frame_health_payload(message.get("data"))
+                        if health is not None:
+                            self._frame_health = health
+                        continue
+                    if message.get("id") != 1:
                         continue
                     position = message.get("data")
                     if (

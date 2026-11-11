@@ -271,11 +271,15 @@ class FakeFrameMonitorServer:
         positions: list[float],
         *,
         hold_open: bool,
+        frame_health: dict[str, object] | None = None,
+        frame_health_error: str | None = None,
     ) -> None:
         self.path = path
         self.process = process
         self.positions = positions
         self.hold_open = hold_open
+        self.frame_health = frame_health
+        self.frame_health_error = frame_health_error
         self.stop_event = threading.Event()
         self.errors: list[BaseException] = []
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -291,22 +295,46 @@ class FakeFrameMonitorServer:
             with client:
                 client.settimeout(1.0)
                 request_buffer = b""
-                while b"\n" not in request_buffer:
-                    request_buffer += client.recv(4096)
-                request_line, _, _ = request_buffer.partition(b"\n")
-                request = json.loads(request_line)
-                assert request["command"] == ["observe_property", 1, "time-pos"]
-                client.sendall(
-                    (
-                        json.dumps(
-                            {
-                                "request_id": request["request_id"],
-                                "error": "success",
-                            }
-                        )
-                        + "\n"
-                    ).encode()
-                )
+                requests: list[dict[str, object]] = []
+                while len(requests) < 2:
+                    while b"\n" not in request_buffer:
+                        request_buffer += client.recv(4096)
+                    request_line, _, request_buffer = request_buffer.partition(b"\n")
+                    requests.append(json.loads(request_line))
+                assert {request["command"][1]: request["command"][2] for request in requests} == {
+                    1: "time-pos",
+                    2: "user-data/hearth/frame-health",
+                }
+                for request in requests:
+                    client.sendall(
+                        (
+                            json.dumps(
+                                {
+                                    "request_id": request["request_id"],
+                                    "error": (
+                                        self.frame_health_error
+                                        if request["command"][1] == 2 and self.frame_health_error
+                                        else "success"
+                                    ),
+                                }
+                            )
+                            + "\n"
+                        ).encode()
+                    )
+                if self.frame_health is not None:
+                    client.sendall(
+                        (
+                            json.dumps(
+                                {
+                                    "event": "property-change",
+                                    "id": 2,
+                                    "name": "user-data/hearth/frame-health",
+                                    "data": self.frame_health,
+                                }
+                            )
+                            + "\n"
+                        ).encode()
+                    )
                 for position in self.positions:
                     if self.stop_event.is_set():
                         break
@@ -364,3 +392,48 @@ def test_stream_monitor_fails_when_time_pos_stops_advancing(tmp_path: Path) -> N
         pytest.raises(ViewerStreamStalled, match="timestamps stopped advancing"),
     ):
         viewer.monitor_until_exit(stall_timeout_s=0.12)
+
+
+def test_stream_monitor_exposes_validated_pixel_health_without_failing_the_stream(
+    tmp_path: Path,
+) -> None:
+    process = FakeProcess()
+    viewer = _viewer(tmp_path, process=process)
+    health = {
+        "ready": True,
+        "state": "mostly_black",
+        "width": 1920,
+        "height": 1080,
+        "sample_count": 4,
+        "black_fraction": 0.995,
+        "unchanged_s": 6.0,
+        "black_s": 6.0,
+    }
+
+    with FakeFrameMonitorServer(
+        viewer.ipc_socket, process, [0.1, 0.2, 0.3], hold_open=False, frame_health=health
+    ):
+        assert viewer.monitor_until_exit(stall_timeout_s=0.2) == 0
+
+    assert viewer.frame_health is not None
+    assert viewer.frame_health.state == "mostly_black"
+    assert viewer.frame_health.width == 1920
+    assert viewer.frame_health.black_fraction == 0.995
+
+
+def test_stream_monitor_keeps_timestamp_liveness_when_frame_health_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    process = FakeProcess()
+    viewer = _viewer(tmp_path, process=process)
+
+    with FakeFrameMonitorServer(
+        viewer.ipc_socket,
+        process,
+        [0.1, 0.2, 0.3],
+        hold_open=False,
+        frame_health_error="property unavailable",
+    ):
+        assert viewer.monitor_until_exit(stall_timeout_s=0.2) == 0
+
+    assert viewer.frame_health is None
