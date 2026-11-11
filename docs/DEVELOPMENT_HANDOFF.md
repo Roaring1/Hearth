@@ -727,11 +727,12 @@ This section is the current handoff for the Screen Share overview work and super
 - New `src/hearth/capture_session.py` introduces stable USB identity and V4L2 mode value objects, audio mode selection (`Xbox` default, `Nobara`, `Both`), injectable runtime/resource protocols, and a serialized Start/Stop coordinator.
 - New `src/hearth/capture_devices.py` parses V4L2 device listings, per-node udev USB identity, Device Caps and discrete format/size/FPS modes. It groups nodes by stable USB identity, excludes metadata-only nodes, and requires explicit user selection when multiple eligible nodes exist. Stepwise format ranges cannot inherit a previous discrete size. It also matches audio candidates by USB serial or normalized parent port path, retaining `unknown` / `none` / `matched` / `ambiguous` outcomes and refusing friendly-name/card-ID guesses.
 - New `src/hearth/capture_provider.py` implements an explicit one-shot read-only V4L2 inventory request with bounded subprocess calls. It surfaces per-node failures and never starts a watcher, timer, service or background process. The provider is tested only with a fake command runner and has not been run against real device nodes.
+- New `src/hearth/capture_pipewire.py` parses a fixture `pw-dump` snapshot and provides a bounded one-shot `pw-dump --no-colors` inventory adapter. It joins Node to Device using `device.id` only within that snapshot, returns `node.name` as the stable selector, excludes known non-USB/virtual nodes and treats unidentifiable physical sources as an incomplete/UNKNOWN inventory. It has not been invoked on the live PipeWire graph.
 - Startup does not report Ready until device resolution, audio safety validation, viewer launch, route acquisition, idle inhibit acquisition, first-frame arrival and route verification have all succeeded.
 - Stop/rollback order is explicit: stop viewer/device handle, release idle inhibitor, remove only the session-owned audio route lease. Failed cleanup retains the failed lease, reports `FAILED`, and allows a later Stop to retry. Start is refused until state returns to `DORMANT`.
-- The core is toolkit-free and uses no real V4L2, PipeWire, mpv, desktop portal, systemd or D-Bus adapter. Tests use a fake runtime and inject failures at each startup stage, including failed rollback and retry. The USB audio association is fixture-only; it does not inspect actual PipeWire source metadata. This is a lifecycle contract, not a working hardware implementation.
+- The core is toolkit-free. V4L2 and PipeWire inventory now have bounded one-shot providers, but they have not been invoked against the user's hardware/live graph; tests use synthetic command output and fake process runners. The mpv argv builder is pure and does not launch a child. The owned viewer process, real streaming device open, route adapter, idle inhibitor and crash recovery do not exist yet.
 - `docs/CAPTURE_MODE_SESSION_CORE.md` describes the implemented transaction contract and fixture-backed parser, and separates the still-missing live provider, audio association, viewer, route and inhibitor adapters.
-- Current full gate with this no-card slice: **553 passed**, 26 upstream GTK/PyGObject deprecation warnings, Ruff lint/format (101 files), mypy (36 source files), legacy compile, desktop-entry/AppStream validation and ShellCheck all passed. AppStream's uppercase application-id pedantic warning is non-fatal.
+- Current full gate with this no-card slice: **576 passed**, 25 upstream GTK/PyGObject deprecation warnings, Ruff lint/format (107 files), mypy (39 source files), legacy compile, desktop-entry/AppStream validation and ShellCheck all passed. AppStream's uppercase application-id pedantic warning is non-fatal.
 - This work does not implement #10 and does not change the user's audio routes, service state, devices, defaults, volume, mute or desktop session.
 
 ### No-card Wayland/mpv source research - 2026-11-10
@@ -745,10 +746,9 @@ This section is the current handoff for the Screen Share overview work and super
 
 ### Next work without capture hardware
 
-1. Keep the no-card overview and entry points stable; preserve the direct-routing caveat and manual Go Live boundary.
-2. Design the live #11 provider interface around bounded `hearth.proc` calls: enumerate V4L2 nodes, query per-node Device Caps and discrete formats, and probe/close once when Controls opens. Keep all command output parsers fixture-backed.
-3. Design the live audio inventory adapter to supply udev USB identity alongside PipeWire source selectors. Verify that actual video/audio functions expose the same normalized parent identity; until then, the association result is only fixture logic and must remain `unknown` on missing properties.
-4. Decide one owner for the active video streaming fd: the provider's probe must close immediately, and the viewer's active stream must have one unambiguous open/close owner. Do not open a long-lived probe fd while mpv is also using the node.
-5. Continue #13 source/fixture work; real portal/Vesktop/monitor/DPMS tests wait for an explicitly safe interactive session.
-6. Revisit #10 only when the user wants the full user-managed source editor and safe migration. Until then, route interfaces remain abstract and no live route is applied.
-7. Wire active controls and the viewer in #12 only after #11 supplies working operations. No fake Start/Stop buttons.
+1. Implement the parent-death-safe owned viewer process supervisor. Generic `proc.spawn()` detaches children; the viewer needs an owner thread that stays alive for the whole session, PID race checking, bounded Stop and verified exit.
+2. Add transactional cleanup coverage for unexpected viewer exit, first-frame timeout and child termination. No video node or audio route is needed for the fake cases.
+3. Keep the one-shot V4L2 and PipeWire providers lazy: one bounded check on entering Controls, no auto-start on app launch, no monitor/polling. Their current code has not been invoked against live device/audio data.
+4. Keep #13 source/fixture work only; real portal/Vesktop/monitor/DPMS tests wait for an explicitly safe interactive session.
+5. Keep #10 deferred and all audio route operations abstract.
+6. Wire active controls and the viewer in #12 only after #11's owned process and session operations exist. No fake Start/Stop buttons.
