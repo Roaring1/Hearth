@@ -103,3 +103,29 @@ Observed in that isolated X11 test only:
 - The player was interrupted and waited on by the smoke script; the temporary video, screenshot and log were removed by its cleanup trap.
 
 This confirms that mpv 0.40 accepts the candidate flag set and can produce a titled video window in Xvfb. The test explicitly used `--vo=x11`, so it does **not** prove the `gpu`/Wayland VO, KDE placement/fullscreen, portal selection, minimize/occlusion rendering, remote Vesktop capture or idle-inhibit behavior. No real video device, audio source, logged-in Wayland window, desktop focus, monitor, service or audio route was used. Treat the arguments as a prototype, not a committed viewer command.
+
+
+## V4L2 mpv input command research
+
+The mpv stable manual documents libavdevice input as `av://type:options`, with this explicit example:
+
+```text
+mpv av://v4l2:/dev/video0 --profile=low-latency --untimed
+```
+
+The manual describes `--untimed` as a hack to output each captured frame immediately instead of respecting input timestamps. Do **not** add it by default; frame cadence and A/V synchronization must be measured first. See [mpv av:// input documentation](https://mpv.io/manual/stable/#protocols).
+
+The mpv manual also documents `--demuxer-lavf-o=key=value,...` for passing AVOptions to libavformat. FFmpeg's V4L2 input options include `video_size`, `framerate`, and `input_format`; the latter accepts a codec name for compressed video or a pixel format for raw video. See [mpv demuxer-lavf options](https://mpv.io/manual/stable/#demuxer) and [FFmpeg V4L2 options](https://www.ffmpeg.org/ffmpeg-devices.html#video4linux2_002c-v4l2).
+
+Hearth now has a pure `build_mpv_viewer_argv()` prototype with an allow-list mapping for common FourCCs (`MJPG`, `H264`, `HEVC`, `YUYV`, `UYVY`, `NV12`, `YU12`, `RGB3`, `BGR3`). Unknown FourCC values fail closed. The builder sets `--audio=no`, disables OSC/OSD/subtitles/built-in keys, pins the selected size/rate/input format, and uses the resolved ephemeral node path. It does not launch a process. The fullscreen request is configurable; the default asks for fullscreen, but the Wayland compositor still controls actual output placement.
+
+The installed mpv 0.40.0 + FFmpeg build was tested with a deliberately nonexistent path under Xvfb using the `av://v4l2` form and explicit lavf options. mpv reported `Cannot open video device /dev/hearth-no-such-video-device`, proving that the URL reached FFmpeg's V4L2 input handler rather than failing as an unknown demuxer. This did not open any real node. The build's `ffmpeg -devices` lists `video4linux2,v4l2` as both input and output capable.
+
+The command builder is still a prototype. No actual capture stream has been opened, and no input-format mapping has been verified against the target card. The child process must not be launched until an owned process wrapper with correct parent-death semantics and bounded Stop exists. `hearth.proc.spawn()` uses a detached session; a simple fire-and-forget launch could leave a frozen viewer after Hearth exits.
+
+
+## mpv libavdevice command-construction smoke (Xvfb)
+
+A second isolated check used the mpv v0.40.0 `av://` input handler with `av://lavfi:testsrc=size=1280x720:rate=30`, running under private Xvfb and `--vo=x11`. The window title was `Hearth - Share Output`, geometry 1280x720, with audio, OSC, OSD, subtitles and built-in bindings disabled. The player and Xvfb session were stopped by the test wrapper. This validates only the libavdevice URL path and presentation shell with a synthetic lavfi source. It is not a V4L2 device test and not a Wayland/portal test.
+
+The candidate viewer argv is now assembled in `src/hearth/capture_viewer.py`. It uses mpv's documented `av://v4l2:/dev/videoN` form and `--demuxer-lavf-o` for exact input options. `docs/CAPTURE_MODE_SESSION_CORE.md` records the current option policy and remaining process-ownership requirements. The actual viewer adapter has not started mpv against a real `/dev/videoN`.
