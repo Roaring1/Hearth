@@ -39,7 +39,7 @@ A process crash still needs a real viewer parent-death/owner strategy and a one-
 
 ## Deliberately not implemented here
 
-- No V4L2/udev discovery or actual `open()` call yet. No hardware exists to verify device identity, capabilities or busy behavior.
+- No live udev/V4L2 provider or actual `open()` call yet. The fixture-friendly parser in `hearth.capture_devices` is implemented, but no real command or device node is queried. Hardware identity, capabilities and busy behavior remain unverified.
 - No PipeWire source association, route safety, route mutation, link ownership tags or `pw-dump` verification. The full user-managed routing work remains deferred in #10.
 - No mpv or other viewer adapter, idle-inhibit adapter, systemd unit, timer, watcher, polling loop or background process.
 - No GTK import, UI, real process launch, device fd, audio route or machine-state change.
@@ -58,3 +58,15 @@ The session coordinator does not replace the device-provider boundary required b
 6. Crash behavior needs an owned child process and a one-shot stale-session cleanup story. The current manager only handles orderly Start/Stop and failures delivered to the running process.
 
 Do not add a permanent service, timer, hotplug watcher or polling loop to solve discovery. Opening Controls can perform one bounded check; active-session events belong only to an active session.
+
+## V4L2 discovery parsing (fixture-backed, not a live provider)
+
+`hearth.capture_devices` now handles the parser/selection layer independently of command execution:
+
+- Parses `v4l2-ctl --list-devices` into `/dev/videoN` candidates and ignores `/dev/mediaN` nodes.
+- Parses udev properties for vendor/product plus USB serial (preferred) or physical USB path fallback. A node without a stable identity is rejected.
+- Parses the `Device Caps` block in preference to aggregate card `Capabilities`; metadata-only nodes are not capture-eligible.
+- Parses only discrete pixel format, frame size and FPS combinations from `v4l2-ctl --list-formats-ext`. Stepwise/continuous ranges are not guessed or expanded.
+- Groups nodes by stable USB key. It chooses a capture node only when exactly one eligible node exists; multiple eligible nodes require an explicit path selection.
+
+The provider that gathers those command/sysfs outputs is still not implemented. These functions accept strings and mappings only; they do not run `udevadm`, `v4l2-ctl`, open `/dev/videoN`, or touch hardware. The tests use representative fixture text for a card with video and metadata nodes, not a record from the absent GUV302G.
