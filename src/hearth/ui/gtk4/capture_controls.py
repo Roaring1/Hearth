@@ -11,11 +11,12 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 import logging
 from threading import Thread
-from typing import Any
+from typing import Any, Protocol
 
 from hearth import share as share_mod
 from hearth.capture_devices import CaptureNode
 from hearth.capture_provider import CaptureInventory, V4L2InventoryProvider
+from hearth.capture_session import SessionSnapshot, SessionStage, SessionState
 
 import gi
 
@@ -26,6 +27,16 @@ ProviderFactory = Callable[[], V4L2InventoryProvider]
 SelectionProvider = Callable[[], Sequence[str]]
 IdleAdd = Callable[..., Any]
 ThreadFactory = Callable[..., Any]
+SessionListener = Callable[[SessionSnapshot], None]
+SessionUnsubscribe = Callable[[], None]
+
+
+class SessionSnapshotSource(Protocol):
+    """Read-only subscription boundary for the toolkit-free session manager."""
+
+    def subscribe(self, listener: SessionListener) -> SessionUnsubscribe: ...
+
+
 log = logging.getLogger(__name__)
 
 
@@ -69,6 +80,7 @@ class CaptureControlsWindow(Gtk.Window):
         selection_provider: SelectionProvider | None = None,
         idle_add: IdleAdd | None = None,
         thread_factory: ThreadFactory | None = None,
+        session_manager: SessionSnapshotSource | None = None,
     ) -> None:
         super().__init__(title="Hearth - Capture Controls", transient_for=parent)
         self.add_css_class("hearth")
@@ -82,6 +94,7 @@ class CaptureControlsWindow(Gtk.Window):
         self._checking = False
         self._shutting_down = False
         self._worker: Any | None = None
+        self._session_unsubscribe: SessionUnsubscribe | None = None
 
         column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         column.set_margin_top(14)
@@ -125,15 +138,15 @@ class CaptureControlsWindow(Gtk.Window):
 
         session_section = _section("CAPTURE SESSION")
         self.session_status = Gtk.Label(label="Not started", xalign=0.0)
+        self.session_status.set_accessible_role(Gtk.AccessibleRole.STATUS)
         self.session_status.add_css_class("listener")
         session_section.append(self.session_status)
-        session_section.append(
-            _note(
-                "Starting a session is not available yet. Hearth still needs "
-                "the production audio-route owner and verified cleanup path. "
-                "No Start or Stop control is shown until those actions work."
-            )
+        self.session_detail = _note(
+            "Starting a session is not available yet. Hearth still needs "
+            "the production audio-route owner and verified cleanup path. "
+            "No Start or Stop control is shown until those actions work."
         )
+        session_section.append(self.session_detail)
         column.append(session_section)
 
         audio_section = _section("SCREEN-SHARE AUDIO")
@@ -150,6 +163,93 @@ class CaptureControlsWindow(Gtk.Window):
         column.append(audio_section)
 
         self.set_child(column)
+        if session_manager is not None:
+            try:
+                self._session_unsubscribe = session_manager.subscribe(self._on_session_snapshot)
+            except Exception:
+                log.exception("Capture Controls could not subscribe to session state")
+                self.session_status.set_text("Session status unavailable")
+                self.session_detail.set_text(
+                    "Hearth could not read the capture session state. This does not "
+                    "start or stop capture."
+                )
+
+    def _on_session_snapshot(self, snapshot: SessionSnapshot) -> None:
+        """Marshal toolkit-free session notifications to GTK's main context."""
+        if self._shutting_down:
+            return
+        try:
+            self._idle_add(self._apply_session_snapshot, snapshot)
+        except Exception:
+            # The main context may already be closing. Never touch GTK widgets
+            # directly from a session monitor thread.
+            log.debug("Capture Controls session update could not be queued", exc_info=True)
+
+    def _apply_session_snapshot(self, snapshot: SessionSnapshot) -> bool:
+        """Render a safe state/category summary without exposing raw errors."""
+        if self._shutting_down:
+            return GLib.SOURCE_REMOVE
+        state = snapshot.state
+        if state is SessionState.DORMANT:
+            self.session_status.set_text("Not started")
+            self.session_detail.set_text(
+                "No capture session is active. Start remains unavailable until "
+                "the production audio-route and cleanup path is ready."
+            )
+        elif state is SessionState.STARTING:
+            self.session_status.set_text("Preparing capture...")
+            self.session_detail.set_text(
+                "Hearth is checking the selected input and preparing the video session."
+            )
+        elif state is SessionState.RUNNING and snapshot.no_signal:
+            self.session_status.set_text("Video stopped updating")
+            self.session_detail.set_text(
+                "The Share Output picture has stopped advancing. Hearth is waiting "
+                "for video to resume; the session is still active."
+            )
+        elif state is SessionState.RUNNING:
+            self.session_status.set_text("Ready to share in Vesktop")
+            self.session_detail.set_text(
+                "The capture session is active. Choose Hearth - Share Output in "
+                "Vesktop and start sharing manually."
+            )
+        elif state is SessionState.STOPPING:
+            self.session_status.set_text("Stopping capture...")
+            self.session_detail.set_text(
+                "Hearth is closing the video window and releasing session resources."
+            )
+        else:
+            self.session_status.set_text("Capture needs attention")
+            message = self._safe_session_failure(snapshot.error_category, snapshot.stage)
+            if snapshot.cleanup_failures:
+                message += " Some session resources could not be released; cleanup needs attention."
+            self.session_detail.set_text(message)
+        return GLib.SOURCE_REMOVE
+
+    @staticmethod
+    def _safe_session_failure(category: str | None, stage: SessionStage | None) -> str:
+        """Map stable categories/stages to copy; never display raw exception text."""
+        category_messages = {
+            "device_busy": "The video device is already in use. Close other apps using it and refresh.",
+            "permission_denied": "Hearth cannot access the video device. Check its device permissions.",
+            "device_unavailable": "The video device is unavailable. Reconnect it and refresh.",
+            "unsupported_mode": "The video device rejected the selected mode. Refresh its available modes.",
+            "io_error": "The video device reported an input/output error. Reconnect it and try again.",
+            "open_failed": "Hearth could not open the video input.",
+        }
+        if category in category_messages:
+            return category_messages[category]
+        stage_messages = {
+            SessionStage.PROBE_DEVICE: "Hearth could not verify the selected video input. Use Refresh to check again.",
+            SessionStage.VALIDATE_AUDIO: "Hearth could not validate the share-audio path safely. No session is ready.",
+            SessionStage.START_VIEWER: "Hearth could not open the Share Output window.",
+            SessionStage.APPLY_AUDIO: "Hearth could not prepare the session audio route safely.",
+            SessionStage.ACQUIRE_INHIBITOR: "Hearth could not keep the computer awake for this capture session.",
+            SessionStage.FIRST_FRAME: "The Share Output window opened, but no decoded video frame arrived.",
+            SessionStage.VERIFY_AUDIO: "Hearth could not verify the session audio route.",
+            SessionStage.CLEANUP: "The capture session ended unexpectedly and needs cleanup.",
+        }
+        return stage_messages.get(stage, "The capture session could not start safely.")
 
     def refresh(self) -> bool:
         """Refresh saved choices and start one inventory request; never overlap."""
@@ -271,6 +371,13 @@ class CaptureControlsWindow(Gtk.Window):
     def shutdown(self) -> None:
         """Ignore any late result when the application is explicitly quitting."""
         self._shutting_down = True
+        unsubscribe = self._session_unsubscribe
+        self._session_unsubscribe = None
+        if unsubscribe is not None:
+            try:
+                unsubscribe()
+            except Exception:
+                log.debug("Capture Controls session unsubscribe failed", exc_info=True)
         self._generation += 1
         worker = self._worker
         if worker is not None and worker.is_alive():

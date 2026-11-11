@@ -102,18 +102,18 @@ These checks prove command shape, local IPC first-frame/progress behavior with s
 - Wire the tested `Login1IdleInhibitorAdapter` into the future GTK Start path. The adapter itself is implemented, but no live logind call has been made and no active Controls window uses it yet.
 - Connect the composed `MpvCaptureRuntime` to a real transactional GTK Start action. The separate Capture Controls preflight window currently performs only one-shot read-only V4L2 inventory and does not construct or start the runtime.
 - Real GUV302G streaming-open/exclusive-access behavior remains unverified. The ownership model is the owned mpv child process; fake IPC now classifies common mpv `end-file` open errors, but actual driver strings and busy-device behavior need the card. Inventory ioctls must close before the viewer starts.
-- Wire `MpvViewerProcess.frame_health` and `SessionSnapshot.no_signal` into the future Controls/Share Output UI. `mostly_black` and `unchanged` remain advisory only; the shared picture uses **Video stopped updating** only for a confirmed timestamp stall. A hard mpv input error is shown as a typed failure in Controls and triggers cleanup.
+- `CaptureControlsWindow` now accepts an optional injected session snapshot source. It marshals updates with `GLib.idle_add`, renders lifecycle and `no_signal` states, maps stable error categories/stages to plain language, and does not display raw `SessionSnapshot.error` or cleanup details. The running app does not yet construct/inject `CaptureSessionManager`; no live session state is shown until a production runtime/route adapter exists. `frame_health` pixel heuristics (`mostly_black`, `unchanged`) remain advisory and are not displayed. The Share Output picture continues to show **Video stopped updating** only on a confirmed timestamp stall.
 - Active Capture Controls/Share Output UI integration. Do not show Start/Stop until the live audio, inhibitor, device and UI paths exist.
 - Real GUV302G discovery, audio association, modes, USB speed, signal, A/V sync and long-run soak results.
 
 ## Next no-card work
 
 1. Keep the real `CaptureAudioAdapter` behind #10's single-path ownership contract. Full user-managed VM-SHARE editing/migration remains deferred; do not mutate live routes or guess the route model.
-2. Wire the validated frame-health advisory state and structured input-open categories into the future Controls/Share Output UI. Keep `unchanged` advisory, and do not claim black input proves cable disconnection.
+2. Construct and inject the real `CaptureSessionManager` only after a production route adapter exists. Capture Controls already consumes safe state/error snapshots, but the application does not yet supply a manager; do not create one with fake/no-op routes. Keep pixel-health values advisory and do not claim black input proves cable disconnection.
 3. When the GUV302G is available, verify exclusive-open behavior, actual driver error strings, supported format/size/FPS and signal loss. Do not simulate these as passed without the hardware.
 4. Wire the tested login1 inhibitor and composed `MpvCaptureRuntime` into a lazy Hearth Controls action only after the real route adapter and all Start prerequisites exist. Controls may run one bounded discovery; app startup must remain dormant.
 5. Continue #13 documentation/fixtures only. Real KDE portal, monitor, lock/DPMS and remote Vesktop tests remain deferred until the user explicitly grants a safe interactive window.
-6. Wire active controls and Share Output in #12 only after the owned viewer/session operations work. No inert Start/Stop buttons.
+6. Finish production integration of Capture Controls and Share Output in #12 only after the owned viewer/session operations and real route owner work. No inert Start/Stop buttons.
 
 No permanent service, timer, polling daemon or idle graph watcher is added. Capture-specific activity should exist only while a user explicitly starts a session.
 
