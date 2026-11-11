@@ -17,9 +17,11 @@ from hearth.capture_mpv_ipc import (
     FirstFrame,
     MpvViewerProcess,
     ViewerExitedBeforeFirstFrame,
+    ViewerInputOpenError,
     ViewerIPCError,
     ViewerReadinessTimeout,
     ViewerStreamStalled,
+    classify_mpv_input_error,
     create_private_ipc_directory,
 )
 
@@ -168,6 +170,53 @@ def test_first_frame_requires_picture_type_dimensions_and_configured_output(
 
     assert frame == FirstFrame(1920, 1080, "I")
     assert seen == ["video-frame-info/picture-type", "video-params", "vo-configured"]
+
+
+@pytest.mark.parametrize(
+    ("detail", "category"),
+    [
+        ("Device or resource busy", "device_busy"),
+        ("Permission denied", "permission_denied"),
+        ("No such file or directory", "device_unavailable"),
+        ("Invalid argument", "unsupported_mode"),
+        ("Input/output error", "io_error"),
+        ("Unclassified decoder failure", "open_failed"),
+    ],
+)
+def test_mpv_end_file_errors_map_to_actionable_device_categories(
+    detail: str, category: str
+) -> None:
+    error = classify_mpv_input_error("error", detail)
+
+    assert isinstance(error, ViewerInputOpenError)
+    assert error.category == category
+    assert error.detail == detail
+    assert error.user_message
+
+
+def test_non_error_end_file_event_is_not_misclassified() -> None:
+    assert classify_mpv_input_error("eof", None) is None
+    assert classify_mpv_input_error("stop", "") is None
+
+
+def test_first_frame_surfaces_device_busy_from_mpv_end_file_event(tmp_path: Path) -> None:
+    viewer = _viewer(tmp_path)
+
+    def handler(_request: dict[str, Any]) -> dict[str, object]:
+        return {
+            "event": "end-file",
+            "reason": "error",
+            "file_error": "Device or resource busy",
+        }
+
+    with (
+        FakeMpvIpcServer(viewer.ipc_socket, handler),
+        pytest.raises(ViewerInputOpenError) as caught,
+    ):
+        viewer.wait_for_first_frame(timeout_s=1.0)
+
+    assert caught.value.category == "device_busy"
+    assert "already in use" in caught.value.user_message
 
 
 def test_first_frame_retries_unavailable_frame_properties(tmp_path: Path) -> None:
