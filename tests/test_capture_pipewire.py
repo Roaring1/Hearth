@@ -19,6 +19,7 @@ from hearth.capture_devices import (
 from hearth.capture_pipewire import (
     PipeWireAudioProvider,
     PipeWireDiscoveryError,
+    PipeWireLinkLeaseError,
     PipeWireSnapshotProvider,
     parse_pw_dump_audio_inventory,
     parse_pw_dump_snapshot,
@@ -693,3 +694,175 @@ def test_owned_pw_link_argv_rejects_unsafe_route_metadata_tokens() -> None:
             route_id="session id with spaces",
             session_id="session-1",
         )
+
+
+class FakeOwnedPipeWireProcess:
+    def __init__(self) -> None:
+        self.stop_calls = 0
+        self.returncode: int | None = None
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def stop(self, *, timeout: float = 1.0) -> int:
+        assert timeout > 0
+        self.stop_calls += 1
+        self.returncode = -15
+        return self.returncode
+
+
+class SequencePipeWireSnapshotSource:
+    def __init__(self, snapshots) -> None:
+        self.snapshots = list(snapshots)
+        self.calls = 0
+
+    def discover(self):
+        self.calls += 1
+        if not self.snapshots:
+            raise AssertionError("unexpected extra PipeWire snapshot request")
+        return self.snapshots.pop(0)
+
+
+def _pipewire_snapshot_with_graph(graph_text: str):
+    from hearth.capture_pipewire import (
+        PipeWireAudioInventory,
+        PipeWireSnapshot,
+        parse_pw_dump_graph,
+    )
+
+    return PipeWireSnapshot(
+        audio=PipeWireAudioInventory(),
+        graph=parse_pw_dump_graph(graph_text),
+    )
+
+
+def test_process_link_lease_verifies_one_active_tagged_endpoint_pair() -> None:
+    from hearth.capture_pipewire import PipeWireEndpoint, PipeWireProcessLinkLease
+
+    process = FakeOwnedPipeWireProcess()
+    snapshots = SequencePipeWireSnapshotSource(
+        [_pipewire_snapshot_with_graph(json.dumps(_graph_fixture()))]
+    )
+    lease = PipeWireProcessLinkLease(
+        process,
+        snapshots,
+        output=PipeWireEndpoint("vm_game", "monitor_FL", "output"),
+        input=PipeWireEndpoint("vm_share", "playback_FL", "input"),
+        route_id="route-test-1",
+        session_id="session-test-1",
+    )
+
+    verified = lease.verify_acquired()
+
+    assert verified.session_owned
+    assert verified.state == "active"
+    assert process.stop_calls == 0
+    assert snapshots.calls == 1
+
+
+def test_process_link_lease_release_stops_owner_then_verifies_link_absence() -> None:
+    from hearth.capture_pipewire import PipeWireEndpoint, PipeWireProcessLinkLease
+
+    process = FakeOwnedPipeWireProcess()
+    snapshots = SequencePipeWireSnapshotSource(
+        [
+            _pipewire_snapshot_with_graph(json.dumps(_graph_fixture())),
+            _pipewire_snapshot_with_graph(json.dumps(_graph_fixture()[:-1])),
+        ]
+    )
+    lease = PipeWireProcessLinkLease(
+        process,
+        snapshots,
+        output=PipeWireEndpoint("vm_game", "monitor_FL", "output"),
+        input=PipeWireEndpoint("vm_share", "playback_FL", "input"),
+        route_id="route-test-1",
+        session_id="session-test-1",
+    )
+
+    lease.verify_acquired()
+    lease.release(timeout=0.25)
+    lease.release(timeout=0.25)
+
+    assert process.stop_calls == 1
+    assert process.poll() == -15
+    assert snapshots.calls == 2
+
+
+def test_process_link_lease_fails_closed_for_duplicate_or_mismatched_tags() -> None:
+    from hearth.capture_pipewire import PipeWireEndpoint, PipeWireProcessLinkLease
+
+    duplicate = _graph_fixture()
+    duplicate.append(json.loads(json.dumps(duplicate[-1])))
+    duplicate[-1]["id"] = 81
+
+    process = FakeOwnedPipeWireProcess()
+    snapshots = SequencePipeWireSnapshotSource(
+        [_pipewire_snapshot_with_graph(json.dumps(duplicate))]
+    )
+    lease = PipeWireProcessLinkLease(
+        process,
+        snapshots,
+        output=PipeWireEndpoint("vm_game", "monitor_FL", "output"),
+        input=PipeWireEndpoint("vm_share", "playback_FL", "input"),
+        route_id="route-test-1",
+        session_id="session-test-1",
+    )
+    with pytest.raises(PipeWireLinkLeaseError, match="expected one session-owned"):
+        lease.verify_acquired()
+
+    process = FakeOwnedPipeWireProcess()
+    snapshots = SequencePipeWireSnapshotSource(
+        [_pipewire_snapshot_with_graph(json.dumps(_graph_fixture()))]
+    )
+    lease = PipeWireProcessLinkLease(
+        process,
+        snapshots,
+        output=PipeWireEndpoint("vm_game", "other-port", "output"),
+        input=PipeWireEndpoint("vm_share", "playback_FL", "input"),
+        route_id="route-test-1",
+        session_id="session-test-1",
+    )
+    with pytest.raises(PipeWireLinkLeaseError, match="endpoints, state, ownership or lifetime"):
+        lease.verify_acquired()
+
+
+def test_process_link_lease_rejects_incomplete_graph_and_retries_cleanup_verification() -> None:
+    from hearth.capture_pipewire import (
+        PipeWireAudioInventory,
+        PipeWireEndpoint,
+        PipeWireGraphInventory,
+        PipeWireGraphIssue,
+        PipeWireProcessLinkLease,
+        PipeWireSnapshot,
+        parse_pw_dump_graph,
+    )
+
+    incomplete = PipeWireSnapshot(
+        audio=PipeWireAudioInventory(),
+        graph=PipeWireGraphInventory(issues=(PipeWireGraphIssue("Link", "fixture incomplete"),)),
+    )
+    absent = PipeWireSnapshot(
+        audio=PipeWireAudioInventory(),
+        graph=parse_pw_dump_graph(json.dumps(_graph_fixture()[:-1])),
+    )
+    process = FakeOwnedPipeWireProcess()
+    snapshots = SequencePipeWireSnapshotSource([incomplete, incomplete, absent])
+    lease = PipeWireProcessLinkLease(
+        process,
+        snapshots,
+        output=PipeWireEndpoint("vm_game", "monitor_FL", "output"),
+        input=PipeWireEndpoint("vm_share", "playback_FL", "input"),
+        route_id="route-test-1",
+        session_id="session-test-1",
+    )
+
+    with pytest.raises(
+        PipeWireLinkLeaseError, match="graph snapshot is incomplete during link verify"
+    ):
+        lease.verify_acquired()
+    with pytest.raises(PipeWireLinkLeaseError, match="graph snapshot is incomplete during cleanup"):
+        lease.release()
+    lease.release()
+
+    assert process.stop_calls == 1
+    assert snapshots.calls == 3

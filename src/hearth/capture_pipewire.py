@@ -11,7 +11,7 @@ import json
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from hearth import proc
 from hearth.capture_devices import (
@@ -593,6 +593,117 @@ class PipeWireSnapshotProvider:
             return parse_pw_dump_snapshot(result.stdout)
         except ValueError as exc:
             raise PipeWireDiscoveryError(f"Could not parse audio graph snapshot: {exc}") from exc
+
+
+class PipeWireLinkLeaseError(HearthError):
+    """A process-owned link could not be acquired, verified or released safely."""
+
+
+class OwnedPipeWireLinkProcess(Protocol):
+    """Small process boundary implemented by `proc.OwnedProcess` and test fakes."""
+
+    def poll(self) -> int | None: ...
+
+    def stop(self, *, timeout: float = 1.0) -> int: ...
+
+
+class PipeWireSnapshotSource(Protocol):
+    """One-shot graph snapshot source used for post-create/post-stop verification."""
+
+    def discover(self) -> PipeWireSnapshot: ...
+
+
+class PipeWireProcessLinkLease:
+    """Own one non-lingering link through the lifetime of its pw-link child.
+
+    The caller is responsible for checking the endpoints are safe/unused before
+    spawning the argv from `build_owned_pw_link_argv()` and then passing that
+    `proc.spawn_owned()` handle here. This object never starts a command. Every
+    verification uses a new bounded snapshot; an incomplete graph is never
+    treated as proof that a link is present or absent.
+    """
+
+    def __init__(
+        self,
+        process: OwnedPipeWireLinkProcess,
+        snapshots: PipeWireSnapshotSource,
+        *,
+        output: PipeWireEndpoint,
+        input: PipeWireEndpoint,
+        route_id: str,
+        session_id: str,
+        kind: str = "capture-session",
+    ) -> None:
+        # Reuse the argv builder's validation without retaining or executing
+        # its command. This keeps ownership tokens and directions consistent.
+        build_owned_pw_link_argv(
+            output,
+            input,
+            route_id=route_id,
+            session_id=session_id,
+            kind=kind,
+        )
+        self._process = process
+        self._snapshots = snapshots
+        self._output = output
+        self._input = input
+        self._route_id = route_id
+        self._session_id = session_id
+        self._kind = kind
+        self._stopped = False
+        self._released = False
+
+    def _route_links(self, graph: PipeWireGraphInventory) -> tuple[PipeWireLink, ...]:
+        return tuple(
+            link
+            for link in graph.links
+            if link.route_owner == "io.github.roaring1.Hearth"
+            and link.route_id == self._route_id
+            and link.route_property("session") == self._session_id
+        )
+
+    def verify_acquired(self) -> PipeWireLink:
+        """Require one active, correctly tagged link while the owner child lives."""
+        if self._released or self._stopped or self._process.poll() is not None:
+            raise PipeWireLinkLeaseError("owned pw-link process is not running")
+        snapshot = self._snapshots.discover()
+        if not snapshot.graph.complete:
+            raise PipeWireLinkLeaseError("PipeWire graph snapshot is incomplete during link verify")
+        matches = self._route_links(snapshot.graph)
+        if len(matches) != 1:
+            raise PipeWireLinkLeaseError(
+                f"expected one session-owned PipeWire link, found {len(matches)}"
+            )
+        link = matches[0]
+        if (
+            not link.session_owned
+            or link.route_kind != self._kind
+            or link.output != self._output
+            or link.input != self._input
+            or link.state != "active"
+            or link.passive is True
+        ):
+            raise PipeWireLinkLeaseError(
+                "PipeWire link endpoints, state, ownership or lifetime do not match the session"
+            )
+        return link
+
+    def release(self, *, timeout: float = 1.0) -> None:
+        """Stop/reap the process owner, then verify its tagged link disappeared."""
+        if self._released:
+            return
+        if not self._stopped:
+            self._process.stop(timeout=timeout)
+            self._stopped = True
+        snapshot = self._snapshots.discover()
+        if not snapshot.graph.complete:
+            raise PipeWireLinkLeaseError("PipeWire graph snapshot is incomplete during cleanup")
+        remaining = self._route_links(snapshot.graph)
+        if remaining:
+            raise PipeWireLinkLeaseError(
+                f"{len(remaining)} tagged session PipeWire link(s) remain after owner exit"
+            )
+        self._released = True
 
 
 class PipeWireAudioProvider:
