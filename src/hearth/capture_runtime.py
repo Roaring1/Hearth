@@ -12,13 +12,21 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from hearth.capture_devices import CaptureDevice, choose_capture_node
+from hearth.capture_devices import (
+    AudioAssociationStatus,
+    AudioSourceCandidate,
+    CaptureDevice,
+    associate_audio_identity,
+    choose_capture_node,
+)
+from hearth.capture_pipewire import PipeWireAudioInventory, PipeWireAudioProvider
 from hearth.capture_provider import CaptureInventory, V4L2InventoryProvider
 from hearth.capture_session import (
     AudioRouteLease,
     CapturePlan,
     IdleInhibitorLease,
     ResolvedCaptureDevice,
+    UsbIdentity,
     ViewerHandle,
 )
 from hearth.capture_viewer import MpvCaptureViewer
@@ -35,11 +43,78 @@ class CaptureDeviceResolutionError(HearthError):
     """The selected USB device/node/mode cannot be resolved unambiguously."""
 
 
+class CaptureAudioAssociationError(HearthError):
+    """The capture card's USB audio function cannot be resolved safely."""
+
+    def __init__(
+        self,
+        status: AudioAssociationStatus,
+        message: str,
+        candidates: tuple[AudioSourceCandidate, ...] = (),
+    ) -> None:
+        self.status = status
+        self.candidates = candidates
+        super().__init__(message)
+
+
+class PipeWireAudioInventorySource(Protocol):
+    """One-shot PipeWire snapshot source; implementations must not watch the graph."""
+
+    def discover(self) -> PipeWireAudioInventory: ...
+
+
+class PipeWireCaptureAudioResolver:
+    """Resolve exactly one audio source sharing a capture device's USB identity."""
+
+    def __init__(self, inventory: PipeWireAudioInventorySource | None = None) -> None:
+        self._inventory = inventory if inventory is not None else PipeWireAudioProvider()
+
+    def resolve(self, identity: UsbIdentity) -> AudioSourceCandidate:
+        try:
+            snapshot = self._inventory.discover()
+        except Exception as exc:
+            raise CaptureAudioAssociationError(
+                AudioAssociationStatus.UNKNOWN,
+                f"capture audio inventory failed: {exc}",
+            ) from exc
+        association = associate_audio_identity(
+            identity,
+            snapshot.sources if snapshot.complete else None,
+        )
+        if association.status is AudioAssociationStatus.MATCHED:
+            selected = association.selected
+            if selected is not None:
+                return selected
+        if association.status is AudioAssociationStatus.AMBIGUOUS:
+            labels = ", ".join(candidate.display_name for candidate in association.candidates)
+            raise CaptureAudioAssociationError(
+                association.status,
+                "multiple USB audio endpoints match this capture card; "
+                f"user selection required: {labels}",
+                association.candidates,
+            )
+        if association.status is AudioAssociationStatus.NONE:
+            raise CaptureAudioAssociationError(
+                association.status,
+                "no USB audio source matches the selected capture device",
+            )
+        raise CaptureAudioAssociationError(
+            AudioAssociationStatus.UNKNOWN,
+            "PipeWire audio inventory is incomplete; capture audio identity is unknown",
+        )
+
+
 class V4L2CaptureResolver:
     """Resolve a persisted USB identity to a fresh node/mode at Start time."""
 
-    def __init__(self, inventory: CaptureInventorySource | None = None) -> None:
-        self._inventory = inventory or V4L2InventoryProvider()
+    def __init__(
+        self,
+        inventory: CaptureInventorySource | None = None,
+        *,
+        audio_resolver: PipeWireCaptureAudioResolver | None = None,
+    ) -> None:
+        self._inventory = inventory if inventory is not None else V4L2InventoryProvider()
+        self._audio_resolver = audio_resolver
 
     def probe_device(self, plan: CapturePlan) -> ResolvedCaptureDevice:
         """Run one inventory check and resolve exactly the requested capture mode."""
@@ -87,13 +162,14 @@ class V4L2CaptureResolver:
                 "the selected video mode is no longer available on this device; "
                 "refresh the available modes before starting capture"
             )
-        # The live audio source selector is intentionally not guessed here.
-        # The PipeWire identity validator must resolve it separately.
+        audio_source_selector = None
+        if self._audio_resolver is not None:
+            audio_source_selector = self._audio_resolver.resolve(device.identity).source_selector
         return ResolvedCaptureDevice(
             identity=device.identity,
             video_node_path=node.device_path,
             mode=plan.preferred_mode,
-            audio_source_selector=None,
+            audio_source_selector=audio_source_selector,
         )
 
 
@@ -141,7 +217,11 @@ class MpvCaptureRuntime:
         resolver: V4L2CaptureResolver | None = None,
         viewer: CaptureViewerAdapter | None = None,
     ) -> None:
-        self._resolver = resolver if resolver is not None else V4L2CaptureResolver()
+        self._resolver = (
+            resolver
+            if resolver is not None
+            else V4L2CaptureResolver(audio_resolver=PipeWireCaptureAudioResolver())
+        )
         self._viewer = viewer if viewer is not None else MpvCaptureViewer()
         self._audio = audio
         self._inhibitor = inhibitor

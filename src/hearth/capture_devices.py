@@ -186,11 +186,11 @@ def same_usb_device(left: UsbIdentity, right: UsbIdentity) -> bool:
     return bool(left.port_path and right.port_path and left.port_path == right.port_path)
 
 
-def associate_audio_source(
-    video_device: CaptureDevice,
+def associate_audio_identity(
+    video_identity: UsbIdentity,
     audio_sources: Iterable[AudioSourceCandidate] | None,
 ) -> AudioAssociation:
-    """Match by shared USB identity only; no name/card-number heuristic.
+    """Match a capture-device identity to audio nodes by USB identity only.
 
     ``None`` means the audio inventory could not be queried, which is distinct
     from a successful query returning no matching source. Multiple matches
@@ -199,15 +199,21 @@ def associate_audio_source(
     if audio_sources is None:
         return AudioAssociation(AudioAssociationStatus.UNKNOWN)
     matches = tuple(
-        source
-        for source in audio_sources
-        if same_usb_device(video_device.identity, source.identity)
+        source for source in audio_sources if same_usb_device(video_identity, source.identity)
     )
     if not matches:
         return AudioAssociation(AudioAssociationStatus.NONE)
     if len(matches) > 1:
         return AudioAssociation(AudioAssociationStatus.AMBIGUOUS, matches)
     return AudioAssociation(AudioAssociationStatus.MATCHED, matches)
+
+
+def associate_audio_source(
+    video_device: CaptureDevice,
+    audio_sources: Iterable[AudioSourceCandidate] | None,
+) -> AudioAssociation:
+    """Compatibility wrapper for a grouped V4L2 device and USB audio candidates."""
+    return associate_audio_identity(video_device.identity, audio_sources)
 
 
 def parse_udev_video_properties(text: str) -> UdevVideoProperties:

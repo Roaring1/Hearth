@@ -81,6 +81,9 @@ class FakeMpvIpcServer:
                             response = self.handler(request)
                             if response is not None:
                                 client.sendall((json.dumps(response) + "\n").encode())
+        except (BrokenPipeError, ConnectionResetError):
+            # The client may close deliberately when its readiness deadline expires.
+            pass
         except BaseException as exc:
             self.errors.append(exc)
         finally:
