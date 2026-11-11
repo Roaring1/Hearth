@@ -150,6 +150,32 @@ def test_a_stored_carla_choice_wins_over_the_default() -> None:
     assert mic_routes.carla_enabled(values, "mic_b1") is False
 
 
+def test_enabling_carla_opens_the_bus_gate_without_reviving_stale_raw_route() -> None:
+    values = mic_routes.parse(SAMPLE)
+    edits = mic_routes.carla_edits(values, "mic_b1", True)
+    assert edits == {
+        "CARLA_TO_B1": "true",
+        "B1_ACTIVE": "true",
+        "B1_ROUTE": "none",
+    }
+
+
+def test_disabling_carla_preserves_an_active_raw_route() -> None:
+    values = mic_routes.parse(
+        mic_routes.apply_edits(SAMPLE, {"B1_ACTIVE": "true", "B1_ROUTE": "sm7b"})
+    )
+    edits = mic_routes.carla_edits(values, "mic_b1", False)
+    assert edits == {"CARLA_TO_B1": "false", "B1_ACTIVE": "true"}
+
+
+def test_disabling_carla_closes_the_gate_when_no_raw_route_remains() -> None:
+    values = mic_routes.parse(
+        mic_routes.apply_edits(SAMPLE, {"B1_ACTIVE": "true", "B1_ROUTE": "none"})
+    )
+    edits = mic_routes.carla_edits(values, "mic_b1", False)
+    assert edits == {"CARLA_TO_B1": "false", "B1_ACTIVE": "false"}
+
+
 def test_write_is_atomic_and_leaves_no_temp_file(tmp_path: Path) -> None:
     conf = tmp_path / "roaring_mic_router.conf"
     conf.write_text(SAMPLE, encoding="utf-8")
@@ -364,6 +390,7 @@ def test_flow_marks_the_bus_the_laptop_is_listening_to() -> None:
 def test_carla_live_link_is_not_changed_when_config_save_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(mic_routes, "read", lambda *_args, **_kwargs: mic_routes.parse(SAMPLE))
     monkeypatch.setattr(mic_routes, "write", lambda *_args, **_kwargs: False)
     calls: list[tuple[str, bool]] = []
     monkeypatch.setattr(mic_routes, "link_carla", lambda bus, on: calls.append((bus, on)) or True)
@@ -393,6 +420,7 @@ def test_carla_link_reports_missing_or_unexecutable_pw_link(
 def test_carla_live_link_launch_failure_does_not_undo_a_saved_choice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(mic_routes, "read", lambda *_args, **_kwargs: mic_routes.parse(SAMPLE))
     monkeypatch.setattr(mic_routes, "write", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(mic_routes, "link_carla", lambda *_args, **_kwargs: False)
 
@@ -404,8 +432,11 @@ def test_carla_config_is_saved_before_applying_the_live_link(
 ) -> None:
     order: list[str] = []
 
+    values = mic_routes.parse(mic_routes.apply_edits(SAMPLE, {"B2_ACTIVE": "true"}))
+    monkeypatch.setattr(mic_routes, "read", lambda *_args, **_kwargs: values)
+
     def save(updates, path=None):
-        assert updates == {"CARLA_TO_B2": "false"}
+        assert updates == {"CARLA_TO_B2": "false", "B2_ACTIVE": "true"}
         order.append("save")
         return True
 
