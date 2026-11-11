@@ -192,6 +192,7 @@ class SessionSnapshot:
     cleanup_failures: tuple[str, ...]
     revision: int
     no_signal: bool = False
+    error_category: str | None = None
 
 
 class CaptureSessionError(HearthError):
@@ -238,6 +239,7 @@ class CaptureSessionManager:
         self._plan: CapturePlan | None = None
         self._stage: SessionStage | None = None
         self._error: str | None = None
+        self._error_category: str | None = None
         self._cleanup_failures: tuple[str, ...] = ()
         self._revision = 0
         self._viewer: ViewerHandle | None = None
@@ -300,6 +302,7 @@ class CaptureSessionManager:
                 cleanup_failures=self._cleanup_failures,
                 revision=self._revision,
                 no_signal=bool(getattr(self._viewer, "no_signal", False)),
+                error_category=self._error_category,
             )
 
     def start(self, plan: CapturePlan) -> SessionSnapshot:
@@ -313,6 +316,7 @@ class CaptureSessionManager:
                 )
             self._plan = plan
             self._error = None
+            self._error_category = None
             self._cleanup_failures = ()
             self._state = SessionState.STARTING
             self._revision += 1
@@ -354,7 +358,11 @@ class CaptureSessionManager:
                 failures = self._cleanup_resources()
                 self._state = SessionState.FAILED if failures else SessionState.DORMANT
                 self._stage = stage
-                self._error = str(exc) or exc.__class__.__name__
+                self._error = (
+                    getattr(exc, "user_message", None) or str(exc) or exc.__class__.__name__
+                )
+                category = getattr(exc, "category", None)
+                self._error_category = category if isinstance(category, str) else None
                 self._cleanup_failures = tuple(failures)
                 self._revision += 1
                 raise CaptureSessionError(
@@ -367,6 +375,7 @@ class CaptureSessionManager:
             self._state = SessionState.RUNNING
             self._stage = None
             self._error = None
+            self._error_category = None
             self._cleanup_failures = ()
             self._revision += 1
             viewer = self._viewer
@@ -402,9 +411,17 @@ class CaptureSessionManager:
                 monitor = getattr(viewer, "monitor_until_exit", None)
                 returncode = monitor() if callable(monitor) else viewer.wait()
             except Exception as exc:
+                category = getattr(exc, "category", None)
+                user_message = getattr(exc, "user_message", None)
+                detail = (
+                    user_message
+                    if isinstance(category, str) and isinstance(user_message, str)
+                    else f"viewer stream/process monitor failed: {exc}"
+                )
                 self.viewer_exited(
                     -1,
-                    detail=f"viewer stream/process monitor failed: {exc}",
+                    detail=detail,
+                    error_category=category if isinstance(category, str) else None,
                     ignore_if_not_running=True,
                 )
             else:
@@ -419,6 +436,7 @@ class CaptureSessionManager:
         returncode: int,
         *,
         detail: str | None = None,
+        error_category: str | None = None,
         ignore_if_not_running: bool = False,
     ) -> SessionSnapshot:
         """Handle an unexpected viewer exit while a session is running.
@@ -442,6 +460,7 @@ class CaptureSessionManager:
             self._state = SessionState.FAILED
             self._stage = SessionStage.CLEANUP
             self._error = detail or f"Share Output viewer exited unexpectedly (code {returncode})"
+            self._error_category = error_category
             self._revision += 1
             failures = self._cleanup_resources()
             self._cleanup_failures = tuple(failures)
@@ -478,6 +497,7 @@ class CaptureSessionManager:
                     self._state = SessionState.DORMANT
                     self._stage = None
                     self._error = None
+                    self._error_category = None
                     self._plan = None
                     self._revision += 1
                 snapshot = self.snapshot()

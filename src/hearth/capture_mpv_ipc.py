@@ -187,13 +187,20 @@ def cleanup_stale_capture_ipc_directories(
 
     current_time = time.time() if now is None else now
     removed: list[Path] = []
+    candidates: list[Path] = []
     try:
-        candidates = tuple(root.iterdir())
+        for index, entry in enumerate(root.iterdir()):
+            # Bound directory enumeration and socket probes on explicit Start.
+            # If the runtime root is unexpectedly crowded, fail closed.
+            if index >= 512:
+                return ()
+            if entry.name.startswith("hearth-capture-"):
+                if len(candidates) >= 16:
+                    return ()
+                candidates.append(entry)
     except OSError:
         return ()
     for directory in candidates:
-        if not directory.name.startswith("hearth-capture-"):
-            continue
         try:
             info = directory.lstat()
         except OSError:
@@ -439,10 +446,18 @@ class MpvViewerProcess:
                         # monitoring remains the required liveness signal.
                         continue
                     if message.get("event") == "end-file" and message.get("reason") == "error":
-                        if not no_signal:
-                            self._send_no_signal(connection, True)
-                            self._set_no_signal(True)
-                            no_signal = True
+                        # An mpv input error is a hard stream failure (for
+                        # example, an unplugged device), not a recoverable
+                        # timestamp stall. Classify it and let the session
+                        # manager run normal cleanup instead of waiting forever.
+                        if no_signal:
+                            with suppress(OSError):
+                                self._send_no_signal(connection, False)
+                            self._set_no_signal(False)
+                            no_signal = False
+                        input_error = self._classify_input_error("error", message.get("file_error"))
+                        if input_error is not None:
+                            raise input_error
                         continue
                     if message.get("event") != "property-change":
                         continue
