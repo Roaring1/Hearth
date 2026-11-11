@@ -469,3 +469,37 @@ def test_unmute_cli_returns_error_if_a_command_cannot_start(
 
     assert cli.main(["--unmute"]) == cli.EXIT_ERROR
     assert capsys.readouterr().out == "could not start one or more unmute commands\n"
+
+
+def test_capture_controls_uses_the_running_instances_control_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hearth import legacy_core as core
+    from hearth import ui
+
+    requests: list[str] = []
+    monkeypatch.setattr(core, "ipc_send", lambda request: requests.append(request) or "ok")
+    monkeypatch.setattr(
+        ui, "run_app", lambda _argv=None: pytest.fail("must reuse running instance")
+    )
+
+    parser = cli.build_parser()
+    assert "--capture-controls" not in parser.format_help()
+    args = parser.parse_args(["--capture-controls"])
+    assert cli._dispatch(args) == cli.EXIT_OK
+    assert requests == ["capture_overview"]
+
+
+def test_capture_controls_starts_existing_gapplication_action_when_not_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hearth import legacy_core as core
+    from hearth import ui
+
+    monkeypatch.setattr(core, "ipc_send", lambda _request: None)
+    launched: list[list[str]] = []
+    monkeypatch.setattr(ui, "run_app", lambda argv=None: launched.append(list(argv or [])) or 37)
+
+    args = cli.build_parser().parse_args(["--capture-controls"])
+    assert cli._dispatch(args) == 37
+    assert launched == [["hearth", "--open-capture-overview"]]

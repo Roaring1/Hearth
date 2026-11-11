@@ -36,7 +36,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 
-from gi.repository import Gdk, GLib, Gtk  # noqa: E402 - must follow require_version
+from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402 - must follow require_version
 
 from hearth import APP_ID, collector as collector_mod  # noqa: E402
 from hearth import control  # noqa: E402
@@ -2493,7 +2493,10 @@ class MixerWindow(Gtk.ApplicationWindow):
 
 class MixerApp(Gtk.Application):
     def __init__(self) -> None:
-        super().__init__(application_id=APP_ID)
+        super().__init__(
+            application_id=APP_ID,
+            flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE,
+        )
         self.pal = style_mod.palette()
         self.window: MixerWindow | None = None
         self._ipc: ipc_mod.Server | None = None
@@ -2508,6 +2511,16 @@ class MixerApp(Gtk.Application):
                 display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
             )
         self._start_control_socket()
+
+    def do_command_line(self, command_line) -> int:
+        """Route desktop-only launch intents through the single GApplication."""
+        arguments = command_line.get_arguments()
+        if "--open-capture-overview" in arguments:
+            self._show_capture_overview()
+        else:
+            self.activate()
+        command_line.set_exit_status(0)
+        return 0
 
     def do_activate(self) -> None:
         if self.window is None:
@@ -2559,6 +2572,7 @@ class MixerApp(Gtk.Application):
             request,
             {
                 "show": self._ctl_show,
+                "capture_overview": self._ctl_capture_overview,
                 "quit": self._ctl_quit,
                 "unmute": self._ctl_unmute,
                 "get_sinks": self._ctl_sinks,
@@ -2570,6 +2584,18 @@ class MixerApp(Gtk.Application):
 
     def _ctl_show(self) -> str:
         GLib.idle_add(self.activate)
+        return "ok"
+
+    def _show_capture_overview(self) -> bool:
+        """Open the lazy Screen Share setup window without starting capture."""
+        if self.window is None:
+            self.window = MixerWindow(self)
+        self.window.open_capture_overview()
+        return False
+
+    def _ctl_capture_overview(self) -> str:
+        """Open the same overview from an existing instance's control socket."""
+        GLib.idle_add(self._show_capture_overview)
         return "ok"
 
     def _ctl_quit(self) -> str:

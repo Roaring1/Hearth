@@ -37,9 +37,10 @@ Wayland**. Nothing is Nobara-specific; any PipeWire desktop should work.
   state is reflected from the mixer snapshot. Hotplug recovery is handled by
   the rig’s companion watcher, when installed.
 - **Screen Share overview** — a visible SCREEN SHARE entry opens a separate
-  setup guide, and SET UP on the mixer strip opens the same window. It explains
-  the Hearth/Vesktop workflow; capture device discovery and active capture are
-  still in development.
+  setup guide, and SET UP on the mixer strip opens the same window. A separate
+  **Use Capture Card** desktop shortcut opens that guide in the running app or
+  launches Hearth directly into it. It explains the Hearth/Vesktop workflow;
+  capture device discovery and active capture are still in development.
 - **Single instance + IPC** — a second launch focuses the running window
   instead of starting a rival process.
 - **Status report** — `hearth --status` prints a plain-language report on the
@@ -90,6 +91,8 @@ install -Dm644 data/icons/hicolor/256x256/apps/io.github.roaring1.Hearth.png \
   ~/.local/share/icons/hicolor/256x256/apps/io.github.roaring1.Hearth.png
 install -Dm644 data/applications/io.github.roaring1.Hearth.desktop \
   ~/.local/share/applications/io.github.roaring1.Hearth.desktop
+install -Dm644 data/applications/io.github.roaring1.Hearth.Capture.desktop \
+  ~/.local/share/applications/io.github.roaring1.Hearth.Capture.desktop
 update-desktop-database ~/.local/share/applications
 ```
 
