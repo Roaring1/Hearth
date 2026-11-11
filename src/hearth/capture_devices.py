@@ -104,6 +104,9 @@ def parse_udev_video_properties(text: str) -> UdevVideoProperties:
     device_path = properties.get("DEVNAME", "")
     if not _VIDEO_NODE.fullmatch(device_path):
         raise ValueError("udev data does not identify a /dev/videoN node")
+    bus = properties.get("ID_BUS", "").lower()
+    if bus and bus != "usb":
+        raise ValueError("video node is not attached to a USB device")
     vendor = properties.get("ID_VENDOR_ID", "")
     product = properties.get("ID_MODEL_ID", "")
     serial = properties.get("ID_SERIAL_SHORT") or None
@@ -134,12 +137,10 @@ def parse_v4l2_capabilities(text: str) -> V4L2Capabilities:
         None,
     )
     if marker is None:
-        marker = next(
-            (index for index, line in enumerate(lines) if line.strip().startswith("Capabilities")),
-            None,
+        raise ValueError(
+            "v4l2-ctl output has no per-node Device Caps block; "
+            "aggregate Capabilities are insufficient"
         )
-    if marker is None:
-        raise ValueError("v4l2-ctl output has no Device Caps or Capabilities block")
 
     found: set[str] = set()
     for line in lines[marker + 1 :]:
@@ -199,7 +200,7 @@ def parse_v4l2_discrete_modes(text: str) -> tuple[VideoMode, ...]:
             modes,
             key=lambda mode: (
                 mode.width * mode.height,
-                mode.fps_numerator / mode.fps_denominator,
+                Fraction(mode.fps_numerator, mode.fps_denominator),
                 mode.pixel_format,
             ),
         )

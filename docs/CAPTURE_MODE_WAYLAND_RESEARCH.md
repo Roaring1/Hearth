@@ -50,6 +50,8 @@ Important Wayland limitations from the current mpv manual:
 
 Keep an adapter around the viewer and prototype **mpv as a child process** first. It isolates frame decode/render from GTK's mixer loop and avoids adding a GStreamer/Python media stack before a need is demonstrated.
 
+A later isolated Xvfb smoke confirmed mpv 0.40 accepts the candidate flags and renders a 1280x720 titled test-pattern window. Exact scope and caveats are recorded under **Installed mpv command-shape smoke** below; this is X11/Xvfb evidence only.
+
 The initial test command should be derived from the options above only after the viewer adapter can guarantee:
 
 - argv-only invocation through `hearth.proc`, with an explicit title and private config/input file (never user `~/.config/mpv`);
@@ -76,3 +78,28 @@ When an interactive session is explicitly safe, add these precise checks to #13:
 ## 5. Safety boundary for current work
 
 Until the user explicitly provides a safe interactive window, do only code/source review, fixture design, fake-device tests and isolated Xvfb rendering. Do not create a second Wayland session, start a competing desktop, launch Vesktop sharing, switch inputs, lock/blank/DPMS displays, or manipulate the active focus. Xvfb proves GTK composition only; it cannot prove portal source selection, compositor behavior, live rendering cadence, remote capture or actual lock/DPMS behavior.
+
+## Installed mpv command-shape smoke (isolated Xvfb only)
+
+A no-desktop smoke test was run on 2026-11-10 with installed **mpv v0.40.0** and ffmpeg 7.1.2. ffmpeg generated a temporary 1280x720/30fps test pattern under `/tmp`; mpv ran under a private Xvfb display with:
+
+```text
+--no-config
+--vo=x11 --hwdec=no
+--title="Hearth - Share Output"
+--osc=no --osd-level=0
+--cursor-autohide=always
+--input-builtin-bindings=no
+--ao=null
+--loop-file=inf --force-window=yes
+```
+
+Observed in that isolated X11 test only:
+
+- Window title was exactly `Hearth - Share Output`.
+- Window geometry was 1280x720 on the 1600x1200 Xvfb screen.
+- A PNG screenshot of the window was captured.
+- mpv's playback log advanced through the synthetic four-second file.
+- The player was interrupted and waited on by the smoke script; the temporary video, screenshot and log were removed by its cleanup trap.
+
+This confirms that mpv 0.40 accepts the candidate flag set and can produce a titled video window in Xvfb. The test explicitly used `--vo=x11`, so it does **not** prove the `gpu`/Wayland VO, KDE placement/fullscreen, portal selection, minimize/occlusion rendering, remote Vesktop capture or idle-inhibit behavior. No real video device, audio source, logged-in Wayland window, desktop focus, monitor, service or audio route was used. Treat the arguments as a prototype, not a committed viewer command.

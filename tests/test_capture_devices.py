@@ -26,6 +26,7 @@ Laptop Camera: Integrated Camera (usb-0000:00:14.0-7):
 """
 
 UDEV_VIDEO4 = """DEVNAME=/dev/video4
+ID_BUS=usb
 ID_VENDOR_ID=1abc
 ID_MODEL_ID=02ef
 ID_SERIAL_SHORT=GUV302G-001
@@ -34,6 +35,7 @@ ID_V4L_CAPABILITIES=:capture:
 """
 
 UDEV_VIDEO5 = """DEVNAME=/dev/video5
+ID_BUS=usb
 ID_VENDOR_ID=1abc
 ID_MODEL_ID=02ef
 ID_SERIAL_SHORT=GUV302G-001
@@ -90,7 +92,7 @@ def test_udev_identity_uses_serial_and_falls_back_to_physical_port() -> None:
     assert properties.identity.stable_key.endswith(":serial:GUV302G-001")
 
     fallback = parse_udev_video_properties(
-        "DEVNAME=/dev/video8\nID_VENDOR_ID=045e\nID_MODEL_ID=0811\nID_PATH=pci-0000:00:14.0-usb-0:7:1.0\n"
+        "DEVNAME=/dev/video8\nID_BUS=usb\nID_VENDOR_ID=045e\nID_MODEL_ID=0811\nID_PATH=pci-0000:00:14.0-usb-0:7:1.0\n"
     )
     assert fallback.identity.serial_number is None
     assert fallback.identity.stable_key.endswith(":port:pci-0000:00:14.0-usb-0:7:1.0")
@@ -110,6 +112,18 @@ def test_parse_capabilities_prefers_device_caps_over_aggregate_card_caps() -> No
     assert not video.metadata_capture
     assert not metadata.capture_capable
     assert metadata.metadata_capture
+
+
+def test_aggregate_capabilities_are_not_used_when_device_caps_are_absent() -> None:
+    with pytest.raises(ValueError, match="aggregate Capabilities are insufficient"):
+        parse_v4l2_capabilities("Capabilities : 0x84000001\n    Video Capture\n")
+
+
+def test_non_usb_video_node_is_rejected() -> None:
+    with pytest.raises(ValueError, match="not attached to a USB device"):
+        parse_udev_video_properties(
+            "DEVNAME=/dev/video4\nID_BUS=pci\nID_VENDOR_ID=1abc\nID_MODEL_ID=02ef\nID_PATH=pci-0000:00:14.0\n"
+        )
 
 
 def test_discrete_modes_are_parsed_exactly_and_stepwise_ranges_are_not_guessed() -> None:
