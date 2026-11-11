@@ -414,9 +414,6 @@ class MpvViewerProcess:
                         "mpv exited while checking first-frame readiness"
                     ) from exc
                 if time.monotonic() >= deadline:
-                    input_error = self._classify_input_error("timeout")
-                    if input_error is not None and input_error.detail:
-                        raise input_error from exc
                     raise ViewerReadinessTimeout(
                         "Timed out while reading mpv first-frame properties"
                     ) from exc
