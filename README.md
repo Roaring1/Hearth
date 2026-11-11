@@ -37,10 +37,11 @@ Wayland**. Nothing is Nobara-specific; any PipeWire desktop should work.
   state is reflected from the mixer snapshot. Hotplug recovery is handled by
   the rig’s companion watcher, when installed.
 - **Screen Share overview** — a visible SCREEN SHARE entry opens a separate
-  setup guide, and SET UP on the mixer strip opens the same window. A separate
-  **Use Capture Card** desktop shortcut opens that guide in the running app or
-  launches Hearth directly into it. It explains the Hearth/Vesktop workflow;
-  capture device discovery and active capture are still in development.
+  setup guide, and SET UP on the mixer strip opens the same window. The separate
+  **Use Capture Card** desktop shortcut opens a read-only Capture Controls
+  window with a one-shot USB video-device check and explicit Refresh. Controls
+  shows saved Vesktop audio intent but does not change routes; session Start/Stop
+  remain unavailable until the audio-route and cleanup adapters are ready.
 - **Single instance + IPC** — a second launch focuses the running window
   instead of starting a rival process.
 - **Status report** — `hearth --status` prints a plain-language report on the

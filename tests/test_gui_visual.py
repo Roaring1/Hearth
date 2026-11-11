@@ -27,6 +27,7 @@ def test_production_windows_render_and_capture(
 
     from hearth import legacy_core
     from hearth.ui.gtk4 import app as app_mod
+    from hearth.ui.gtk4 import capture_controls as capture_controls_mod
     from hearth.ui.gtk4 import remap as remap_mod
     from hearth.ui.gtk4 import setup as setup_mod
 
@@ -73,6 +74,37 @@ def test_production_windows_render_and_capture(
     monkeypatch.setattr(app_mod.settings_mod, "save", lambda _values: None)
     share_selection = ["game", "music"]
     monkeypatch.setattr(app_mod.share_mod, "selection", lambda: list(share_selection))
+
+    # Capture Controls gets a real GTK window but only a synthetic V4L2
+    # inventory. The visual suite must never inspect host video devices.
+    from hearth.capture_devices import CaptureDevice, CaptureNode, V4L2Capabilities
+    from hearth.capture_provider import CaptureInventory
+    from hearth.capture_session import UsbIdentity, VideoMode
+
+    capture_identity = UsbIdentity("2f00", "0001", serial_number="visual-fixture")
+    capture_node = CaptureNode(
+        "/dev/video-fixture",
+        "IOGEAR UpStream 4K (synthetic)",
+        capture_identity,
+        V4L2Capabilities(
+            video_capture=True, video_capture_multiplanar=False, metadata_capture=False
+        ),
+        (VideoMode("MJPG", 1920, 1080, 60),),
+    )
+    visual_inventory = CaptureInventory(
+        devices=(CaptureDevice(capture_identity, (capture_node,)),),
+        issues=(),
+    )
+
+    class SyntheticV4L2InventoryProvider:
+        def discover(self):
+            return visual_inventory
+
+    monkeypatch.setattr(
+        capture_controls_mod,
+        "V4L2InventoryProvider",
+        SyntheticV4L2InventoryProvider,
+    )
     # Keep the gallery deterministic and fast: app icon resolution has its
     # own tests; this suite is measuring the composition of UI widgets.
     icon_calls: dict[str, int] = {}
@@ -273,6 +305,26 @@ def test_production_windows_render_and_capture(
     assert window._capture_window is overview
     capture("screen-share-overview")
     overview.set_visible(False)
+
+    window.open_capture_controls()
+    capture_controls = window._capture_controls_window
+    assert capture_controls is not None
+    assert capture_controls.get_title() == "Hearth - Capture Controls"
+    assert capture_controls.get_hide_on_close()
+    deadline = time.monotonic() + 4.0
+    while capture_controls._checking and time.monotonic() < deadline:
+        pump(0.05)
+    assert not capture_controls._checking
+    assert capture_controls.device_status.get_text() == "1 USB video input found"
+    assert capture_controls.audio_selection_label.get_text() == (
+        "Saved Vesktop audio selection: Game + Music"
+    )
+    assert capture_controls.session_status.get_text() == "Not started"
+    assert not hasattr(capture_controls, "start_button")
+    assert not hasattr(capture_controls, "stop_button")
+    capture("capture-controls")
+    capture_controls.set_visible(False)
+
     window.present()
     pump(0.15)
     game_meter = game_strip.meter
@@ -758,6 +810,7 @@ def test_production_windows_render_and_capture(
     # root window and contain the expected sample of production GUI states.
     assert {path.name for path in captures} == {
         "screen-share-overview.png",
+        "capture-controls.png",
         "mixer-loading.png",
         "mixer-ready.png",
         "mixer-app-move-focus.png",
@@ -842,6 +895,8 @@ def test_production_windows_render_and_capture(
 
     setup_window.set_visible(False)
     remap_window.set_visible(False)
+    if window._capture_controls_window is not None:
+        window._capture_controls_window.shutdown()
     window.set_visible(False)
     application.quit()
 

@@ -131,11 +131,15 @@ def _dispatch(args: argparse.Namespace) -> int:
         return EXIT_OK
 
     if args.capture_controls:
-        if core.ipc_send("capture_overview"):
+        if core.ipc_send("capture_controls") == "ok":
+            return EXIT_OK
+        # Older running instances know only the original overview request.
+        # Prefer that compatible read-only path over merely raising the mixer.
+        if core.ipc_send("capture_overview") == "ok":
             return EXIT_OK
         from hearth.ui import run_app
 
-        return run_app(["hearth", "--open-capture-overview"])
+        return run_app(["hearth", "--open-capture-controls"])
 
     if args.remap:
         reply = core.ipc_send("remap")
