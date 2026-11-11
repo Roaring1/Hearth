@@ -530,6 +530,7 @@ class FakeFrameMonitorServer:
         frame_health_error: str | None = None,
         resume_after_no_signal: bool = False,
         end_file_error: bool = False,
+        end_file_detail: str | None = None,
     ) -> None:
         self.path = path
         self.process = process
@@ -539,6 +540,7 @@ class FakeFrameMonitorServer:
         self.frame_health_error = frame_health_error
         self.resume_after_no_signal = resume_after_no_signal
         self.end_file_error = end_file_error
+        self.end_file_detail = end_file_detail
         self.no_signal_entered = threading.Event()
         self.resume_event = threading.Event()
         self.no_signal_transitions: list[bool] = []
@@ -615,9 +617,10 @@ class FakeFrameMonitorServer:
                     )
                     time.sleep(0.02)
                 if self.end_file_error:
-                    client.sendall(
-                        (json.dumps({"event": "end-file", "reason": "error"}) + "\n").encode()
-                    )
+                    event: dict[str, object] = {"event": "end-file", "reason": "error"}
+                    if self.end_file_detail is not None:
+                        event["file_error"] = self.end_file_detail
+                    client.sendall((json.dumps(event) + "\n").encode())
                 if self.resume_after_no_signal:
                     while not self.stop_event.is_set():
                         chunk = client.recv(4096)
@@ -701,16 +704,35 @@ def test_stream_monitor_shows_no_signal_after_timestamp_stall_and_keeps_waiting(
     assert viewer.no_signal is True
 
 
-def test_stream_monitor_shows_no_signal_on_input_end_file_error(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("file_error", "category"),
+    [
+        ("No such device", "device_unavailable"),
+        ("Device or resource busy", "device_busy"),
+        (None, "open_failed"),
+    ],
+)
+def test_stream_monitor_classifies_hard_input_end_file_error(
+    tmp_path: Path, file_error: str | None, category: str
+) -> None:
     process = FakeProcess()
     viewer = _viewer(tmp_path, process=process)
 
-    with FakeFrameMonitorServer(
-        viewer.ipc_socket, process, [0.1], hold_open=True, end_file_error=True
+    with (
+        FakeFrameMonitorServer(
+            viewer.ipc_socket,
+            process,
+            [0.1],
+            hold_open=True,
+            end_file_error=True,
+            end_file_detail=file_error,
+        ),
+        pytest.raises(ViewerInputOpenError) as caught,
     ):
-        assert viewer.monitor_until_exit(stall_timeout_s=0.5) == 0
+        viewer.monitor_until_exit(stall_timeout_s=0.5)
 
-    assert viewer.no_signal is True
+    assert caught.value.category == category
+    assert viewer.no_signal is False
 
 
 def test_stream_monitor_clears_no_signal_when_time_pos_resumes(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ from threading import Event
 import pytest
 
 from hearth.capture_devices import AudioAssociationStatus, AudioSourceCandidate
+from hearth.capture_mpv_ipc import ViewerInputOpenError
 from hearth.capture_runtime import CaptureAudioAssociationError
 from hearth.capture_session import (
     AudioMode,
@@ -36,6 +37,7 @@ class FakeViewer:
     exit_code: int = 0
     no_signal: bool = False
     no_signal_callback: Callable[[bool], None] | None = field(default=None, repr=False)
+    monitor_error: Exception | None = field(default=None, repr=False)
 
     def wait(self, timeout: float | None = None) -> int:
         if not self.exit_event.wait(timeout):
@@ -47,7 +49,10 @@ class FakeViewer:
         self.exit_event.set()
 
     def monitor_until_exit(self) -> int:
-        return self.wait()
+        returncode = self.wait()
+        if self.monitor_error is not None:
+            raise self.monitor_error
+        return returncode
 
     def set_no_signal_callback(self, callback: Callable[[bool], None] | None) -> None:
         self.no_signal_callback = callback
@@ -449,3 +454,25 @@ def test_no_signal_observer_exception_cannot_break_viewer_state() -> None:
     runtime.viewer.set_no_signal(True)
     assert manager.snapshot().no_signal is True
     manager.stop()
+
+
+def test_hard_viewer_input_error_fails_session_and_releases_leases() -> None:
+    runtime = FakeRuntime()
+    manager = CaptureSessionManager(runtime)
+    manager.start(PLAN)
+    assert runtime.viewer is not None
+    runtime.viewer.monitor_error = ViewerInputOpenError("device_unavailable", "No such device")
+    runtime.viewer.exit(1)
+
+    deadline = time.monotonic() + 1.0
+    while manager.snapshot().state is not SessionState.FAILED and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    snapshot = manager.snapshot()
+    assert snapshot.state is SessionState.FAILED
+    assert snapshot.error_category == "device_unavailable"
+    assert snapshot.error == (
+        "The selected capture device is no longer available. Reconnect it and try again."
+    )
+    assert runtime.events[-3:] == ["stop_viewer", "release_inhibitor", "remove_routes"]
+    assert manager.stop().state is SessionState.DORMANT
