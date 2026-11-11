@@ -13,6 +13,7 @@ from enum import StrEnum
 from threading import RLock, Thread, current_thread
 from typing import Protocol
 
+from hearth.capture_frame_health import FrameHealthSnapshot
 from hearth.errors import HearthError
 
 
@@ -189,6 +190,7 @@ class SessionSnapshot:
     error: str | None
     cleanup_failures: tuple[str, ...]
     revision: int
+    frame_health: FrameHealthSnapshot | None = None
 
 
 class CaptureSessionError(HearthError):
@@ -245,6 +247,11 @@ class CaptureSessionManager:
     def snapshot(self) -> SessionSnapshot:
         """Return a copy of UI-safe lifecycle state."""
         with self._lock:
+            frame_health = None
+            if self._state is SessionState.RUNNING and self._viewer is not None:
+                candidate = getattr(self._viewer, "frame_health", None)
+                if isinstance(candidate, FrameHealthSnapshot):
+                    frame_health = candidate
             return SessionSnapshot(
                 state=self._state,
                 plan=self._plan,
@@ -252,6 +259,7 @@ class CaptureSessionManager:
                 error=self._error,
                 cleanup_failures=self._cleanup_failures,
                 revision=self._revision,
+                frame_health=frame_health,
             )
 
     def start(self, plan: CapturePlan) -> SessionSnapshot:
