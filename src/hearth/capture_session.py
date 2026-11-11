@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
-from threading import RLock
+from threading import RLock, Thread, current_thread
 from typing import Protocol
 
 from hearth.errors import HearthError
@@ -236,6 +236,7 @@ class CaptureSessionManager:
         self._viewer: ViewerHandle | None = None
         self._routes: AudioRouteLease | None = None
         self._inhibitor: IdleInhibitorLease | None = None
+        self._viewer_watcher: Thread | None = None
 
     def snapshot(self) -> SessionSnapshot:
         """Return a copy of UI-safe lifecycle state."""
@@ -312,9 +313,57 @@ class CaptureSessionManager:
             self._error = None
             self._cleanup_failures = ()
             self._revision += 1
+            viewer = self._viewer
+            if viewer is not None:
+                watcher = Thread(
+                    target=self._watch_viewer,
+                    args=(viewer,),
+                    name="hearth-capture-viewer-exit",
+                    daemon=True,
+                )
+                self._viewer_watcher = watcher
+                try:
+                    watcher.start()
+                except RuntimeError as exc:
+                    self._viewer_watcher = None
+                    self._state = SessionState.FAILED
+                    self._stage = SessionStage.CLEANUP
+                    self._error = f"could not monitor Share Output viewer: {exc}"
+                    failures = self._cleanup_resources()
+                    self._cleanup_failures = tuple(failures)
+                    self._revision += 1
+                    raise CaptureSessionError(
+                        SessionStage.CLEANUP,
+                        self._error,
+                        cleanup_failures=self._cleanup_failures,
+                    ) from exc
             return self.snapshot()
 
-    def viewer_exited(self, returncode: int) -> SessionSnapshot:
+    def _watch_viewer(self, viewer: ViewerHandle) -> None:
+        """Wait only while RUNNING; no polling or dormant watcher exists."""
+        try:
+            try:
+                returncode = viewer.wait()
+            except Exception as exc:
+                self.viewer_exited(
+                    -1,
+                    detail=f"viewer exit status unavailable: {exc}",
+                    ignore_if_not_running=True,
+                )
+            else:
+                self.viewer_exited(returncode, ignore_if_not_running=True)
+        finally:
+            with self._lock:
+                if self._viewer_watcher is current_thread():
+                    self._viewer_watcher = None
+
+    def viewer_exited(
+        self,
+        returncode: int,
+        *,
+        detail: str | None = None,
+        ignore_if_not_running: bool = False,
+    ) -> SessionSnapshot:
         """Handle an unexpected viewer exit while a session is running.
 
         The runtime's active-session process waiter calls this after the child
@@ -325,44 +374,68 @@ class CaptureSessionManager:
         """
         with self._lock:
             if self._state is not SessionState.RUNNING:
+                if ignore_if_not_running:
+                    # A Stop may already have intentionally ended the viewer.
+                    # Its internal waiter can wake afterwards; that completion is stale.
+                    return self.snapshot()
                 raise CaptureSessionError(
-                    self._stage or SessionStage.CLEANUP,
+                    SessionStage.CLEANUP,
                     f"viewer exit reported while the session is {self._state.value}",
                 )
             self._state = SessionState.FAILED
             self._stage = SessionStage.CLEANUP
-            self._error = f"Share Output viewer exited unexpectedly (code {returncode})"
+            self._error = detail or f"Share Output viewer exited unexpectedly (code {returncode})"
             self._revision += 1
             failures = self._cleanup_resources()
             self._cleanup_failures = tuple(failures)
             self._revision += 1
-            return self.snapshot()
+            snapshot = self.snapshot()
+            watcher = self._viewer_watcher
+        if watcher is not None and watcher is not current_thread():
+            watcher.join(timeout=1.0)
+        return snapshot
 
     def stop(self) -> SessionSnapshot:
         """Stop or retry cleanup; idempotent after a complete stop."""
+        error: CaptureSessionError | None = None
         with self._lock:
             if self._state is SessionState.DORMANT:
-                return self.snapshot()
-            self._state = SessionState.STOPPING
-            self._stage = SessionStage.CLEANUP
-            self._revision += 1
-            failures = self._cleanup_resources()
-            self._cleanup_failures = tuple(failures)
-            if failures:
-                self._state = SessionState.FAILED
-                self._error = "Some capture resources could not be cleaned up"
+                snapshot = self.snapshot()
+                watcher = self._viewer_watcher
+            else:
+                self._state = SessionState.STOPPING
+                self._stage = SessionStage.CLEANUP
                 self._revision += 1
-                raise CaptureSessionError(
-                    SessionStage.CLEANUP,
-                    self._error,
-                    cleanup_failures=self._cleanup_failures,
-                )
-            self._state = SessionState.DORMANT
-            self._stage = None
-            self._error = None
-            self._plan = None
-            self._revision += 1
-            return self.snapshot()
+                failures = self._cleanup_resources()
+                self._cleanup_failures = tuple(failures)
+                if failures:
+                    self._state = SessionState.FAILED
+                    self._error = "Some capture resources could not be cleaned up"
+                    self._revision += 1
+                    error = CaptureSessionError(
+                        SessionStage.CLEANUP,
+                        self._error,
+                        cleanup_failures=self._cleanup_failures,
+                    )
+                else:
+                    self._state = SessionState.DORMANT
+                    self._stage = None
+                    self._error = None
+                    self._plan = None
+                    self._revision += 1
+                snapshot = self.snapshot()
+                watcher = self._viewer_watcher
+        # The watcher may have been waiting to acquire _lock after the child
+        # was stopped. Join only after releasing the manager lock.
+        if watcher is not None and watcher is not current_thread():
+            watcher.join(timeout=1.0)
+            if not watcher.is_alive():
+                with self._lock:
+                    if self._viewer_watcher is watcher:
+                        self._viewer_watcher = None
+        if error is not None:
+            raise error
+        return snapshot
 
     def _cleanup_resources(self) -> list[str]:
         """Attempt every cleanup stage in required order; retain failed leases."""

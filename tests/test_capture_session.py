@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
+from threading import Event
 
 import pytest
 
@@ -27,12 +29,25 @@ PLAN = CapturePlan(IDENTITY, MODE)
 class FakeViewer:
     events: list[str]
     stop_failures: int = 0
+    exit_event: Event = field(default_factory=Event, repr=False)
+    exit_code: int = 0
 
-    def stop(self) -> None:
+    def wait(self, timeout: float | None = None) -> int:
+        if not self.exit_event.wait(timeout):
+            raise TimeoutError("fake viewer is still running")
+        return self.exit_code
+
+    def exit(self, returncode: int) -> None:
+        self.exit_code = returncode
+        self.exit_event.set()
+
+    def stop(self) -> int:
         self.events.append("stop_viewer")
         if self.stop_failures:
             self.stop_failures -= 1
             raise RuntimeError("viewer did not stop")
+        self.exit(-15)
+        return self.exit_code
 
 
 @dataclass
@@ -277,8 +292,13 @@ def test_unexpected_viewer_exit_cleans_session_and_requires_explicit_stop_ack() 
     runtime = FakeRuntime()
     manager = CaptureSessionManager(runtime)
     manager.start(PLAN)
+    assert runtime.viewer is not None
 
-    failed = manager.viewer_exited(17)
+    runtime.viewer.exit(17)
+    deadline = time.monotonic() + 1.0
+    while manager.snapshot().state is SessionState.RUNNING and time.monotonic() < deadline:
+        time.sleep(0.005)
+    failed = manager.snapshot()
 
     assert failed.state is SessionState.FAILED
     assert failed.error == "Share Output viewer exited unexpectedly (code 17)"

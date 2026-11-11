@@ -121,7 +121,7 @@ Hearth's pure `build_mpv_viewer_argv()` builder has an allow-list mapping for co
 
 The installed mpv 0.40.0 + FFmpeg build was tested with a deliberately nonexistent path under Xvfb using the exact `av://v4l2` form and explicit lavf options from the builder. mpv reported `Cannot open video device /dev/hearth-no-such-video-device`, proving that the URL reached FFmpeg's V4L2 input handler rather than failing as an unknown protocol. A follow-on `Failed to recognize file format` is mpv's terminal response after the demuxer's expected missing-node failure. This did not open any real node. The build's `ffmpeg -devices` lists `video4linux2,v4l2` as an input device.
 
-The command builder, adapter and owned process primitive are implemented, but no actual capture stream has been opened and no input-format mapping has been verified against the target card. `proc.spawn_owned()` waits for the PDEATHSIG/exec handshake and keeps the creating thread alive through child exit; its synthetic tests cover owner-thread death, the pre-prctl race, setup failure and bounded Stop. The remaining work is to wire the adapter into the session runtime and monitor first/last frames before reporting Ready.
+The command builder, adapter and owned process primitive are implemented, and the viewer now has a bounded first-frame IPC check. No actual capture stream has been opened and no input-format mapping has been verified against the target card. `proc.spawn_owned()` waits for the PDEATHSIG/exec handshake and keeps the creating thread alive through child exit; its synthetic tests cover owner-thread death, the pre-prctl race, setup failure and bounded Stop. The remaining work is to wire the adapter and first-frame check into the session runtime and monitor frame loss/stalls after readiness.
 
 
 ## mpv libavdevice command-construction smoke (Xvfb)
@@ -129,3 +129,10 @@ The command builder, adapter and owned process primitive are implemented, but no
 A second isolated check used the mpv v0.40.0 `av://` input handler with `av://lavfi:testsrc=size=1280x720:rate=30`, running under private Xvfb and `--vo=x11`. The window title was `Hearth - Share Output`, geometry 1280x720, with audio, OSC, OSD, subtitles and built-in bindings disabled. The player and Xvfb session were stopped by the test wrapper. This validates only the libavdevice URL path and presentation shell with a synthetic lavfi source. It is not a V4L2 device test and not a Wayland/portal test.
 
 The candidate viewer argv is now assembled in `src/hearth/capture_viewer.py`. It uses mpv's documented `av://v4l2:/dev/videoN` form and `--demuxer-lavf-o` for exact input options. `docs/CAPTURE_MODE_SESSION_CORE.md` records the current option policy and remaining process-ownership requirements. The actual viewer adapter has not started mpv against a real `/dev/videoN`.
+
+
+## First-frame readiness check (synthetic Xvfb)
+
+The mpv viewer wrapper now creates a unique IPC socket under a private 0700 directory in `XDG_RUNTIME_DIR`. It does not use a shared `/tmp` socket. After launch, `wait_for_first_frame()` opens a bounded local JSON IPC connection and queries `video-frame-info/picture-type`, `video-params` and `vo-configured`. It only returns Ready when a current decoded frame has type I/P/B, dimensions are positive, and the VO is configured. A child exit or deadline becomes a failure; the socket directory is removed only after Stop reaps the child.
+
+This was exercised with mpv 0.40.0 under Xvfb using the synthetic `av://lavfi:testsrc=size=640x360:rate=30` source: the readiness result was 640x360, picture type I; the child was stopped and the private runtime directory removed. No real V4L2 device or Wayland session was used. This confirms the first-frame IPC mechanics only, not capture-card mode correctness or ongoing stream health.

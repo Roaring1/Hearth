@@ -7,9 +7,13 @@ importing this module starts no process and probes no device.
 
 from __future__ import annotations
 
+import os
+import shutil
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
 from hearth import proc
+from hearth.capture_mpv_ipc import MpvViewerProcess, create_private_ipc_directory
 from hearth.capture_session import ResolvedCaptureDevice, ViewerHandle
 from hearth.errors import HearthError
 
@@ -39,6 +43,7 @@ def build_mpv_viewer_argv(
     *,
     executable: str = "mpv",
     fullscreen: bool = True,
+    ipc_socket_path: str | Path | None = None,
 ) -> list[str]:
     """Build a no-audio, no-OSD mpv command for one resolved V4L2 mode.
 
@@ -73,6 +78,13 @@ def build_mpv_viewer_argv(
         f"--demuxer-lavf-o={lavf_options}",
         "--force-window=yes",
     ]
+    if ipc_socket_path is not None:
+        ipc_path = str(ipc_socket_path)
+        if not ipc_path.startswith("/"):
+            raise ValueError("mpv IPC socket path must be absolute")
+        if len(os.fsencode(ipc_path)) >= 100:
+            raise ValueError("mpv IPC socket path is too long")
+        argv.append(f"--input-ipc-server={ipc_path}")
     if fullscreen:
         argv.append("--fullscreen")
     argv.extend(("--", f"av://v4l2:{device.video_node_path}"))
@@ -99,8 +111,18 @@ class MpvCaptureViewer:
         self._process_factory = process_factory
 
     def start(self, device: ResolvedCaptureDevice) -> ViewerHandle:
-        """Build the explicit V4L2 command and return its owned process handle."""
-        argv = build_mpv_viewer_argv(
-            device, executable=self._executable, fullscreen=self._fullscreen
-        )
-        return self._process_factory(argv)
+        """Build the explicit V4L2 command and return its owned IPC/process handle."""
+        runtime_directory = create_private_ipc_directory()
+        ipc_socket = runtime_directory / "mpv.sock"
+        try:
+            argv = build_mpv_viewer_argv(
+                device,
+                executable=self._executable,
+                fullscreen=self._fullscreen,
+                ipc_socket_path=ipc_socket,
+            )
+            process = self._process_factory(argv)
+        except Exception:
+            shutil.rmtree(runtime_directory, ignore_errors=True)
+            raise
+        return MpvViewerProcess(process, runtime_directory, ipc_socket)

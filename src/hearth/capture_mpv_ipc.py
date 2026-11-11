@@ -1,0 +1,230 @@
+"""Private mpv IPC and first-decoded-frame readiness for Capture Mode.
+
+The IPC socket is local and unauthenticated, so it lives inside a per-session
+0700 directory under XDG_RUNTIME_DIR. The client exists only while Start is
+waiting for the first frame; it does not create a watcher or background thread.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import socket
+import stat
+import tempfile
+import time
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Protocol
+
+from hearth.errors import HearthError
+
+
+class OwnedProcessHandle(Protocol):
+    """Minimal owned process API required by the viewer wrapper."""
+
+    def poll(self) -> int | None: ...
+
+    def wait(self, timeout: float | None = None) -> int: ...
+
+    def stop(self, *, timeout: float = 1.0) -> int: ...
+
+
+class ViewerIPCError(HearthError):
+    """The local mpv IPC endpoint was unsafe or spoke an invalid protocol."""
+
+
+class ViewerReadinessTimeout(HearthError):
+    """mpv did not produce a decoded video frame before the deadline."""
+
+
+class ViewerExitedBeforeFirstFrame(HearthError):
+    """The owned mpv process exited before a decoded frame was available."""
+
+
+@dataclass(frozen=True, slots=True)
+class FirstFrame:
+    """Evidence that mpv has a decoded current frame and configured video output."""
+
+    width: int
+    height: int
+    picture_type: str
+
+
+def create_private_ipc_directory() -> Path:
+    """Create a session-private IPC directory under the owner's runtime dir."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "").strip()
+    if not runtime:
+        raise ViewerIPCError("XDG_RUNTIME_DIR is unavailable; refusing an insecure IPC fallback")
+    root = Path(runtime)
+    try:
+        metadata = root.stat()
+    except OSError as exc:
+        raise ViewerIPCError(f"XDG_RUNTIME_DIR cannot be inspected: {exc}") from exc
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise ViewerIPCError("XDG_RUNTIME_DIR is not a directory")
+    if metadata.st_uid != os.getuid():
+        raise ViewerIPCError("XDG_RUNTIME_DIR is not owned by the current user")
+    if metadata.st_mode & 0o077:
+        raise ViewerIPCError("XDG_RUNTIME_DIR permissions are not private")
+    try:
+        directory = Path(tempfile.mkdtemp(prefix="hearth-capture-", dir=root))
+        directory.chmod(0o700)
+    except OSError as exc:
+        raise ViewerIPCError(f"Could not create a private viewer IPC directory: {exc}") from exc
+    return directory
+
+
+class MpvViewerProcess:
+    """Owned mpv child plus a private JSON IPC path for bounded readiness checks."""
+
+    def __init__(
+        self,
+        process: OwnedProcessHandle,
+        runtime_directory: Path,
+        ipc_socket: Path,
+    ) -> None:
+        self._process = process
+        self.runtime_directory = runtime_directory
+        self.ipc_socket = ipc_socket
+        self._cleaned = False
+
+    @property
+    def pid(self) -> int | None:
+        return getattr(self._process, "pid", None)
+
+    def poll(self) -> int | None:
+        return self._process.poll()
+
+    def wait(self, timeout: float | None = None) -> int:
+        return self._process.wait(timeout=timeout)
+
+    def wait_for_first_frame(self, timeout_s: float) -> FirstFrame:
+        """Wait for decoded frame metadata and a configured video output.
+
+        mpv's `video-frame-info/picture-type` is unavailable until it has a
+        current frame. We require a valid picture type, positive decoded frame
+        dimensions, and `vo-configured=true`; a running PID or an open input
+        alone does not satisfy readiness.
+        """
+        if timeout_s <= 0:
+            raise ValueError("timeout_s must be positive")
+        socket_path = os.fsencode(self.ipc_socket)
+        if len(socket_path) >= 100:
+            raise ViewerIPCError("mpv IPC socket path is too long for a Unix-domain socket")
+        deadline = time.monotonic() + timeout_s
+        while True:
+            if self.poll() is not None:
+                raise ViewerExitedBeforeFirstFrame(
+                    "mpv exited before its first decoded video frame"
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ViewerReadinessTimeout(
+                    "Timed out waiting for mpv's first decoded video frame"
+                )
+
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection.settimeout(min(0.2, remaining))
+            try:
+                connection.connect(str(self.ipc_socket))
+            except (FileNotFoundError, ConnectionRefusedError, TimeoutError):
+                connection.close()
+                time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+                continue
+            except OSError as exc:
+                connection.close()
+                raise ViewerIPCError(f"Could not connect to mpv IPC: {exc}") from exc
+
+            try:
+                with connection.makefile("rwb", buffering=0) as channel:
+                    picture = self._get_property(
+                        connection, channel, "video-frame-info/picture-type", 1, deadline
+                    )
+                    if picture not in {"I", "P", "B"}:
+                        continue
+                    parameters = self._get_property(
+                        connection, channel, "video-params", 2, deadline
+                    )
+                    output_ready = self._get_property(
+                        connection, channel, "vo-configured", 3, deadline
+                    )
+            except (ConnectionError, BrokenPipeError, OSError, TimeoutError, ValueError) as exc:
+                if self.poll() is not None:
+                    raise ViewerExitedBeforeFirstFrame(
+                        "mpv exited while checking first-frame readiness"
+                    ) from exc
+                if time.monotonic() >= deadline:
+                    raise ViewerReadinessTimeout(
+                        "Timed out while reading mpv first-frame properties"
+                    ) from exc
+                continue
+            finally:
+                connection.close()
+
+            if (
+                isinstance(parameters, dict)
+                and isinstance(parameters.get("w"), int)
+                and isinstance(parameters.get("h"), int)
+                and parameters["w"] > 0
+                and parameters["h"] > 0
+                and output_ready is True
+            ):
+                return FirstFrame(parameters["w"], parameters["h"], picture)
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+
+    @staticmethod
+    def _get_property(
+        connection: socket.socket,
+        channel: socket.SocketIO,
+        name: str,
+        request_id: int,
+        deadline: float,
+    ) -> object:
+        """Send one JSON IPC query and wait for its matching response."""
+        payload = json.dumps(
+            {"command": ["get_property", name], "request_id": request_id},
+            separators=(",", ":"),
+        )
+        channel.write((payload + "\n").encode("utf-8"))
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("mpv IPC response deadline expired")
+            connection.settimeout(min(0.2, remaining))
+            try:
+                raw = channel.readline()
+            except TimeoutError:
+                continue
+            if not raw:
+                raise ConnectionError("mpv closed the IPC connection")
+            try:
+                response = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ViewerIPCError("mpv sent invalid JSON IPC data") from exc
+            if not isinstance(response, Mapping) or response.get("request_id") != request_id:
+                # Property notifications or unrelated messages are not replies
+                # to the outstanding request; keep the connection and wait.
+                continue
+            if response.get("error") == "success":
+                return response.get("data")
+            if response.get("error") == "property unavailable":
+                return None
+            raise ViewerIPCError(f"mpv property {name!r} failed: {response.get('error')}")
+
+    def stop(self, *, timeout: float = 1.0) -> int:
+        """Stop/reap mpv, then remove its private IPC directory."""
+        result = self._process.stop(timeout=timeout)
+        if not self._cleaned:
+            try:
+                shutil.rmtree(self.runtime_directory)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise ViewerIPCError(
+                    f"Could not remove private viewer IPC directory: {exc}"
+                ) from exc
+            self._cleaned = True
+        return result
