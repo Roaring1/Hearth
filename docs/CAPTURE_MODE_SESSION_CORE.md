@@ -65,7 +65,7 @@ Do not add a permanent service, timer, hotplug watcher or polling loop to solve 
 
 - Parses `v4l2-ctl --list-devices` into `/dev/videoN` candidates and ignores `/dev/mediaN` nodes.
 - Parses udev properties for vendor/product plus USB serial (preferred) or physical USB path fallback. A node without a stable identity is rejected.
-- Parses the `Device Caps` block in preference to aggregate card `Capabilities`; metadata-only nodes are not capture-eligible.
+- Requires the per-node `Device Caps` block; aggregate card `Capabilities` alone are insufficient to choose a node safely. Metadata-only nodes are not capture-eligible.
 - Parses only discrete pixel format, frame size and FPS combinations from `v4l2-ctl --list-formats-ext`. Stepwise/continuous ranges are not guessed or expanded.
 - Groups nodes by stable USB key. It chooses a capture node only when exactly one eligible node exists; multiple eligible nodes require an explicit path selection.
 

@@ -730,7 +730,7 @@ This section is the current handoff for the Screen Share overview work and super
 - Stop/rollback order is explicit: stop viewer/device handle, release idle inhibitor, remove only the session-owned audio route lease. Failed cleanup retains the failed lease, reports `FAILED`, and allows a later Stop to retry. Start is refused until state returns to `DORMANT`.
 - The core is toolkit-free and uses no real V4L2, PipeWire, mpv, desktop portal, systemd or D-Bus adapter. Tests use a fake runtime and inject failures at each startup stage, including failed rollback and retry. This is a lifecycle contract, not a working hardware implementation.
 - `docs/CAPTURE_MODE_SESSION_CORE.md` describes the implemented transaction contract and fixture-backed parser, and separates the still-missing live provider, audio association, viewer, route and inhibitor adapters.
-- Current full gate with this no-card slice: **545 passed**, 26 upstream GTK/PyGObject deprecation warnings, Ruff lint/format (101 files), mypy (36 source files), legacy compile, desktop-entry/AppStream validation and ShellCheck all passed. AppStream's uppercase application-id pedantic warning is non-fatal.
+- Current full gate with this no-card slice: **547 passed**, 26 upstream GTK/PyGObject deprecation warnings, Ruff lint/format (101 files), mypy (36 source files), legacy compile, desktop-entry/AppStream validation and ShellCheck all passed. AppStream's uppercase application-id pedantic warning is non-fatal.
 - This work does not implement #10 and does not change the user's audio routes, service state, devices, defaults, volume, mute or desktop session.
 
 ### No-card Wayland/mpv source research - 2026-11-10
@@ -739,7 +739,8 @@ This section is the current handoff for the Screen Share overview work and super
 - Current Vesktop `main` detects Wayland, calls Electron `desktopCapturer.getSources` with `window` + `screen`, receives the one source selected through Linux/PipeWire, then skips Vesktop's own multi-source grid. Expected Wayland user flow is Vesktop Share Screen -> KDE/system portal picker -> select `Hearth - Share Output`. Electron documents the single-source PipeWire behavior; the installed user's Vesktop Flatpak version is still unknown and needs later confirmation.
 - Current upstream Vesktop screen-share code does not pass Electron's persistent restore token options. Assume a fresh portal choice on each new share until the installed build proves otherwise. Hearth must not automate or retain screen-capture consent.
 - mpv docs establish useful candidates (`--title`, `--osc=no`, `--osd-level=0`, `--cursor-autohide=always`, `--input-builtin-bindings=no`, `--ao=null`). They also warn that `--screen` cannot place windows on Wayland, minimizing may not be reversible, and hidden rendering can require `--force-render`. Do not turn these into final arguments until the adapter and real matrix verify them. `--force-render` stays off by default pending performance tests.
-- This research is from upstream source/manuals only. No Vesktop, portal, mpv, display or remote-share test was run on the user's PC.
+- This research is from upstream source/manuals plus one isolated Xvfb mpv smoke. No Vesktop, portal, Wayland, display or remote-share test was run on the user's PC.
+- The installed mpv 0.40.0 accepted the candidate clean-window options under Xvfb with `--vo=x11 --hwdec=no`, opened the exact `Hearth - Share Output` title at 1280x720, advanced through a generated test pattern and produced a screenshot. The temporary player and files were removed. This validates command shape and the X11 test backend only; it does not validate the Wayland VO or portal capture.
 
 ### Next work without capture hardware
 
