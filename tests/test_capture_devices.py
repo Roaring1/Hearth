@@ -155,6 +155,16 @@ def test_discrete_modes_are_parsed_exactly_and_stepwise_ranges_are_not_guessed()
     )
 
 
+def test_stepwise_size_does_not_reuse_a_previous_discrete_resolution() -> None:
+    text = """[0]: 'MJPG' (Motion-JPEG)
+        Size: Discrete 1920x1080
+            Interval: Discrete 0.016s (60.000 fps)
+        Size: Stepwise 640x480 - 1920x1080 with step 16/8
+            Interval: Stepwise 0.016s - 1.000s with step 0.001s
+"""
+    assert parse_v4l2_discrete_modes(text) == (VideoMode("MJPG", 1920, 1080, 60),)
+
+
 def test_metadata_only_node_is_not_given_video_modes() -> None:
     metadata = parse_udev_video_properties(UDEV_VIDEO5)
     caps = parse_v4l2_capabilities(METADATA_CAPS)
