@@ -19,7 +19,6 @@ from hearth.capture_mpv_ipc import (
     ViewerInputOpenError,
     ViewerIPCError,
     ViewerReadinessTimeout,
-    ViewerStreamStalled,
     classify_mpv_input_error,
     create_private_ipc_directory,
     create_private_mpv_log_file,
@@ -401,6 +400,8 @@ class FakeFrameMonitorServer:
         hold_open: bool,
         frame_health: dict[str, object] | None = None,
         frame_health_error: str | None = None,
+        resume_after_no_signal: bool = False,
+        end_file_error: bool = False,
     ) -> None:
         self.path = path
         self.process = process
@@ -408,6 +409,11 @@ class FakeFrameMonitorServer:
         self.hold_open = hold_open
         self.frame_health = frame_health
         self.frame_health_error = frame_health_error
+        self.resume_after_no_signal = resume_after_no_signal
+        self.end_file_error = end_file_error
+        self.no_signal_entered = threading.Event()
+        self.resume_event = threading.Event()
+        self.no_signal_transitions: list[bool] = []
         self.stop_event = threading.Event()
         self.errors: list[BaseException] = []
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -480,8 +486,52 @@ class FakeFrameMonitorServer:
                         ).encode()
                     )
                     time.sleep(0.02)
-                if self.hold_open:
-                    self.stop_event.wait(2.0)
+                if self.end_file_error:
+                    client.sendall(
+                        (json.dumps({"event": "end-file", "reason": "error"}) + "\n").encode()
+                    )
+                if self.resume_after_no_signal:
+                    while not self.stop_event.is_set():
+                        chunk = client.recv(4096)
+                        if not chunk:
+                            break
+                        request_buffer += chunk
+                        while b"\n" in request_buffer:
+                            request_line, _, request_buffer = request_buffer.partition(b"\n")
+                            message = json.loads(request_line)
+                            if message.get("command") == [
+                                "set_property",
+                                "user-data/hearth/no-signal",
+                                True,
+                            ]:
+                                self.no_signal_transitions.append(True)
+                                self.no_signal_entered.set()
+                                if not self.resume_event.wait(1.0):
+                                    raise TimeoutError("test did not resume the fake stream")
+                                client.sendall(
+                                    (
+                                        json.dumps(
+                                            {
+                                                "event": "property-change",
+                                                "id": 1,
+                                                "name": "time-pos",
+                                                "data": self.positions[-1] + 0.1,
+                                            }
+                                        )
+                                        + "\n"
+                                    ).encode()
+                                )
+                            elif message.get("command") == [
+                                "set_property",
+                                "user-data/hearth/no-signal",
+                                False,
+                            ]:
+                                self.no_signal_transitions.append(False)
+                                self.process.exit_code = 0
+                                return
+                elif self.hold_open:
+                    self.stop_event.wait(0.3)
+                    self.process.exit_code = 0
                 else:
                     self.process.exit_code = 0
         except BaseException as exc:
@@ -511,15 +561,52 @@ def test_stream_monitor_uses_time_pos_events_and_returns_when_player_exits(
         assert viewer.monitor_until_exit(stall_timeout_s=0.2) == 0
 
 
-def test_stream_monitor_fails_when_time_pos_stops_advancing(tmp_path: Path) -> None:
+def test_stream_monitor_shows_no_signal_after_timestamp_stall_and_keeps_waiting(
+    tmp_path: Path,
+) -> None:
     process = FakeProcess()
     viewer = _viewer(tmp_path, process=process)
 
-    with (
-        FakeFrameMonitorServer(viewer.ipc_socket, process, [0.1], hold_open=True),
-        pytest.raises(ViewerStreamStalled, match="timestamps stopped advancing"),
+    with FakeFrameMonitorServer(viewer.ipc_socket, process, [0.1], hold_open=True):
+        assert viewer.monitor_until_exit(stall_timeout_s=0.12) == 0
+
+    assert viewer.no_signal is True
+
+
+def test_stream_monitor_shows_no_signal_on_input_end_file_error(tmp_path: Path) -> None:
+    process = FakeProcess()
+    viewer = _viewer(tmp_path, process=process)
+
+    with FakeFrameMonitorServer(
+        viewer.ipc_socket, process, [0.1], hold_open=True, end_file_error=True
     ):
-        viewer.monitor_until_exit(stall_timeout_s=0.12)
+        assert viewer.monitor_until_exit(stall_timeout_s=0.5) == 0
+
+    assert viewer.no_signal is True
+
+
+def test_stream_monitor_clears_no_signal_when_time_pos_resumes(tmp_path: Path) -> None:
+    process = FakeProcess()
+    viewer = _viewer(tmp_path, process=process)
+    result: list[int] = []
+
+    with FakeFrameMonitorServer(
+        viewer.ipc_socket, process, [0.1], hold_open=True, resume_after_no_signal=True
+    ) as server:
+        monitor = threading.Thread(
+            target=lambda: result.append(viewer.monitor_until_exit(stall_timeout_s=0.12)),
+            daemon=True,
+        )
+        monitor.start()
+        assert server.no_signal_entered.wait(1.0)
+        assert viewer.no_signal is True
+        server.resume_event.set()
+        monitor.join(timeout=1.0)
+        assert not monitor.is_alive()
+
+    assert result == [0]
+    assert viewer.no_signal is False
+    assert server.no_signal_transitions == [True, False]
 
 
 def test_stream_monitor_exposes_validated_pixel_health_without_failing_the_stream(

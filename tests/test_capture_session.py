@@ -33,7 +33,7 @@ class FakeViewer:
     stop_failures: int = 0
     exit_event: Event = field(default_factory=Event, repr=False)
     exit_code: int = 0
-    monitor_error: str | None = None
+    no_signal: bool = False
 
     def wait(self, timeout: float | None = None) -> int:
         if not self.exit_event.wait(timeout):
@@ -45,8 +45,6 @@ class FakeViewer:
         self.exit_event.set()
 
     def monitor_until_exit(self) -> int:
-        if self.monitor_error is not None:
-            raise RuntimeError(self.monitor_error)
         return self.wait()
 
     def stop(self) -> int:
@@ -87,11 +85,9 @@ class FakeRuntime:
         self,
         *,
         fail_at: str | None = None,
-        viewer_monitor_error: str | None = None,
     ) -> None:
         self.events: list[str] = []
         self.fail_at = fail_at
-        self.viewer_monitor_error = viewer_monitor_error
         self.viewer: FakeViewer | None = None
         self.routes: FakeRoutes | None = None
         self.inhibitor: FakeInhibitor | None = None
@@ -115,11 +111,7 @@ class FakeRuntime:
 
     def start_viewer(self, device: ResolvedCaptureDevice) -> FakeViewer:
         self._step("start_viewer")
-        self.viewer = FakeViewer(
-            self.events,
-            stop_failures=self.viewer_stop_failures,
-            monitor_error=self.viewer_monitor_error,
-        )
+        self.viewer = FakeViewer(self.events, stop_failures=self.viewer_stop_failures)
         return self.viewer
 
     def apply_audio_routes(self, plan: CapturePlan, device: ResolvedCaptureDevice) -> FakeRoutes:
@@ -327,21 +319,28 @@ def test_unexpected_viewer_exit_cleans_session_and_requires_explicit_stop_ack() 
     assert manager.stop().state is SessionState.DORMANT
 
 
-def test_viewer_stream_stall_fails_active_session_and_cleans_resources() -> None:
-    runtime = FakeRuntime(viewer_monitor_error="video timestamps stopped advancing")
+def test_viewer_stream_stall_keeps_session_running_and_exposes_no_signal() -> None:
+    runtime = FakeRuntime()
     manager = CaptureSessionManager(runtime)
 
     manager.start(PLAN)
-    deadline = time.monotonic() + 1.0
-    while manager.snapshot().state is SessionState.RUNNING and time.monotonic() < deadline:
-        time.sleep(0.005)
-    failed = manager.snapshot()
+    assert runtime.viewer is not None
+    runtime.viewer.no_signal = True
 
-    assert failed.state is SessionState.FAILED
-    assert "video timestamps stopped advancing" in (failed.error or "")
-    assert failed.cleanup_failures == ()
-    assert runtime.events[-3:] == ["stop_viewer", "release_inhibitor", "remove_routes"]
+    stalled = manager.snapshot()
+    assert stalled.state is SessionState.RUNNING
+    assert stalled.no_signal is True
+    assert "stop_viewer" not in runtime.events
+    assert "release_inhibitor" not in runtime.events
+    assert "remove_routes" not in runtime.events
+
+    runtime.viewer.no_signal = False
+    resumed = manager.snapshot()
+    assert resumed.state is SessionState.RUNNING
+    assert resumed.no_signal is False
+
     assert manager.stop().state is SessionState.DORMANT
+    assert runtime.events[-3:] == ["stop_viewer", "release_inhibitor", "remove_routes"]
 
 
 def test_unexpected_viewer_exit_retains_failed_route_cleanup_for_stop_retry() -> None:

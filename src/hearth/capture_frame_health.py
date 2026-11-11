@@ -140,6 +140,45 @@ publish("waiting_for_video", 0, 0, 0, 0, 0)
 mp.observe_property("time-pos", "number", on_time_pos)
 """
 
+# The Share Output window stays alive through input loss. The Python timestamp
+# monitor toggles this user-data property; this overlay is the only permitted
+# on-video text and is entirely event-driven (no Lua timer or polling).
+NO_SIGNAL_OVERLAY_LUA = r"""
+local no_signal_overlay = mp.create_osd_overlay("ass-events")
+
+local function clear_no_signal()
+    no_signal_overlay.data = ""
+    no_signal_overlay:update()
+end
+
+local function show_no_signal()
+    local width = math.floor(mp.get_property_number("osd-width", 1920))
+    local height = math.floor(mp.get_property_number("osd-height", 1080))
+    local center_x = math.floor(width / 2)
+    local center_y = math.floor(height / 2)
+    local font_size = math.max(32, math.floor(height / 14))
+    no_signal_overlay.res_x = width
+    no_signal_overlay.res_y = height
+    no_signal_overlay.data = string.format(
+        "{\\an5\\pos(%d,%d)\\fs%d\\bord3\\shad0\\1c&HFFFFFF&\\3c&H000000&}No signal",
+        center_x, center_y, font_size
+    )
+    no_signal_overlay:update()
+end
+
+local function on_no_signal(_, value)
+    if value == true then
+        show_no_signal()
+    else
+        clear_no_signal()
+    end
+end
+
+mp.observe_property("user-data/hearth/no-signal", "bool", on_no_signal)
+"""
+
+FRAME_HEALTH_LUA += NO_SIGNAL_OVERLAY_LUA
+
 
 class FrameHealthError(HearthError):
     """The private frame-health script could not be created safely."""

@@ -189,6 +189,7 @@ class SessionSnapshot:
     error: str | None
     cleanup_failures: tuple[str, ...]
     revision: int
+    no_signal: bool = False
 
 
 class CaptureSessionError(HearthError):
@@ -252,6 +253,7 @@ class CaptureSessionManager:
                 error=self._error,
                 cleanup_failures=self._cleanup_failures,
                 revision=self._revision,
+                no_signal=bool(getattr(self._viewer, "no_signal", False)),
             )
 
     def start(self, plan: CapturePlan) -> SessionSnapshot:

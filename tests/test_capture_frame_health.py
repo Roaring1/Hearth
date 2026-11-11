@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 from pathlib import Path
 
@@ -35,6 +36,9 @@ def test_lua_probe_is_event_driven_and_never_persists_raw_screenshots() -> None:
     assert 'mp.observe_property("time-pos"' in FRAME_HEALTH_LUA
     assert 'pcall(mp.command_native, {"screenshot-raw", "video", "bgr0"})' in FRAME_HEALTH_LUA
     assert 'mp.set_property_native("user-data/hearth/frame-health"' in FRAME_HEALTH_LUA
+    assert 'mp.observe_property("user-data/hearth/no-signal", "bool"' in FRAME_HEALTH_LUA
+    assert 'mp.create_osd_overlay("ass-events")' in FRAME_HEALTH_LUA
+    assert "No signal" in FRAME_HEALTH_LUA
     assert "local SAMPLE_INTERVAL = 2.0" in FRAME_HEALTH_LUA
     assert "mp.add_timeout" not in FRAME_HEALTH_LUA
     assert "mp.add_periodic_timer" not in FRAME_HEALTH_LUA
@@ -112,3 +116,176 @@ def test_existing_script_is_never_overwritten_or_removed(tmp_path: Path) -> None
         write_frame_health_script(runtime)
 
     assert existing.read_text(encoding="utf-8") == "user-owned marker"
+
+
+@pytest.mark.skipif(
+    not os.environ.get("DISPLAY") or shutil.which("mpv") is None or shutil.which("ffmpeg") is None,
+    reason="requires mpv, ffmpeg and an isolated X display",
+)
+def test_no_signal_overlay_renders_and_clears_in_real_mpv(tmp_path: Path) -> None:
+    """Exercise the actual ASS overlay, not just the generated Lua source."""
+    import json
+    import socket
+    import subprocess
+    import time
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    runtime.chmod(0o700)
+    video = tmp_path / "pattern.mkv"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=0x202020:s=320x180:r=30",
+            "-t",
+            "8",
+            "-c:v",
+            "mpeg4",
+            "-pix_fmt",
+            "yuv420p",
+            "-y",
+            str(video),
+        ],
+        check=True,
+        timeout=8,
+    )
+    script = write_frame_health_script(runtime)
+    socket_path = runtime / "mpv.sock"
+    env = os.environ.copy()
+    env["LIBGL_ALWAYS_SOFTWARE"] = "1"
+    process = subprocess.Popen(
+        [
+            "mpv",
+            "--no-config",
+            "--no-terminal",
+            "--vo=gpu",
+            "--osd-level=0",
+            "--no-osc",
+            "--no-osd-bar",
+            "--no-audio",
+            "--no-sub",
+            "--no-input-default-bindings",
+            "--force-window=yes",
+            "--idle=yes",
+            "--keep-open=yes",
+            "--geometry=1280x720+0+0",
+            "--autofit=1280x720",
+            f"--input-ipc-server={socket_path}",
+            f"--script={script}",
+            str(video),
+        ],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    connection: socket.socket | None = None
+    try:
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline and not socket_path.exists():
+            if process.poll() is not None:
+                pytest.fail("mpv exited before creating its IPC socket")
+            time.sleep(0.02)
+        assert socket_path.exists(), "mpv IPC socket was not created"
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(2.0)
+        connection.connect(str(socket_path))
+        ipc = connection
+        next_id = 1
+        receive_buffer = bytearray()
+
+        def request(command: list[object]) -> dict[str, object]:
+            nonlocal next_id, receive_buffer
+            request_id = next_id
+            next_id += 1
+            ipc.sendall(
+                (json.dumps({"command": command, "request_id": request_id}) + "\n").encode()
+            )
+            while True:
+                while b"\n" not in receive_buffer:
+                    chunk = ipc.recv(4096)
+                    if not chunk:
+                        raise AssertionError("mpv IPC closed before replying")
+                    receive_buffer.extend(chunk)
+                line, _, rest = receive_buffer.partition(b"\n")
+                receive_buffer = bytearray(rest)
+                message = json.loads(line)
+                if isinstance(message, dict) and message.get("request_id") == request_id:
+                    return message
+
+        frame_deadline = time.monotonic() + 4.0
+        while time.monotonic() < frame_deadline:
+            response = request(["get_property", "time-pos"])
+            position = response.get("data")
+            if (
+                response.get("error") == "success"
+                and isinstance(position, (int, float))
+                and position > 0.2
+            ):
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail("mpv did not begin advancing time-pos")
+
+        def capture_center_white_pixels() -> int:
+            raw = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "x11grab",
+                    "-video_size",
+                    "1280x720",
+                    "-i",
+                    os.environ["DISPLAY"],
+                    "-frames:v",
+                    "1",
+                    "-f",
+                    "rawvideo",
+                    "-pix_fmt",
+                    "rgb24",
+                    "pipe:1",
+                ],
+                check=True,
+                capture_output=True,
+                timeout=5,
+            ).stdout
+            assert len(raw) == 1280 * 720 * 3
+            count = 0
+            for y in range(300, 420):
+                for x in range(450, 830):
+                    offset = (y * 1280 + x) * 3
+                    red, green, blue = raw[offset : offset + 3]
+                    if red > 230 and green > 230 and blue > 230:
+                        count += 1
+            return count
+
+        assert (
+            request(["set_property", "user-data/hearth/no-signal", True]).get("error") == "success"
+        )
+        time.sleep(0.35)
+        with_signal = capture_center_white_pixels()
+        assert (
+            request(["set_property", "user-data/hearth/no-signal", False]).get("error") == "success"
+        )
+        time.sleep(0.35)
+        without_signal = capture_center_white_pixels()
+        assert with_signal > without_signal + 500
+    finally:
+        if connection is not None:
+            connection.close()
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2.0)

@@ -112,10 +112,6 @@ def classify_mpv_input_error(
     return ViewerInputOpenError(category, detail or "mpv reported an input error", reason_text)
 
 
-class ViewerStreamStalled(HearthError):
-    """mpv stopped reporting video timestamp progress during an active session."""
-
-
 @dataclass(frozen=True, slots=True)
 class FirstFrame:
     """Evidence that mpv has a decoded current frame and configured video output."""
@@ -197,6 +193,7 @@ class MpvViewerProcess:
         self.ipc_socket = ipc_socket
         self._cleaned = False
         self._frame_health: FrameHealthSnapshot | None = None
+        self._no_signal = False
         self.mpv_log_path = runtime_directory / "mpv.log"
 
     @property
@@ -211,6 +208,16 @@ class MpvViewerProcess:
         """Latest validated pixel-health metadata, if the Lua probe is available."""
         return self._frame_health
 
+    @property
+    def no_signal(self) -> bool:
+        """Whether the active viewer currently displays its No signal card."""
+        return self._no_signal
+
+    @staticmethod
+    def _send_no_signal(connection: socket.socket, value: bool) -> None:
+        command = {"command": ["set_property", "user-data/hearth/no-signal", value]}
+        connection.sendall((json.dumps(command, separators=(",", ":")) + "\n").encode("utf-8"))
+
     def wait(self, timeout: float | None = None) -> int:
         return self._process.wait(timeout=timeout)
 
@@ -221,8 +228,8 @@ class MpvViewerProcess:
         viewer-wait thread, after `wait_for_first_frame()` succeeded. It keeps
         one local IPC connection open and uses `observe_property(time-pos)`;
         there is no timer-driven query loop. If timestamps stop changing for
-        `stall_timeout_s`, it raises `ViewerStreamStalled` so the session manager
-        can transition to FAILED and perform normal resource cleanup.
+        `stall_timeout_s`, it displays the No signal card and keeps waiting.
+        Resumed timestamps clear the card; only process exit ends the session.
         """
         if stall_timeout_s <= 0:
             raise ValueError("stall_timeout_s must be positive")
@@ -244,6 +251,7 @@ class MpvViewerProcess:
         buffer = bytearray()
         last_position: float | None = None
         last_progress = time.monotonic()
+        no_signal = False
         request_id = 4001
         frame_health_request_id = 4002
         try:
@@ -266,12 +274,13 @@ class MpvViewerProcess:
             acknowledged = False
             while True:
                 remaining = stall_timeout_s - (time.monotonic() - last_progress)
-                readable, _, _ = select.select([connection], [], [], max(0.0, remaining))
+                timeout = None if no_signal else max(0.0, remaining)
+                readable, _, _ = select.select([connection], [], [], timeout)
                 if not readable:
-                    raise ViewerStreamStalled(
-                        "Share Output video timestamps stopped advancing "
-                        f"for {stall_timeout_s:.1f}s"
-                    )
+                    self._send_no_signal(connection, True)
+                    self._no_signal = True
+                    no_signal = True
+                    continue
                 chunk = connection.recv(4096)
                 if not chunk:
                     return self._process.wait(timeout=1.0)
@@ -298,6 +307,12 @@ class MpvViewerProcess:
                         # may not expose the user-data property. Timestamp
                         # monitoring remains the required liveness signal.
                         continue
+                    if message.get("event") == "end-file" and message.get("reason") == "error":
+                        if not no_signal:
+                            self._send_no_signal(connection, True)
+                            self._no_signal = True
+                            no_signal = True
+                        continue
                     if message.get("event") != "property-change":
                         continue
                     if message.get("id") == 2:
@@ -319,8 +334,10 @@ class MpvViewerProcess:
                         last_position = numeric_position
                         if acknowledged:
                             last_progress = time.monotonic()
-        except ViewerStreamStalled:
-            raise
+                            if no_signal:
+                                self._send_no_signal(connection, False)
+                                self._no_signal = False
+                                no_signal = False
         except (ConnectionError, OSError) as exc:
             if self.poll() is not None:
                 return self._process.wait(timeout=1.0)
