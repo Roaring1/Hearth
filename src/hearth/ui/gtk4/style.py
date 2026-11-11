@@ -426,6 +426,29 @@ button.mute:checked {{
   padding: 2px 9px;
 }}
 .setup-act:hover {{ border-color: {pal["accent"]}; }}
+.capture-launch {{
+  background: {pal["view-alt"]};
+  border: 1px solid {pal["button"]};
+  border-radius: 3px;
+  color: {pal["fg"]};
+  font-size: 10px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  min-height: 0;
+  padding: 2px 9px;
+}}
+.capture-launch:hover, .capture-setup:hover {{ border-color: {pal["accent"]}; }}
+.capture-setup {{
+  background: {pal["view-alt"]};
+  border: 1px solid {pal["win-alt"]};
+  border-radius: 3px;
+  color: {pal["fg"]};
+  font-size: 9px;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  min-height: 0;
+  padding: 2px 6px;
+}}
 
 /* ---- the drawn LPD8 ------------------------------------------------ */
 /* The controller is drawn the way it looks on the desk: a dark slab, two

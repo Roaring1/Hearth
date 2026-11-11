@@ -679,3 +679,62 @@ The earlier live session established a **narrow** Orca/AT-SPI path (window title
 - No new desktop, keyboard, pointer, screen-reader, PipeWire, audio-route, volume, mute, ALSA/MIDI, LPD8-map, or systemd operation was performed for this checkpoint. Do not infer live machine state from the green hosted CI.
 - PR #1 remains a broad 70-file change. No independent submitted review was recorded at the last check. A deliberate maintainer review is still appropriate before merge. Keep PR #1 and its stacked PR #6 open and unmerged until that review/decision; do not auto-merge.
 
+
+
+## Capture Mode no-card UI checkpoint - 2026-11-10
+
+This section is the current handoff for the Screen Share overview work and supersedes earlier Capture Mode sequencing notes above. Older machine/service observations remain historical unless a dated read-only check is explicitly recorded.
+
+### Current direction and issue order
+
+- The user wants to complete all feasible Capture Mode preparation without the physical GUV302G. Full user-managed VM-SHARE routing is **not** part of the current tranche. Issue #10 remains the future contract, but its editor, ownership metadata, legacy-link retirement and single-path migration are deferred.
+- New [issue #16](https://github.com/Roaring1/Hearth/issues/16) tracks the novice-facing Screen Share overview and discovery UI. The parent [issue #9](https://github.com/Roaring1/Hearth/issues/9) now lists #16 first, #13 as parallel research/fixture work, #11 and #12 later, #10 deferred, and #14 parked.
+- [Issue #13](https://github.com/Roaring1/Hearth/issues/13) may progress through design review, test fixtures and documentation. Its real KDE Wayland portal/Vesktop/monitor matrix is not safe to run while the user's normal desktop is in use.
+- [Issue #11](https://github.com/Roaring1/Hearth/issues/11) remains the later, toolkit-free fake-device and transactional capture-session core. [Issue #12](https://github.com/Roaring1/Hearth/issues/12) remains the active Capture Controls + clean Share Output viewer. The overview is not a substitute for the active session windows.
+- [Issue #4](https://github.com/Roaring1/Hearth/issues/4) now records that Supervisor shell access is responsive but desktop verification is explicitly deferred during the current active desktop session.
+
+### Overview design and implementation
+
+- New `docs/CAPTURE_MODE_OVERVIEW.md` records the product hierarchy, entry-point decision, plain-language content, future two-window active experience, no-card work order and environmental safety boundary.
+- New `src/hearth/ui/gtk4/capture.py` implements a read-only `CaptureOverviewWindow`. It is lazy-created, transient for the mixer, hidden on close and reused on reopen. It shows the saved Vesktop audio selection as intent, says the Screen Share fader is not yet connected to Vesktop's current direct path, and explains the manual Vesktop sequence.
+- The main mixer now has a persistent **SCREEN SHARE** entry button, so the overview is discoverable even while the Screen Share strip is collapsed. The Screen Share strip also has a plainly labeled **SET UP** button. Both open the same overview.
+- Existing default-collapsed preference for the Screen Share strip is preserved. This avoids silently reversing the prior layout decision while still giving first-time users a visible entry point.
+- There is deliberately no Start Capture, Stop Capture or Check Device control yet. No action is exposed before the core operation exists. Opening the overview performs no video-device probe, process spawn, PipeWire query, route change, volume/mute change, watcher, timer or systemd action.
+- `README.md` now documents B1 as the default Discord microphone, B2 as the alternate microphone, neither as screen-share audio, and the current Screen Share/Vesktop wiring limitation. `docs/AUDIO_ROUTING.md` records the existing parallel routing-path finding and warns against accidentally duplicating audio.
+
+### Audio and trust boundary
+
+- The last read-only inspection recorded `roaring-vm-share.service` linking Game + Music into `vm_share`, while `share_select.json` separately selected Game + Music directly into Venmic's `vencord-sink`. This is a historical machine snapshot from the 2026-11-10 audit, not a fresh claim about current live links.
+- The overview reads the saved selection file only. It does not claim live audio, route connectivity or that the Screen Share fader controls the audio Vesktop receives. No audio routes, helper scripts, selections, services, default devices, volume or mute state were changed in this work.
+- The user explicitly asked that the live desktop not be disrupted. No Hearth window was launched on the logged-in Wayland desktop; no second Wayland session/desktop was created; no monitor, focus, lock, DPMS, audio or service state was manipulated. UI rendering used isolated Xvfb only. Xvfb evidence does not prove Wayland portal or remote Vesktop behavior.
+
+### Verification and visual review
+
+- `./scripts/check.sh` passed after the overview implementation and collapsed-strip regression: **519 tests**, 43 upstream GTK/PyGObject deprecation warnings, Ruff lint/format, mypy (34 source files), legacy compile, desktop entry, AppStream and ShellCheck. AppStream reported its existing non-fatal uppercase application-ID pedantic notice. A focused production GTK rerun also passes after adding empty/unknown saved-selection refresh cases; rerun the full gate after the final commit.
+- The production GTK overview test verifies both accessible entry points, one shared lazy window, live refresh of saved selection intent (Game + Music, empty selection and an unknown future alias), the three workflow steps, no capture worker/device fd, and opening the overview while the Screen Share strip is collapsed.
+- Isolated 1600x1200 Xvfb rendered the production mixer and overview together. The overview capture was 793x494 and was visually inspected. It has a separate window, concise sections for Video Input, What Friends Hear and the Vesktop workflow, and no inert action buttons.
+- The latest full local gate on the current implementation passes **519 tests**, 43 upstream GTK/PyGObject deprecation warnings, Ruff, formatting (96 files), mypy (34 source files), legacy compilation, desktop-entry/AppStream validation and ShellCheck. AppStream's existing uppercase application-ID pedantic warning remains non-fatal. Hosted CI for the new overview branch has not yet been verified.
+
+### Current branches and PR dependency
+
+- Existing Screen Share mixer work remains on draft PR #15, branch `feature/vm-share-mixer-strip-2026-11-10`, latest reviewed header commit `a4c3f72` at the start of this overview branch.
+- The overview implementation is on `feature/screen-share-overview-2026-11-10`, based on that PR #15 head. Keep it as a separate stacked change; do not merge PRs or rebase the existing stack without deliberate review.
+- The parent stack still includes PR #1 (GTK4 foundation), PR #8 (LPD8 layout), and PR #15 (Screen Share strip). The PRs remain unmerged and require deliberate integration review.
+
+### No-card Wayland/mpv source research - 2026-11-10
+
+- New `docs/CAPTURE_MODE_WAYLAND_RESEARCH.md` records current upstream source findings and clearly separates them from unrun desktop observations.
+- Current Vesktop `main` detects Wayland, calls Electron `desktopCapturer.getSources` with `window` + `screen`, receives the one source selected through Linux/PipeWire, then skips Vesktop's own multi-source grid. Expected Wayland user flow is Vesktop Share Screen -> KDE/system portal picker -> select `Hearth - Share Output`. Electron documents the single-source PipeWire behavior; the installed user's Vesktop Flatpak version is still unknown and needs later confirmation.
+- Current upstream Vesktop screen-share code does not pass Electron's persistent restore token options. Assume a fresh portal choice on each new share until the installed build proves otherwise. Hearth must not automate or retain screen-capture consent.
+- mpv docs establish useful candidates (`--title`, `--osc=no`, `--osd-level=0`, `--cursor-autohide=always`, `--input-builtin-bindings=no`, `--ao=null`). They also warn that `--screen` cannot place windows on Wayland, minimizing may not be reversible, and hidden rendering can require `--force-render`. Do not turn these into final arguments until the adapter and real matrix verify them. `--force-render` stays off by default pending performance tests.
+- This research is from upstream source/manuals only. No Vesktop, portal, mpv, display or remote-share test was run on the user's PC.
+
+### Next work without capture hardware
+
+1. Keep the no-card overview and entry points stable; preserve direct-routing caveat.
+2. Design the #11 fake-device provider/session interfaces and implement deterministic fixtures/contracts, separated from a physical provider that cannot be accepted until hardware exists.
+3. Add parser fixtures for V4L2 modes and stable USB identity; prove ambiguous video/audio associations fail closed.
+4. Add lifecycle orchestration tests with fake device, viewer and route adapters. Inject failure after each startup stage and verify reverse cleanup; no real process/device/route.
+5. Continue #13 source/fixture work; real portal/Vesktop/monitor tests wait for an explicitly safe interactive session.
+6. Revisit #10 only when the user wants the full user-managed source editor and safe migration.
+7. Wire active controls and the viewer in #12 only after #11 provides real operations. No fake Start/Stop buttons.

@@ -4,6 +4,31 @@ Hearth's route checkboxes describe the **live PipeWire/PulseAudio graph**, not a
 separate saved layout. The mixer uses `pactl` from PipeWire's PulseAudio
 compatibility layer to create and remove `module-loopback` routes.
 
+## Screen Share and Vesktop - current boundary (2026-11-10)
+
+The Screen Share master strip is a first-class mixer control for the `vm_share`
+sink, but it is **not yet the audio path currently selected by Vesktop**. The
+last read-only machine inspection found:
+
+- `roaring-vm-share.service` creates direct `pw-link` connections from the Game
+  and Music monitors into the `vm_share` sink.
+- The saved `~/.config/roaring/share_select.json` selection separately chooses
+  Game and Music directly for Venmic's `vencord-sink`.
+
+Those are parallel paths. Do not add `share` to the existing Vesktop selection
+or add `vm_share` to a generic module-loopback output list as a shortcut; that
+could duplicate audio or bypass source-safety rules. The Screen Share master
+fader must not be described as controlling remote audio until a verified
+single-path migration is deliberately implemented.
+
+The current read-only Screen Share overview shows the saved Vesktop selection
+as **saved intent**, not as live-link proof, and explicitly says that the
+Screen Share fader is not connected to that path yet. Opening the overview
+never probes devices or mutates audio. Full user-managed routing, ownership
+metadata, privacy guards, rollback and one-path migration are deferred in
+[issue #10](https://github.com/Roaring1/Hearth/issues/10); they are not a
+prerequisite for the overview UI.
+
 ## Output destinations
 
 Selecting an output requests a loopback from that strip's exact monitor source
