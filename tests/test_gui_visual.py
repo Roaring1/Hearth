@@ -323,6 +323,55 @@ def test_production_windows_render_and_capture(
     assert not hasattr(capture_controls, "start_button")
     assert not hasattr(capture_controls, "stop_button")
     capture("capture-controls")
+
+    # Render the new session-status states against the real Controls widget
+    # tree. These snapshots are synthetic UI fixtures only; they never create
+    # a CaptureSessionManager, open a device, or start a viewer/audio route.
+    from hearth.capture_session import SessionSnapshot, SessionStage, SessionState
+
+    def controls_snapshot(
+        state: SessionState,
+        revision: int,
+        *,
+        no_signal: bool = False,
+        stage: SessionStage | None = None,
+        category: str | None = None,
+        error: str | None = None,
+        cleanup_failures: tuple[str, ...] = (),
+    ) -> SessionSnapshot:
+        return SessionSnapshot(
+            state=state,
+            plan=None,
+            stage=stage,
+            error=error,
+            cleanup_failures=cleanup_failures,
+            revision=revision,
+            no_signal=no_signal,
+            error_category=category,
+        )
+
+    capture_controls._apply_session_snapshot(controls_snapshot(SessionState.RUNNING, 1))
+    assert capture_controls.session_status.get_text() == "Ready to share in Vesktop"
+    capture("capture-controls-running")
+    capture_controls._apply_session_snapshot(
+        controls_snapshot(SessionState.RUNNING, 2, no_signal=True)
+    )
+    assert capture_controls.session_status.get_text() == "Video stopped updating"
+    capture("capture-controls-video-stalled")
+    capture_controls._apply_session_snapshot(
+        controls_snapshot(
+            SessionState.FAILED,
+            3,
+            stage=SessionStage.APPLY_AUDIO,
+            category="unknown_audio_association",
+            error="private adapter detail",
+            cleanup_failures=("private route path",),
+        )
+    )
+    assert capture_controls.session_status.get_text() == "Capture needs attention"
+    assert "private adapter detail" not in capture_controls.session_detail.get_text()
+    capture("capture-controls-failed")
+    capture_controls._apply_session_snapshot(controls_snapshot(SessionState.DORMANT, 4))
     capture_controls.set_visible(False)
 
     window.present()
@@ -811,6 +860,9 @@ def test_production_windows_render_and_capture(
     assert {path.name for path in captures} == {
         "screen-share-overview.png",
         "capture-controls.png",
+        "capture-controls-running.png",
+        "capture-controls-video-stalled.png",
+        "capture-controls-failed.png",
         "mixer-loading.png",
         "mixer-ready.png",
         "mixer-app-move-focus.png",

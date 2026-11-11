@@ -95,6 +95,7 @@ class CaptureControlsWindow(Gtk.Window):
         self._shutting_down = False
         self._worker: Any | None = None
         self._session_unsubscribe: SessionUnsubscribe | None = None
+        self._session_revision = -1
 
         column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         column.set_margin_top(14)
@@ -189,6 +190,11 @@ class CaptureControlsWindow(Gtk.Window):
         """Render a safe state/category summary without exposing raw errors."""
         if self._shutting_down:
             return GLib.SOURCE_REMOVE
+        # Main-context callbacks can be delayed while GTK is busy. Never let
+        # an older queued snapshot overwrite a newer transition.
+        if snapshot.revision < self._session_revision:
+            return GLib.SOURCE_REMOVE
+        self._session_revision = snapshot.revision
         state = snapshot.state
         if state is SessionState.DORMANT:
             self.session_status.set_text("Not started")

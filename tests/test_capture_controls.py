@@ -318,7 +318,34 @@ def test_capture_controls_marshals_session_snapshots_and_renders_stall_edges() -
     callback(*args)
     assert window.session_status.get_text() == "Ready to share in Vesktop"
     assert "manually" in window.session_detail.get_text()
+
+    # A delayed older snapshot cannot roll the UI back after a newer edge.
+    manager.emit(
+        SessionSnapshot(
+            state=SessionState.STARTING,
+            plan=None,
+            stage=None,
+            error=None,
+            cleanup_failures=(),
+            revision=1,
+        )
+    )
+    callback, args = queued.pop(0)
+    callback(*args)
+    assert window.session_status.get_text() == "Ready to share in Vesktop"
     window.shutdown()
+    queued_before_shutdown = len(queued)
+    manager.emit(
+        SessionSnapshot(
+            state=SessionState.FAILED,
+            plan=None,
+            stage=None,
+            error="stale",
+            cleanup_failures=(),
+            revision=3,
+        )
+    )
+    assert len(queued) == queued_before_shutdown
     window.destroy()
 
 
@@ -378,7 +405,24 @@ def test_capture_controls_maps_typed_failure_without_exposing_raw_details_and_un
     assert "private driver string" not in detail
     assert "cleanup needs attention" in detail
 
+    # A result already queued on GTK's main context is discarded after the
+    # observer is detached and application shutdown begins.
+    manager.emit(
+        SessionSnapshot(
+            state=SessionState.RUNNING,
+            plan=None,
+            stage=None,
+            error=None,
+            cleanup_failures=(),
+            revision=2,
+            no_signal=True,
+        )
+    )
+    assert len(queued) == 1
     window.shutdown()
     assert manager.unsubscribed is True
     assert manager.listener is None
+    callback, args = queued.pop(0)
+    assert callback(*args) == app_module.GLib.SOURCE_REMOVE
+    assert window.session_status.get_text() == "Capture needs attention"
     window.destroy()
