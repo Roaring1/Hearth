@@ -230,6 +230,7 @@ def test_non_error_end_file_event_is_not_misclassified() -> None:
     assert classify_mpv_input_error("eof", "loading failed", stale_log) is None
     assert classify_mpv_input_error(None, "loading failed", stale_log) is None
     assert classify_mpv_input_error(7, "loading failed", stale_log) is None
+    assert classify_mpv_input_error("timeout", "", stale_log) is None
 
 
 def test_first_frame_uses_private_mpv_log_to_classify_generic_loading_failed(
