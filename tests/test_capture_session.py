@@ -421,7 +421,7 @@ def test_no_signal_events_publish_snapshots_and_unsubscribe_cleanly() -> None:
     runtime = FakeRuntime()
     manager = CaptureSessionManager(runtime)
     snapshots = []
-    unsubscribe = manager.subscribe_no_signal(snapshots.append)
+    unsubscribe = manager.subscribe(snapshots.append)
     assert snapshots[-1].state is SessionState.DORMANT
 
     manager.start(PLAN)
@@ -448,7 +448,7 @@ def test_no_signal_events_publish_snapshots_and_unsubscribe_cleanly() -> None:
 def test_no_signal_observer_exception_cannot_break_viewer_state() -> None:
     runtime = FakeRuntime()
     manager = CaptureSessionManager(runtime)
-    manager.subscribe_no_signal(lambda _snapshot: (_ for _ in ()).throw(RuntimeError("UI closed")))
+    manager.subscribe(lambda _snapshot: (_ for _ in ()).throw(RuntimeError("UI closed")))
     manager.start(PLAN)
     assert runtime.viewer is not None
     runtime.viewer.set_no_signal(True)
@@ -459,16 +459,22 @@ def test_no_signal_observer_exception_cannot_break_viewer_state() -> None:
 def test_hard_viewer_input_error_fails_session_and_releases_leases() -> None:
     runtime = FakeRuntime()
     manager = CaptureSessionManager(runtime)
+    snapshots = []
+    failed = Event()
+
+    def observe(snapshot) -> None:
+        snapshots.append(snapshot)
+        if snapshot.state is SessionState.FAILED:
+            failed.set()
+
+    manager.subscribe(observe)
     manager.start(PLAN)
     assert runtime.viewer is not None
     runtime.viewer.monitor_error = ViewerInputOpenError("device_unavailable", "No such device")
     runtime.viewer.exit(1)
 
-    deadline = time.monotonic() + 1.0
-    while manager.snapshot().state is not SessionState.FAILED and time.monotonic() < deadline:
-        time.sleep(0.01)
-
-    snapshot = manager.snapshot()
+    assert failed.wait(1.0)
+    snapshot = snapshots[-1]
     assert snapshot.state is SessionState.FAILED
     assert snapshot.error_category == "device_unavailable"
     assert snapshot.error == (
