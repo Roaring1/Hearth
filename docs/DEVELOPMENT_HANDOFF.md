@@ -710,7 +710,7 @@ This section is the current handoff for the Screen Share overview work and super
 
 ### Verification and visual review
 
-- `./scripts/check.sh` passed after the overview implementation and collapsed-strip regression: **519 tests**, 43 upstream GTK/PyGObject deprecation warnings, Ruff lint/format, mypy (34 source files), legacy compile, desktop entry, AppStream and ShellCheck. AppStream reported its existing non-fatal uppercase application-ID pedantic notice. A focused production GTK rerun also passes after adding empty/unknown saved-selection refresh cases; rerun the full gate after the final commit.
+- The overview-only head `a19d163` passed the full gate with **519 tests**, 43 upstream GTK/PyGObject deprecation warnings, Ruff lint/format, mypy (34 source files), legacy compile, desktop entry, AppStream and ShellCheck. AppStream reported its existing non-fatal uppercase application-ID pedantic notice.
 - The production GTK overview test verifies both accessible entry points, one shared lazy window, live refresh of saved selection intent (Game + Music, empty selection and an unknown future alias), the three workflow steps, no capture worker/device fd, and opening the overview while the Screen Share strip is collapsed.
 - Isolated 1600x1200 Xvfb rendered the production mixer and overview together. The overview capture was 793x494 and was visually inspected. It has a separate window, concise sections for Video Input, What Friends Hear and the Vesktop workflow, and no inert action buttons.
 - The latest full local gate on the current implementation passes **519 tests**, 43 upstream GTK/PyGObject deprecation warnings, Ruff, formatting (96 files), mypy (34 source files), legacy compilation, desktop-entry/AppStream validation and ShellCheck. AppStream's existing uppercase application-ID pedantic warning remains non-fatal. Hosted CI for the new overview branch has not yet been verified.
@@ -720,6 +720,17 @@ This section is the current handoff for the Screen Share overview work and super
 - Existing Screen Share mixer work remains on draft PR #15, branch `feature/vm-share-mixer-strip-2026-11-10`, latest reviewed header commit `a4c3f72` at the start of this overview branch.
 - The overview implementation is on `feature/screen-share-overview-2026-11-10`, based on that PR #15 head. Keep it as a separate stacked change; do not merge PRs or rebase the existing stack without deliberate review.
 - The parent stack still includes PR #1 (GTK4 foundation), PR #8 (LPD8 layout), and PR #15 (Screen Share strip). The PRs remain unmerged and require deliberate integration review.
+
+
+### Hardware-independent session coordinator slice - 2026-11-10
+
+- New `src/hearth/capture_session.py` introduces stable USB identity and V4L2 mode value objects, audio mode selection (`Xbox` default, `Nobara`, `Both`), injectable runtime/resource protocols, and a serialized Start/Stop coordinator.
+- Startup does not report Ready until device resolution, audio safety validation, viewer launch, route acquisition, idle inhibit acquisition, first-frame arrival and route verification have all succeeded.
+- Stop/rollback order is explicit: stop viewer/device handle, release idle inhibitor, remove only the session-owned audio route lease. Failed cleanup retains the failed lease, reports `FAILED`, and allows a later Stop to retry. Start is refused until state returns to `DORMANT`.
+- The core is toolkit-free and uses no real V4L2, PipeWire, mpv, desktop portal, systemd or D-Bus adapter. Tests use a fake runtime and inject failures at each startup stage, including failed rollback and retry. This is a lifecycle contract, not a working hardware implementation.
+- `docs/CAPTURE_MODE_SESSION_CORE.md` describes the implemented contract and separates the still-missing provider, real V4L2 discovery, audio association, viewer, route and inhibitor adapters.
+- Current full gate with this no-card slice: **535 passed**, 27 upstream GTK/PyGObject deprecation warnings, Ruff lint/format (99 files), mypy (35 source files), legacy compile, desktop-entry/AppStream validation and ShellCheck all passed. AppStream's uppercase application-id pedantic warning is non-fatal.
+- This work does not implement #10 and does not change the user's audio routes, service state, devices, defaults, volume, mute or desktop session.
 
 ### No-card Wayland/mpv source research - 2026-11-10
 
