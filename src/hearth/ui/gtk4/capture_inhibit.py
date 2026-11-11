@@ -14,13 +14,7 @@ import os
 from collections.abc import Callable
 from typing import Any
 
-import gi
-
-gi.require_version("Gio", "2.0")
-gi.require_version("GLib", "2.0")
-from gi.repository import Gio, GLib  # noqa: E402 - versions must be required first
-
-from hearth.errors import HearthError  # noqa: E402
+from hearth.errors import HearthError
 
 
 class CaptureIdleInhibitorError(HearthError):
@@ -80,23 +74,37 @@ class Login1IdleInhibitorAdapter:
         *,
         timeout_ms: int = 3000,
         connection_factory: Callable[[], Any] | None = None,
-        gio: Any = Gio,
-        glib: Any = GLib,
+        gio: Any | None = None,
+        glib: Any | None = None,
     ) -> None:
         if not 100 <= timeout_ms <= 10000:
             raise ValueError("login1 inhibitor timeout must be between 100 and 10000 ms")
+        if (gio is None) != (glib is None):
+            raise ValueError("gio and glib must be injected together")
         self._timeout_ms = timeout_ms
         self._gio = gio
         self._glib = glib
-        self._connection_factory = connection_factory or self._open_private_system_bus
+        self._connection_factory = connection_factory
 
-    def _open_private_system_bus(self) -> Any:
-        address = self._gio.dbus_address_get_for_bus_sync(self._gio.BusType.SYSTEM, None)
+    @staticmethod
+    def _load_gio_glib() -> tuple[Any, Any]:
+        """Load PyGObject only when an explicit Start requests an inhibitor."""
+        import gi
+
+        gi.require_version("Gio", "2.0")
+        gi.require_version("GLib", "2.0")
+        from gi.repository import Gio, GLib
+
+        return Gio, GLib
+
+    @staticmethod
+    def _open_private_system_bus(gio: Any) -> Any:
+        address = gio.dbus_address_get_for_bus_sync(gio.BusType.SYSTEM, None)
         flags = (
-            self._gio.DBusConnectionFlags.AUTHENTICATION_CLIENT
-            | self._gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION
+            gio.DBusConnectionFlags.AUTHENTICATION_CLIENT
+            | gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION
         )
-        return self._gio.DBusConnection.new_for_address_sync(address, flags, None, None)
+        return gio.DBusConnection.new_for_address_sync(address, flags, None, None)
 
     @staticmethod
     def _close_connection(connection: Any) -> None:
@@ -108,11 +116,18 @@ class Login1IdleInhibitorAdapter:
         connection = None
         fd: int | None = None
         try:
-            connection = self._connection_factory()
-            parameters = self._glib.Variant(
-                "(ssss)", (self._WHAT, self._WHO, self._WHY, self._MODE)
+            gio, glib = (
+                (self._gio, self._glib)
+                if self._gio is not None and self._glib is not None
+                else self._load_gio_glib()
             )
-            reply_type = self._glib.VariantType.new("(h)")
+            connection = (
+                self._connection_factory()
+                if self._connection_factory is not None
+                else self._open_private_system_bus(gio)
+            )
+            parameters = glib.Variant("(ssss)", (self._WHAT, self._WHO, self._WHY, self._MODE))
+            reply_type = glib.VariantType.new("(h)")
             reply, fd_list = connection.call_with_unix_fd_list_sync(
                 self._BUS_NAME,
                 self._OBJECT_PATH,
@@ -120,7 +135,7 @@ class Login1IdleInhibitorAdapter:
                 "Inhibit",
                 parameters,
                 reply_type,
-                self._gio.DBusCallFlags.NONE,
+                gio.DBusCallFlags.NONE,
                 self._timeout_ms,
                 None,
                 None,
