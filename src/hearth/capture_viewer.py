@@ -52,7 +52,7 @@ def build_mpv_viewer_argv(
     frame_health_script_path: str | Path | None = None,
     log_file_path: str | Path | None = None,
 ) -> list[str]:
-    """Build a no-audio, video-only mpv command with a conditional No signal OSD.
+    """Build a no-audio, video-only mpv command with a conditional stall-status OSD.
 
     The selected mode is passed explicitly to FFmpeg's V4L2 libavdevice
     demuxer. The device path is ephemeral and comes from a fresh probe, never

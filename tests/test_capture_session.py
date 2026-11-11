@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from threading import Event
 
@@ -34,6 +35,7 @@ class FakeViewer:
     exit_event: Event = field(default_factory=Event, repr=False)
     exit_code: int = 0
     no_signal: bool = False
+    no_signal_callback: Callable[[bool], None] | None = field(default=None, repr=False)
 
     def wait(self, timeout: float | None = None) -> int:
         if not self.exit_event.wait(timeout):
@@ -47,14 +49,13 @@ class FakeViewer:
     def monitor_until_exit(self) -> int:
         return self.wait()
 
-    def set_no_signal_callback(self, callback) -> None:
-        self._no_signal_callback = callback
+    def set_no_signal_callback(self, callback: Callable[[bool], None] | None) -> None:
+        self.no_signal_callback = callback
 
     def set_no_signal(self, value: bool) -> None:
         self.no_signal = value
-        callback = getattr(self, "_no_signal_callback", None)
-        if callback is not None:
-            callback(value)
+        if self.no_signal_callback is not None:
+            self.no_signal_callback(value)
 
     def stop(self) -> int:
         self.events.append("stop_viewer")
@@ -434,6 +435,9 @@ def test_no_signal_events_publish_snapshots_and_unsubscribe_cleanly() -> None:
     assert len(snapshots) == count
     assert manager.snapshot().no_signal is True
     manager.stop()
+    assert runtime.viewer.no_signal_callback is None
+    runtime.viewer.set_no_signal(False)
+    assert len(snapshots) == count
 
 
 def test_no_signal_observer_exception_cannot_break_viewer_state() -> None:

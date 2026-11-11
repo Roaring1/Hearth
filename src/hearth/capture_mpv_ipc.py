@@ -19,6 +19,7 @@ import time
 from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
+from errno import ECONNREFUSED, ENOENT
 from pathlib import Path
 from typing import ClassVar, Protocol
 
@@ -155,6 +156,118 @@ def create_private_mpv_log_file(runtime_directory: Path) -> Path:
     return log_path
 
 
+def cleanup_stale_capture_ipc_directories(
+    runtime_root: Path,
+    *,
+    min_age_s: float = 60.0,
+    now: float | None = None,
+) -> tuple[Path, ...]:
+    """Remove only old, private Hearth capture dirs with no live mpv socket.
+
+    This is a bounded, one-shot recovery sweep called only on explicit Start.
+    It never kills a process, touches a device/audio graph, follows symlinks,
+    or removes a directory whose socket accepts a connection. Unknown socket
+    errors and directories that fail ownership/permission checks are preserved.
+    """
+    if not math.isfinite(min_age_s) or min_age_s <= 0:
+        raise ValueError("min_age_s must be a positive finite value")
+    if now is not None and not math.isfinite(now):
+        raise ValueError("now must be a finite timestamp")
+    root = Path(runtime_root)
+    try:
+        root_info = root.lstat()
+    except OSError:
+        return ()
+    if (
+        not stat.S_ISDIR(root_info.st_mode)
+        or root_info.st_uid != os.getuid()
+        or root_info.st_mode & 0o077
+    ):
+        return ()
+
+    current_time = time.time() if now is None else now
+    removed: list[Path] = []
+    try:
+        candidates = tuple(root.iterdir())
+    except OSError:
+        return ()
+    for directory in candidates:
+        if not directory.name.startswith("hearth-capture-"):
+            continue
+        try:
+            info = directory.lstat()
+        except OSError:
+            continue
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o077
+            or current_time - info.st_mtime < min_age_s
+        ):
+            continue
+
+        # Only remove a directory whose complete contents match artifacts
+        # Hearth itself creates. A similarly named user directory with an
+        # unknown file, nested directory, symlink, or unexpected owner/mode
+        # is not ours to clean up.
+        try:
+            entries = tuple(directory.iterdir())
+        except OSError:
+            continue
+        known_names = {"frame-health.lua", "mpv.log", "mpv.sock"}
+        if any(entry.name not in known_names for entry in entries):
+            continue
+        entries_are_private = True
+        for entry in entries:
+            try:
+                entry_info = entry.lstat()
+            except OSError:
+                entries_are_private = False
+                break
+            if entry_info.st_uid != os.getuid():
+                entries_are_private = False
+                break
+            if entry.name == "mpv.sock":
+                if not stat.S_ISSOCK(entry_info.st_mode):
+                    entries_are_private = False
+                    break
+            elif not stat.S_ISREG(entry_info.st_mode) or entry_info.st_mode & 0o077:
+                entries_are_private = False
+                break
+        if not entries_are_private:
+            continue
+
+        ipc_socket = directory / "mpv.sock"
+        try:
+            socket_info = ipc_socket.lstat()
+        except FileNotFoundError:
+            socket_info = None
+        except OSError:
+            continue
+        if socket_info is not None and not stat.S_ISSOCK(socket_info.st_mode):
+            continue
+
+        if socket_info is not None:
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            probe.settimeout(0.1)
+            try:
+                probe.connect(str(ipc_socket))
+            except OSError as exc:
+                if exc.errno not in (ECONNREFUSED, ENOENT):
+                    continue
+            else:
+                continue
+            finally:
+                probe.close()
+
+        try:
+            shutil.rmtree(directory)
+        except OSError:
+            continue
+        removed.append(directory)
+    return tuple(removed)
+
+
 def create_private_ipc_directory() -> Path:
     """Create a session-private IPC directory under the owner's runtime dir."""
     runtime = os.environ.get("XDG_RUNTIME_DIR", "").strip()
@@ -162,7 +275,7 @@ def create_private_ipc_directory() -> Path:
         raise ViewerIPCError("XDG_RUNTIME_DIR is unavailable; refusing an insecure IPC fallback")
     root = Path(runtime)
     try:
-        metadata = root.stat()
+        metadata = root.lstat()
     except OSError as exc:
         raise ViewerIPCError(f"XDG_RUNTIME_DIR cannot be inspected: {exc}") from exc
     if not stat.S_ISDIR(metadata.st_mode):
@@ -171,6 +284,9 @@ def create_private_ipc_directory() -> Path:
         raise ViewerIPCError("XDG_RUNTIME_DIR is not owned by the current user")
     if metadata.st_mode & 0o077:
         raise ViewerIPCError("XDG_RUNTIME_DIR permissions are not private")
+    # A one-shot, fail-closed cleanup of old session-private artifacts is safe
+    # only here, on explicit Start. Never run a watcher or sweep on app launch.
+    cleanup_stale_capture_ipc_directories(root)
     try:
         directory = Path(tempfile.mkdtemp(prefix="hearth-capture-", dir=root))
         directory.chmod(0o700)
@@ -211,7 +327,7 @@ class MpvViewerProcess:
 
     @property
     def no_signal(self) -> bool:
-        """Whether the active viewer currently displays its No signal card."""
+        """Whether the active viewer currently displays its timestamp-stall card."""
         return self._no_signal
 
     def set_no_signal_callback(self, callback: Callable[[bool], None] | None) -> None:
@@ -243,7 +359,7 @@ class MpvViewerProcess:
         viewer-wait thread, after `wait_for_first_frame()` succeeded. It keeps
         one local IPC connection open and uses `observe_property(time-pos)`;
         there is no timer-driven query loop. If timestamps stop changing for
-        `stall_timeout_s`, it displays the No signal card and keeps waiting.
+        `stall_timeout_s`, it displays the "Video stopped updating" card and keeps waiting.
         Resumed timestamps clear the card; only process exit ends the session.
         """
         if stall_timeout_s <= 0:

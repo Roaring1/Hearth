@@ -262,9 +262,10 @@ class CaptureSessionManager:
         """
         with self._lock:
             self._listeners.add(listener)
-            current = self.snapshot() if emit_current else None
-        if current is not None:
-            self._notify_one(listener, current)
+            if emit_current:
+                # Deliver while serialized with monitor-thread transitions so
+                # an edge cannot overtake the initial snapshot.
+                self._notify_one(listener, self.snapshot())
 
         def unsubscribe() -> None:
             with self._lock:
@@ -497,6 +498,12 @@ class CaptureSessionManager:
         """Attempt every cleanup stage in required order; retain failed leases."""
         failures: list[str] = []
         if self._viewer is not None:
+            set_no_signal_callback = getattr(self._viewer, "set_no_signal_callback", None)
+            if callable(set_no_signal_callback):
+                # Do not retain the session manager or publish stale UI state
+                # after rollback/Stop has begun releasing the viewer.
+                with suppress(Exception):
+                    set_no_signal_callback(None)
             try:
                 self._viewer.stop()
             except Exception as exc:

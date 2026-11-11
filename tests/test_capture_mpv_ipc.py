@@ -6,6 +6,7 @@ import json
 import os
 import socket
 import stat
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -20,6 +21,7 @@ from hearth.capture_mpv_ipc import (
     ViewerIPCError,
     ViewerReadinessTimeout,
     classify_mpv_input_error,
+    cleanup_stale_capture_ipc_directories,
     create_private_ipc_directory,
     create_private_mpv_log_file,
 )
@@ -109,6 +111,113 @@ def _viewer(tmp_path: Path, process: FakeProcess | None = None) -> MpvViewerProc
     return MpvViewerProcess(process or FakeProcess(), runtime, runtime / "mpv.sock")
 
 
+def test_stale_capture_directory_sweep_removes_only_old_private_dirs(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    runtime.chmod(0o700)
+    stale = runtime / "hearth-capture-stale"
+    stale.mkdir(mode=0o700)
+    script = stale / "frame-health.lua"
+    script.write_text("stale")
+    script.chmod(0o600)
+    fresh = runtime / "hearth-capture-fresh"
+    fresh.mkdir(mode=0o700)
+    permissive = runtime / "hearth-capture-permissive"
+    permissive.mkdir(mode=0o755)
+    permissive.chmod(0o755)
+    symlink = runtime / "hearth-capture-link"
+    symlink.symlink_to(stale, target_is_directory=True)
+    now = time.time()
+    os.utime(stale, (now - 120, now - 120))
+    os.utime(fresh, (now - 10, now - 10))
+    os.utime(permissive, (now - 120, now - 120))
+
+    removed = cleanup_stale_capture_ipc_directories(runtime, min_age_s=60, now=now)
+
+    assert removed == (stale,)
+    assert not stale.exists()
+    assert fresh.is_dir()
+    assert permissive.is_dir()
+    assert symlink.is_symlink()
+
+
+def test_stale_capture_directory_sweep_preserves_unknown_user_content(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    runtime.chmod(0o700)
+    unrelated = runtime / "hearth-capture-user-data"
+    unrelated.mkdir(mode=0o700)
+    marker = unrelated / "keep.txt"
+    marker.write_text("user-owned")
+    now = time.time()
+    os.utime(unrelated, (now - 120, now - 120))
+
+    assert cleanup_stale_capture_ipc_directories(runtime, min_age_s=60, now=now) == ()
+    assert marker.read_text(encoding="utf-8") == "user-owned"
+
+
+def test_stale_capture_directory_sweep_removes_refused_mpv_socket() -> None:
+    with tempfile.TemporaryDirectory(prefix="hc-", dir="/tmp") as temporary:
+        runtime = Path(temporary) / "r"
+        runtime.mkdir(mode=0o700)
+        runtime.chmod(0o700)
+        stale = runtime / "hearth-capture-stale-socket"
+        stale.mkdir(mode=0o700)
+        script = stale / "frame-health.lua"
+        script.write_text("stale")
+        script.chmod(0o600)
+        ipc_path = stale / "mpv.sock"
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(str(ipc_path))
+        server.close()
+        now = time.time()
+        os.utime(stale, (now - 120, now - 120))
+
+        removed = cleanup_stale_capture_ipc_directories(runtime, min_age_s=60, now=now)
+
+        assert removed == (stale,)
+        assert not stale.exists()
+
+
+def test_stale_capture_directory_sweep_preserves_live_mpv_socket(tmp_path: Path) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    runtime.chmod(0o700)
+    active = runtime / "hearth-capture-active"
+    active.mkdir(mode=0o700)
+    ipc_path = active / "mpv.sock"
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(ipc_path))
+    server.listen(1)
+    now = time.time()
+    os.utime(active, (now - 120, now - 120))
+    try:
+        removed = cleanup_stale_capture_ipc_directories(runtime, min_age_s=60, now=now)
+        assert removed == ()
+        assert active.is_dir()
+    finally:
+        server.close()
+
+    removed = cleanup_stale_capture_ipc_directories(runtime, min_age_s=60, now=now)
+    assert removed == (active,)
+    assert not active.exists()
+
+
+def test_stale_capture_directory_sweep_fails_closed_for_untrusted_runtime_root(
+    tmp_path: Path,
+) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o755)
+    runtime.chmod(0o755)
+    stale = runtime / "hearth-capture-stale"
+    stale.mkdir(mode=0o700)
+    now = time.time()
+    os.utime(stale, (now - 120, now - 120))
+
+    assert cleanup_stale_capture_ipc_directories(runtime, min_age_s=60, now=now) == ()
+    assert stale.is_dir()
+
+
 def test_private_ipc_directory_requires_current_users_private_runtime_dir(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -147,6 +256,25 @@ def test_private_mpv_log_file_is_created_mode_0600_and_never_overwritten(
     with pytest.raises(ViewerIPCError, match="File exists"):
         create_private_mpv_log_file(runtime)
     assert log_path.read_text(encoding="utf-8") == "existing"
+
+
+def test_create_private_ipc_directory_runs_stale_sweep_only_on_explicit_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    runtime.chmod(0o700)
+    stale = runtime / "hearth-capture-stale"
+    stale.mkdir(mode=0o700)
+    now = time.time()
+    os.utime(stale, (now - 120, now - 120))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+
+    created = create_private_ipc_directory()
+
+    assert not stale.exists()
+    assert created.is_dir()
+    assert stat.S_IMODE(created.stat().st_mode) == 0o700
 
 
 def test_private_ipc_directory_rejects_group_or_world_access(
