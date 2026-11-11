@@ -135,7 +135,11 @@ class ResolvedCaptureDevice:
 class ViewerHandle(Protocol):
     """Owned viewer process; stop must also release the viewer's device handle."""
 
-    def stop(self) -> int | None: ...
+    def poll(self) -> int | None: ...
+
+    def wait(self, timeout: float | None = None) -> int: ...
+
+    def stop(self, *, timeout: float = 1.0) -> int: ...
 
 
 class AudioRouteLease(Protocol):
@@ -307,6 +311,30 @@ class CaptureSessionManager:
             self._stage = None
             self._error = None
             self._cleanup_failures = ()
+            self._revision += 1
+            return self.snapshot()
+
+    def viewer_exited(self, returncode: int) -> SessionSnapshot:
+        """Handle an unexpected viewer exit while a session is running.
+
+        The runtime's active-session process waiter calls this after the child
+        exits. The manager stops/releases every remaining session resource and
+        enters FAILED even when cleanup succeeds, so the UI never silently
+        returns to a ready-looking state or leaves a stale last frame implied.
+        An explicit Stop acknowledges the failure and returns to DORMANT.
+        """
+        with self._lock:
+            if self._state is not SessionState.RUNNING:
+                raise CaptureSessionError(
+                    self._stage or SessionStage.CLEANUP,
+                    f"viewer exit reported while the session is {self._state.value}",
+                )
+            self._state = SessionState.FAILED
+            self._stage = SessionStage.CLEANUP
+            self._error = f"Share Output viewer exited unexpectedly (code {returncode})"
+            self._revision += 1
+            failures = self._cleanup_resources()
+            self._cleanup_failures = tuple(failures)
             self._revision += 1
             return self.snapshot()
 

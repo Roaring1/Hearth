@@ -271,3 +271,44 @@ def test_resolved_device_rejects_volatile_audio_source_ids() -> None:
     for selector in ("42", "card2", "alsa_card=3", "node.id=9"):
         with pytest.raises(ValueError, match="stable, not a volatile numeric"):
             ResolvedCaptureDevice(IDENTITY, "/dev/video42", MODE, selector)
+
+
+def test_unexpected_viewer_exit_cleans_session_and_requires_explicit_stop_ack() -> None:
+    runtime = FakeRuntime()
+    manager = CaptureSessionManager(runtime)
+    manager.start(PLAN)
+
+    failed = manager.viewer_exited(17)
+
+    assert failed.state is SessionState.FAILED
+    assert failed.error == "Share Output viewer exited unexpectedly (code 17)"
+    assert failed.cleanup_failures == ()
+    assert runtime.events[-3:] == ["stop_viewer", "release_inhibitor", "remove_routes"]
+    with pytest.raises(CaptureSessionError, match="cannot start while the session is failed"):
+        manager.start(PLAN)
+    assert manager.stop().state is SessionState.DORMANT
+
+
+def test_unexpected_viewer_exit_retains_failed_route_cleanup_for_stop_retry() -> None:
+    runtime = FakeRuntime()
+    manager = CaptureSessionManager(runtime)
+    manager.start(PLAN)
+    assert runtime.routes is not None
+    runtime.routes.remove_failures = 1
+
+    failed = manager.viewer_exited(-15)
+
+    assert failed.state is SessionState.FAILED
+    assert failed.cleanup_failures == ("share routes: route removal not verified",)
+    # Viewer and inhibitor cleanup succeeded once and are not repeated.
+    assert runtime.events[-3:] == ["stop_viewer", "release_inhibitor", "remove_routes"]
+    assert manager.stop().state is SessionState.DORMANT
+    assert runtime.events[-1] == "remove_routes"
+
+
+def test_viewer_exit_outside_running_state_is_rejected() -> None:
+    manager = CaptureSessionManager(FakeRuntime())
+    with pytest.raises(
+        CaptureSessionError, match="viewer exit reported while the session is dormant"
+    ):
+        manager.viewer_exited(1)

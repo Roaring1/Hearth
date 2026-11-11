@@ -19,6 +19,8 @@ The module is toolkit-free and owns lifecycle order/state, not the operating-sys
 7. Verify the expected audio-route state.
 8. Only then report `RUNNING` / Ready.
 
+While RUNNING, an active-session waiter observes the owned viewer handle. If it exits unexpectedly, it calls `CaptureSessionManager.viewer_exited(returncode)`. The manager cleans up remaining resources in the normal order, records the exit and enters `FAILED` even if cleanup succeeds. This prevents the mixer from continuing to show a ready-looking state while the share window is gone. An explicit Stop acknowledges the failure and returns to `DORMANT`; if cleanup failed, Stop retries only the retained leases. The waiter exists only while the session is active.
+
 On failure it attempts cleanup in reverse ownership order: viewer/device handle, idle inhibitor, session routes. A failed cleanup lease remains retained and the manager reports `FAILED`; Stop retries it. New Start is refused until all leases are cleaned and the state returns to `DORMANT`. The tests inject failure at every startup phase and exercise rollback/retry.
 
 `CapturePlan` stores stable USB identity, an enumerated mode and `AudioMode` (`Xbox` default, `Nobara`, `Both`). It does not store `/dev/videoN`, PipeWire object IDs, ALSA card numbers or runtime link IDs. `UsbIdentity` requires USB serial or physical port path, preferring serial. `ResolvedCaptureDevice` carries the current node path only for a running operation.
