@@ -7,12 +7,20 @@ from dataclasses import dataclass
 import pytest
 
 from hearth.capture_devices import (
+    AudioAssociationStatus,
+    AudioSourceCandidate,
     CaptureDevice,
     CaptureNode,
     V4L2Capabilities,
 )
+from hearth.capture_pipewire import PipeWireAudioInventory, PipeWireAudioIssue
 from hearth.capture_provider import CaptureInventory, CaptureProbeIssue
-from hearth.capture_runtime import CaptureDeviceResolutionError, V4L2CaptureResolver
+from hearth.capture_runtime import (
+    CaptureAudioAssociationError,
+    CaptureDeviceResolutionError,
+    PipeWireCaptureAudioResolver,
+    V4L2CaptureResolver,
+)
 from hearth.capture_session import CapturePlan, UsbIdentity, VideoMode
 
 CARD = UsbIdentity("1abc", "02ef", serial_number="GUV302G-001")
@@ -299,3 +307,96 @@ def test_resolver_fails_on_a_probe_issue_with_the_selected_usb_identity() -> Non
 
     with pytest.raises(CaptureDeviceResolutionError, match="inventory is incomplete"):
         V4L2CaptureResolver(provider).probe_device(CapturePlan(CARD, MODE))
+
+
+@dataclass
+class FakePipeWireInventory:
+    snapshot: PipeWireAudioInventory | None = None
+    error: Exception | None = None
+    calls: int = 0
+
+    def discover(self) -> PipeWireAudioInventory:
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        assert self.snapshot is not None
+        return self.snapshot
+
+
+def _audio_source(selector: str, label: str, identity: UsbIdentity = CARD) -> AudioSourceCandidate:
+    return AudioSourceCandidate(selector, label, identity)
+
+
+def test_start_time_audio_resolver_selects_unique_usb_identity_match() -> None:
+    audio = _audio_source("alsa_input.usb-guv302g.capture", "GUV302G HDMI Audio")
+    pipewire = FakePipeWireInventory(PipeWireAudioInventory(sources=(audio,)))
+    resolver = V4L2CaptureResolver(
+        FakeInventory(CaptureInventory(devices=(_device(),))),
+        audio_resolver=PipeWireCaptureAudioResolver(pipewire),
+    )
+
+    resolved = resolver.probe_device(CapturePlan(CARD, MODE))
+
+    assert resolved.audio_source_selector == "alsa_input.usb-guv302g.capture"
+    assert resolved.video_node_path == "/dev/video4"
+    assert pipewire.calls == 1
+
+
+def test_start_time_audio_resolver_fails_when_no_usb_audio_source_matches() -> None:
+    other = UsbIdentity("1abc", "02ef", serial_number="different-card")
+    pipewire = FakePipeWireInventory(
+        PipeWireAudioInventory(
+            sources=(_audio_source("alsa_input.usb-other", "Other capture audio", other),)
+        )
+    )
+    resolver = PipeWireCaptureAudioResolver(pipewire)
+
+    with pytest.raises(CaptureAudioAssociationError) as caught:
+        resolver.resolve(CARD)
+
+    assert caught.value.status is AudioAssociationStatus.NONE
+    assert caught.value.candidates == ()
+    assert pipewire.calls == 1
+
+
+def test_start_time_audio_resolver_fails_closed_on_incomplete_inventory() -> None:
+    pipewire = FakePipeWireInventory(
+        PipeWireAudioInventory(
+            sources=(_audio_source("alsa_input.usb-guv302g.capture", "GUV302G Audio"),),
+            issues=(PipeWireAudioIssue("unknown-source", "missing USB parent metadata"),),
+        )
+    )
+
+    with pytest.raises(CaptureAudioAssociationError) as caught:
+        PipeWireCaptureAudioResolver(pipewire).resolve(CARD)
+
+    assert caught.value.status is AudioAssociationStatus.UNKNOWN
+    assert caught.value.candidates == ()
+
+
+def test_start_time_audio_resolver_refuses_ambiguous_matching_sources() -> None:
+    first = _audio_source("alsa_input.usb-guv302g.analog-stereo", "GUV302G Analog")
+    second = _audio_source("alsa_input.usb-guv302g.hdmi-stereo", "GUV302G HDMI")
+    pipewire = FakePipeWireInventory(PipeWireAudioInventory(sources=(first, second)))
+
+    with pytest.raises(CaptureAudioAssociationError) as caught:
+        PipeWireCaptureAudioResolver(pipewire).resolve(CARD)
+
+    assert caught.value.status is AudioAssociationStatus.AMBIGUOUS
+    assert caught.value.candidates == (first, second)
+    assert "GUV302G Analog" in str(caught.value)
+    assert "GUV302G HDMI" in str(caught.value)
+
+
+def test_start_time_audio_resolver_maps_provider_failure_to_unknown() -> None:
+    pipewire = FakePipeWireInventory(error=RuntimeError("pw-dump unavailable"))
+
+    with pytest.raises(CaptureAudioAssociationError, match="inventory failed") as caught:
+        PipeWireCaptureAudioResolver(pipewire).resolve(CARD)
+
+    assert caught.value.status is AudioAssociationStatus.UNKNOWN
+
+
+def test_audio_candidate_rejects_numeric_selector_instead_of_guessing() -> None:
+    with pytest.raises(ValueError, match="volatile numeric"):
+        AudioSourceCandidate("42", "GUV302G Audio", CARD)
