@@ -494,3 +494,187 @@ def test_capture_sample_accumulates_stereo_channels_without_pcm_persistence(monk
     assert summary["stream_diagnostics"]["raw"]["frames_received"] == frames
     assert summary["stream_diagnostics"]["processed"]["frames_received"] == frames
     assert all(process.stdout.closed for process in processes)
+
+
+def _baseline_capture_sample(
+    raw_rms: float = -70.0,
+    raw_high: float = -80.0,
+    processed_rms: float = -75.0,
+    processed_high: float = -85.0,
+) -> dict:
+    def low(rms, high):
+        return {
+            "noise_floor_valid": True,
+            "rms_dbfs": rms,
+            "5k_12k_dbfs": high,
+            "5k_12k_flatness": 0.2,
+            "frames": 24,
+        }
+
+    return {
+        "capture_error": None,
+        "capture_coverage": {"fraction": 0.98},
+        "fault_confirmed": False,
+        "verdict": "NO_SAMPLE",
+        "reason": "quiet test fixture",
+        "windows": 24,
+        "active_windows": 0,
+        "valid_windows": 24,
+        "candidate_windows": 0,
+        "dropout_windows": 0,
+        "raw_rms_p50": 0.0,
+        "raw_rms_p90": 0.0,
+        "post_rms_p50": 0.0,
+        "post_rms_p90": 0.0,
+        "correlation_p50": 0.0,
+        "signal_features": {
+            "raw": {"low_energy": low(raw_rms, raw_high), "persistent_tones": []},
+            "processed": {
+                "low_energy": low(processed_rms, processed_high),
+                "persistent_tones": [],
+            },
+            "raw_to_processed": {},
+            "integrity": {"raw": {}, "processed": {}},
+        },
+        "stream_diagnostics": {},
+    }
+
+
+def test_baseline_enrollment_captures_three_samples_and_saves_numeric_profile(
+    monkeypatch, tmp_path
+) -> None:
+    samples = [_baseline_capture_sample(), _baseline_capture_sample(), _baseline_capture_sample()]
+    calls = []
+    saved = {}
+    monkeypatch.setattr(
+        healthd, "capture_sample", lambda seconds: calls.append(seconds) or samples.pop(0)
+    )
+    monkeypatch.setattr(healthd, "NOISE_BASELINE_PATH", tmp_path / "profile.json")
+    monkeypatch.setattr(
+        healthd,
+        "save_noise_baseline",
+        lambda path, profile: saved.update({"path": path, "profile": profile}),
+    )
+    monkeypatch.setattr(healthd.time, "time", lambda: 100.0)
+    assert healthd.enroll_noise_baseline() == 0
+    assert calls == [8.0, 8.0, 8.0]
+    assert saved["path"] == tmp_path / "profile.json"
+    assert saved["profile"]["sample_count"] == 3
+    assert saved["profile"]["user_confirmed_quiet"] is True
+    assert saved["profile"]["pcm_saved"] is False
+
+
+def test_baseline_enrollment_refuses_unverified_floor_and_does_not_save(
+    monkeypatch, tmp_path
+) -> None:
+    sample = _baseline_capture_sample()
+    sample["signal_features"]["processed"]["low_energy"]["noise_floor_valid"] = False
+    saved = []
+    monkeypatch.setattr(healthd, "capture_sample", lambda seconds: sample)
+    monkeypatch.setattr(healthd, "NOISE_BASELINE_PATH", tmp_path / "profile.json")
+    monkeypatch.setattr(healthd, "save_noise_baseline", lambda *args: saved.append(args))
+    assert healthd.enroll_noise_baseline() == 2
+    assert saved == []
+
+
+def test_cli_requires_explicit_quiet_confirmation_for_baseline_enrollment(monkeypatch) -> None:
+    import pytest
+
+    monkeypatch.setattr(healthd.sys, "argv", ["healthd", "--noise-baseline-enroll"])
+    with pytest.raises(SystemExit) as exc:
+        healthd.main()
+    assert exc.value.code == 2
+
+
+def test_cli_show_baseline_is_read_only_and_reports_missing(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(healthd.sys, "argv", ["healthd", "--noise-baseline-show"])
+    monkeypatch.setattr(healthd, "load_noise_baseline", lambda path: None)
+    assert healthd.main() == 0
+    assert '"status": "baseline_missing"' in capsys.readouterr().out
+
+
+def test_sample_cycle_logs_noise_baseline_candidate_without_recovery(monkeypatch) -> None:
+    baseline_sample = _baseline_capture_sample()
+    profile = healthd.build_noise_baseline(
+        [baseline_sample, baseline_sample, baseline_sample],
+        created_at=1.0,
+        confirmed_quiet=True,
+    )
+    current = _baseline_capture_sample(-60.0, -68.0, -65.0, -73.0)
+    current["verdict"] = "CORRECT"
+    current["transport"] = {
+        "during_sample": {"status": "ok", "node_deltas": {}, "configuration_changes": []},
+        "since_previous_sample": {"status": "ok", "node_deltas": {}},
+    }
+    saved = {}
+    recorded = []
+    monkeypatch.setattr(healthd, "_read_state", lambda: {})
+    monkeypatch.setattr(
+        healthd, "capture_sample_with_transport", lambda seconds, previous: (current, {})
+    )
+    monkeypatch.setattr(healthd, "load_noise_baseline", lambda path: profile)
+    monkeypatch.setattr(healthd, "_write_state", lambda state: saved.update(state))
+    monkeypatch.setattr(healthd, "_record_sample", lambda sample: recorded.append(sample))
+    monkeypatch.setattr(
+        healthd,
+        "handle_confirmed_fault",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("noise candidate must not restart Carla")
+        ),
+    )
+    monkeypatch.setattr(
+        healthd,
+        "notify",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("noise candidate must not notify")
+        ),
+    )
+    assert healthd.run_sample_cycle(8.0, {"AUTO_RECOVER": True, "NOTIFY": True}) == 0
+    comparison = saved["last_sample"]["noise_baseline_comparison"]
+    assert comparison["status"] == "compared"
+    assert comparison["candidate"] is True
+    assert comparison["noise_rise_candidates"]
+    assert saved["noise_baseline_comparison"] == comparison
+    assert saved["last_verdict"] == "CORRECT"
+    assert recorded and recorded[0]["noise_baseline_comparison"] == comparison
+
+
+def test_sample_cycle_without_baseline_records_missing_status_and_no_action(monkeypatch) -> None:
+    sample = _baseline_capture_sample()
+    sample["transport"] = {
+        "during_sample": {"status": "ok", "node_deltas": {}, "configuration_changes": []},
+        "since_previous_sample": {"status": "ok", "node_deltas": {}},
+    }
+    saved = {}
+    monkeypatch.setattr(healthd, "_read_state", lambda: {})
+    monkeypatch.setattr(
+        healthd, "capture_sample_with_transport", lambda seconds, previous: (sample, {})
+    )
+    monkeypatch.setattr(healthd, "load_noise_baseline", lambda path: None)
+    monkeypatch.setattr(healthd, "_write_state", lambda state: saved.update(state))
+    monkeypatch.setattr(healthd, "_record_sample", lambda sample: None)
+    monkeypatch.setattr(
+        healthd,
+        "handle_confirmed_fault",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("missing profile must not restart")
+        ),
+    )
+    assert healthd.run_sample_cycle(8.0, {"AUTO_RECOVER": True, "NOTIFY": False}) == 0
+    comparison = saved["last_sample"]["noise_baseline_comparison"]
+    assert comparison["status"] == "baseline_missing"
+    assert comparison["candidate"] is False
+    assert comparison["automatic_action"] == "none"
+
+
+def test_cli_rejects_baseline_mode_combined_with_check(monkeypatch) -> None:
+    import pytest
+
+    monkeypatch.setattr(
+        healthd.sys,
+        "argv",
+        ["healthd", "--noise-baseline-show", "--check"],
+    )
+    with pytest.raises(SystemExit) as exc:
+        healthd.main()
+    assert exc.value.code == 2
