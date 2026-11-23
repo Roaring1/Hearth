@@ -1211,6 +1211,38 @@ def _has_in_sample_transport_errors(summary: dict) -> bool:
     return any(isinstance(value, int) and value > 0 for value in deltas.values())
 
 
+def _update_monitoring_streaks(state: dict, sample: dict) -> dict[str, int]:
+    """Persist consecutive unverified-sample counts without creating notifications."""
+    streaks = state.get("monitoring_streaks", {})
+    if not isinstance(streaks, dict):
+        streaks = {}
+
+    def bounded_count(value: object) -> int:
+        try:
+            return min(255, max(0, int(value)))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    no_activity = bounded_count(streaks.get("no_activity", 0))
+    inconclusive = bounded_count(streaks.get("inconclusive", 0))
+    verdict = sample.get("verdict")
+    active = int(sample.get("active_windows", 0))
+    if verdict == "NO_SAMPLE":
+        no_activity = min(255, no_activity + 1)
+        inconclusive = 0
+    elif verdict == "INCONCLUSIVE":
+        inconclusive = min(255, inconclusive + 1)
+        if active >= MIN_ACTIVE_WINDOWS:
+            no_activity = 0
+    else:
+        no_activity = 0
+        inconclusive = 0
+    result = {"no_activity": no_activity, "inconclusive": inconclusive}
+    state["monitoring_streaks"] = result
+    sample["monitoring_streaks"] = result.copy()
+    return result
+
+
 def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
     """Sample once; on a confirmed fault restart at most once, then sample once again."""
     state = _read_state()
@@ -1351,6 +1383,13 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
         first["post_rms_p90"],
         first["correlation_p50"],
     )
+    monitoring_streaks = _update_monitoring_streaks(state, first)
+    if monitoring_streaks["no_activity"] or monitoring_streaks["inconclusive"]:
+        LOG.info(
+            "microphone health unverified streaks: no_activity=%d inconclusive=%d",
+            monitoring_streaks["no_activity"],
+            monitoring_streaks["inconclusive"],
+        )
     state["last_sample"] = first
     state["last_sample_at"] = time.time()
 
