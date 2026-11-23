@@ -39,6 +39,7 @@ jobs:
           install: >-
             mingw-w64-ucrt-x86_64-python
             mingw-w64-ucrt-x86_64-python-pip
+            mingw-w64-ucrt-x86_64-python-numpy
             mingw-w64-ucrt-x86_64-python-gobject
             mingw-w64-ucrt-x86_64-gtk4
             mingw-w64-ucrt-x86_64-glib2
@@ -58,6 +59,7 @@ jobs:
           python - <<'PY'
           import comtypes
           import gi
+          import numpy
           import psutil
 
           gi.require_version("Gtk", "4.0")

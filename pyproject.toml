@@ -40,6 +40,7 @@ dev = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
   "pre-commit>=3.8",
+  "numpy>=1.24",
 ]
 
 [project.scripts]
@@ -144,6 +145,8 @@ python_version = "3.11"
 # Tests are verified by running them.
 files = ["src/hearth"]
 strict = true
+# Per-module follow-import rules also apply to third-party type stubs.
+follow_imports_for_stubs = true
 warn_unreachable = true
 # Strict typing applies to the modules written for this refactor. The two
 # excluded areas are the verbatim legacy code: annotating 2,600 lines of GTK
@@ -186,6 +189,14 @@ disallow_incomplete_defs = false
 # cli.py is the boundary that calls into the untyped legacy module by design.
 module = ["hearth.cli"]
 disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+# NumPy is used by optional audio-diagnostic scripts/tests, not the packaged
+# core in src/hearth. Its newest stub release uses Python 3.12-only syntax,
+# while Hearth intentionally supports Python 3.11. Keep core typing strict
+# without importing NumPy's external stubs into this Python 3.11 check.
+module = ["numpy", "numpy.*"]
+follow_imports = "skip"
 
 
 # ---------------------------------------------------------------- pytest
