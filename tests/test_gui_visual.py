@@ -251,6 +251,10 @@ def test_production_windows_render_and_capture(
     )
     assert share_strip.capture_setup_button is not None
     assert share_strip.capture_setup_button.get_label() == "SET UP"
+    assert (
+        "Open Screen Share overview from the mixer strip"
+        in accessible_labels[id(share_strip.capture_setup_button)]
+    )
     assert window._capture_window is None
     window.capture_open_button.emit("clicked")
     overview = window._capture_window

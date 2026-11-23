@@ -458,7 +458,7 @@ class Strip(Gtk.Box):
             self.capture_setup_button.add_css_class("capture-setup")
             action_icons.accessible_label(
                 self.capture_setup_button,
-                "Open Screen Share setup and capture overview",
+                "Open Screen Share overview from the mixer strip",
             )
             self.capture_setup_button.set_tooltip_text(
                 "Set up the video friends see and the audio they hear"
