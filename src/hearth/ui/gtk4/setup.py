@@ -213,7 +213,13 @@ class SetupWindow(Gtk.Window):
         lat_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         lat_row.append(Gtk.Label(label="Latency", xalign=0.0))
         self.latency = Gtk.SpinButton.new_with_range(1, 200, 1)
-        action_icons.accessible_label(self.latency, "Routing latency in milliseconds")
+        latency_label = "Routing latency in milliseconds"
+        action_icons.accessible_label(self.latency, latency_label)
+        # GTK exposes the SpinButton's editable Gtk.Text as the actual Tab
+        # focus stop. Give that internal editor the same context as its parent.
+        latency_editor = self.latency.get_first_child()
+        if isinstance(latency_editor, Gtk.Text):
+            action_icons.accessible_label(latency_editor, latency_label)
         try:
             self.latency.set_value(int(conf.get("LATENCY_MSEC", "12")))
         except ValueError:
@@ -504,6 +510,7 @@ class SetupWindow(Gtk.Window):
     # -- the long list, behind a disclosure ------------------------------
     def _build_everything(self) -> Gtk.Widget:
         self.everything = Gtk.Expander(label="Every unit")
+        action_icons.accessible_label(self.everything, "Show all systemd unit statuses")
         self.everything.add_css_class("setup-note")
         self.all_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.all_list.set_margin_top(6)
