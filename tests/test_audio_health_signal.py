@@ -370,3 +370,64 @@ def test_lpc_prediction_residual_is_not_evaluated_without_prior_context() -> Non
     assert result["prediction_error_ratio"] is None
     assert "prediction_error_ratio" in result
     assert result["prediction_error_ratio"] is None
+
+
+def test_true_peak_detects_intersample_over_full_scale_with_clean_sample_peaks() -> None:
+    from audio_health_signal import _true_peak_metrics
+
+    rate = 48_000
+    index = np.arange(4096, dtype=np.float64)
+    # Stored samples stay below full scale while the reconstructed sinusoid peaks between them.
+    samples = 1.05 * np.sin((np.pi / 2.0) * index + np.pi / 4.0)
+    metrics = _true_peak_metrics(samples, rate)
+    assert metrics["sample_peak_dbfs"] < 0.0
+    assert metrics["true_peak_dbtp"] > 0.0
+    assert metrics["over_full_scale"] is True
+    assert metrics["intersample_increase_db"] >= 3.0
+    assert metrics["oversample_factor"] == 4
+
+
+def test_true_peak_matches_sample_peak_for_sample_aligned_sine() -> None:
+    from audio_health_signal import _true_peak_metrics
+
+    rate = 48_000
+    index = np.arange(4096, dtype=np.float64)
+    samples = 0.5 * np.sin((np.pi / 2.0) * index)
+    metrics = _true_peak_metrics(samples, rate)
+    assert metrics["true_peak_dbtp"] >= metrics["sample_peak_dbfs"]
+    assert metrics["intersample_increase_db"] < 0.05
+    assert metrics["over_full_scale"] is False
+
+
+def test_true_peak_excludes_nonfinite_samples_and_reports_count() -> None:
+    from audio_health_signal import _true_peak_metrics
+
+    samples = np.zeros(2048, dtype=np.float64)
+    samples[100] = np.nan
+    samples[200] = np.inf
+    metrics = _true_peak_metrics(samples, 48_000)
+    assert metrics["nonfinite_samples_excluded"] == 2
+    assert metrics["true_peak_dbtp"] is not None
+
+
+def test_true_peak_rejects_unsupported_oversampling_and_small_buffers() -> None:
+    import pytest
+    from audio_health_signal import _true_peak_metrics
+
+    samples = np.zeros(1024, dtype=np.float64)
+    with pytest.raises(ValueError, match="4x"):
+        _true_peak_metrics(samples, 48_000, oversample_factor=8)
+    with pytest.raises(ValueError, match="block size"):
+        _true_peak_metrics(samples, 48_000, block_frames=128)
+
+
+def test_signal_summary_includes_raw_and_processed_true_peak_delta() -> None:
+    rate = 48_000
+    index = np.arange(8 * rate, dtype=np.float64)
+    raw = 0.2 * np.sin((np.pi / 2.0) * index)
+    processed = 1.05 * np.sin((np.pi / 2.0) * index + np.pi / 4.0)
+    result = analyze_signal_features(raw, processed, rate)
+    assert result["raw"]["true_peak"]["true_peak_dbtp"] < 0.0
+    assert result["processed"]["true_peak"]["true_peak_dbtp"] > 0.0
+    assert result["raw_to_processed"]["true_peak_delta_dbtp"] > 5.0
+    assert result["automatic_action"] == "none"

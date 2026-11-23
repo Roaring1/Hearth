@@ -1238,15 +1238,19 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
         processed_impulses = signal_features.get("processed", {}).get("broadband_impulses", {})
         raw_integrity = signal_features.get("integrity", {}).get("raw", {})
         processed_integrity = signal_features.get("integrity", {}).get("processed", {})
+        raw_true_peak = signal_features.get("raw", {}).get("true_peak", {})
+        processed_true_peak = signal_features.get("processed", {}).get("true_peak", {})
         LOG.info(
             "signal metrics (measurement only): tones=%s raw_impulses=%s/%.2fHz "
-            "processed_impulses=%s/%.2fHz hf_kurtosis=%.2f/%.2f "
-            "nonfinite=%s/%s",
+            "processed_impulses=%s/%.2fHz true_peak=%.2f/%.2fdBTP "
+            "hf_kurtosis=%.2f/%.2f nonfinite=%s/%s",
             tone_scope,
             raw_impulses.get("candidate_count", 0),
             raw_impulses.get("candidate_rate_per_second", 0.0),
             processed_impulses.get("candidate_count", 0),
             processed_impulses.get("candidate_rate_per_second", 0.0),
+            float(raw_true_peak.get("true_peak_dbtp") or 0.0),
+            float(processed_true_peak.get("true_peak_dbtp") or 0.0),
             signal_features.get("raw", {}).get("transients", {}).get("hf_excess_kurtosis", 0.0),
             signal_features.get("processed", {})
             .get("transients", {})
