@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import copy
 import importlib
+import subprocess
 import sys
 import types
 from pathlib import Path
+
+import pytest
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -678,3 +681,37 @@ def test_cli_rejects_baseline_mode_combined_with_check(monkeypatch) -> None:
     with pytest.raises(SystemExit) as exc:
         healthd.main()
     assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("route", ["none", "", "invalid"])
+def test_b1_health_capture_gate_refuses_unrouted_mic(monkeypatch, tmp_path, route) -> None:
+    config = tmp_path / "router.conf"
+    config.write_text(
+        f'B1_ROUTE="{route}"' + chr(10) + 'B1_ACTIVE="true"' + chr(10) + 'CARLA_TO_B1="true"',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(healthd, "ROUTER_CONFIG_PATH", config)
+    monkeypatch.setattr(healthd, "_B1_ACTIVE_CACHE", (0.0, False))
+    monkeypatch.setattr(
+        healthd,
+        "_run_checked",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "Mute: no", ""),
+    )
+    assert healthd._b1_expected_active() is False
+
+
+@pytest.mark.parametrize("route", ["sm7b", "astro", "both"])
+def test_b1_health_capture_gate_accepts_selected_mic_routes(monkeypatch, tmp_path, route) -> None:
+    config = tmp_path / "router.conf"
+    config.write_text(
+        f'B1_ROUTE="{route}"' + chr(10) + 'B1_ACTIVE="true"' + chr(10) + 'CARLA_TO_B1="true"',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(healthd, "ROUTER_CONFIG_PATH", config)
+    monkeypatch.setattr(healthd, "_B1_ACTIVE_CACHE", (0.0, False))
+    monkeypatch.setattr(
+        healthd,
+        "_run_checked",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "Mute: no", ""),
+    )
+    assert healthd._b1_expected_active() is True
