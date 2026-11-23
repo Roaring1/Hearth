@@ -56,7 +56,10 @@ This is intentionally conservative. It does not itself change quantum, restart P
 - scripts/roaring_carla_healthd.py: repository-owned daemon copy with scheduled transport snapshots.
 - scripts/audio_health_transport.py: parser, state sanitizer and identity-safe snapshot comparator.
 - tests/test_audio_health_transport.py: transport helper tests.
+- tests/test_audio_health_signal.py: synthetic tone, noise, impulse, integrity and localization tests.
 - tests/test_roaring_carla_healthd_scheduled.py: scheduled-cycle integration and restart-conflict tests.
+
+- scripts/audio_health_signal.py: measurement-only spectral, transient, broadband-impulse and sample-integrity features.
 
 The active systemd unit still points to ~/bin/roaring_carla_healthd.py. That external file has **not** been updated. The active timer and service were read-only checked; no service restart or routing change was performed.
 
@@ -71,7 +74,9 @@ The measurement-only summary contains:
 - A lower-energy-frame RMS / 5-12 kHz estimate. This is **not** a calibrated noise floor and the frames are not guaranteed speech-free; it must be compared to a profile-specific baseline before a warning.
 - Candidate persistent spectral lines, using non-overlapping 2-second windows. Lower-energy windows nominate candidates, then every frame in the sample is checked for persistence and frequency stability; estimates include sub-bin peak position and local prominence. The detector does not call a line "mains hum" or "ground loop".
 - 5 kHz+ high-pass transient descriptors: RMS, peak, crest factor, excess kurtosis and 10 ms outlier-frame count/rate.
+- Short broadband impulse candidates from overlapping 5 ms windows at 2.5 ms hop. Three bands (2.5-5 kHz, 5-10 kHz, 10-20 kHz) are compared with a local median/MAD baseline. A candidate must elevate at least two bands and last no more than 15 ms. Event count, rate, bounded timestamps and threshold ratios are retained. Long high-frequency sibilance-like spans are excluded by duration.
 - Raw-to-processed deltas for high-frequency transient descriptors, to show whether the measured change first appears before or after the processing chain.
+- A heuristic multi-cue high-frequency impulsive-event candidate. It requires all of: HF RMS at least -55 dBFS, HF peak at least -35 dBFS, HF crest at least 27 dB, 5 kHz+ excess kurtosis at least 80 and high-frequency energy share at least 0.5%. The candidate is separately reported for raw and B1 and logged with its cue evidence. It is **not a click/crackle classifier** and cannot trigger a restart or notification.
 - Sample peak and near-full-scale fraction, separate from true-peak or analog-overload claims.
 - Sample-integrity counts for NaN/Inf values, long exact-zero runs, repeated nonzero sample plateaus and full-scale sample plateaus. The integrity pass preserves timing positions across non-finite samples. Long zero runs may be ordinary silence or an intentional gate; these are measurements, not faults.
 - Raw-to-processed band-level changes, which quantify frequency attenuation or boosts within each measured band.
@@ -79,6 +84,28 @@ The measurement-only summary contains:
 All these results currently have automatic_action: none. They are measurements only. Zero-run and full-scale plateau counts are not automatic faults either: digital silence may be intentional, and a plateau requires context from the preceding/following samples and capture point. The transient frame event count is not a crackle verdict: on the actual labelled recordings it did not consistently rank the bad reference above the good one. The old user-described scratch/crackle reference did have much higher 5 kHz+ excess kurtosis (196.84 vs 34.96) and high-frequency energy share (0.856% vs 0.336%) than the user-confirmed clean reference, but the browser Opus takes differ. These are useful calibration evidence, not universal thresholds.
 
 The whole-recording 97-99 Hz peak in the November 22 OGGs did not persist as a stable low-energy-window tone under the refined criterion. Therefore the source of that earlier line remains unresolved; do not report it as confirmed electrical hum. Synthetic stable 97.5 Hz signals remain detectable in unit tests, while drifting voice-like tonal bursts are rejected.
+
+The five-cue 8-second watchdog heuristic was also replayed in consecutive complete 8-second windows (the incomplete trailing window was ignored):
+
+| Recording | Positive 8-second windows | Complete 8-second windows |
+|---|---:|---:|
+| November 9 fault reference, Zo2N_NCo.ogg | 2 | 3 |
+| November 9 confirmed-clean reference, 3fL9fHB_.ogg | 0 | 3 |
+| November 22 before, test.ogg | 1 | 3 |
+| November 22 after, fixed_test.ogg | 0 | 3 |
+
+This reproduces the single labelled bad/clean distinction and the user's before/after observation at the watchdog's actual sampling duration. It is not an independently validated classifier: there are only three complete non-overlapping windows per file, the recordings are different browser-Opus speech takes, and no blind human event labels exist. The heuristic stays diagnostic-only and cannot restart or change the audio chain.
+
+The impulse-candidate replay against the four supplied browser-Opus references produced:
+
+| Recording | Candidate events | Events/second | 5 kHz+ excess kurtosis | High-frequency power share |
+|---|---:|---:|---:|---:|
+| November 9 fault reference, Zo2N_NCo.ogg | 329 | 10.965 | 196.84 | 0.8555% |
+| November 9 confirmed-clean reference, 3fL9fHB_.ogg | 41 | 1.367 | 34.96 | 0.3361% |
+| November 22 before, test.ogg | 309 | 10.302 | 142.72 | 0.4644% |
+| November 22 after, fixed_test.ogg | 60 | 2.000 | 86.22 | 0.3997% |
+
+Each 30-second file took approximately 0.85-0.95 seconds for the complete feature pass in the local offline replay. This suggests the scheduled 8-second sample should fit the existing oneshot budget, but a live resource measurement is still required. Candidate counts are not subjective click labels: the samples differ in spoken content and the test files use browser Opus. The detector's purpose at this stage is to expose repeatable features and locations, not to declare crackle or drive restart.
 
 ## Deployment contract - not yet performed
 
@@ -93,7 +120,7 @@ Before a later deployment:
 2. Copy the daemon and both helper modules atomically or via a temporary staging directory, preserve executable mode for the daemon, and ensure user ownership.
 3. Run Python byte-compilation and --help from the target directory as a non-capturing smoke test.
 4. Initially run a shadow/diagnostic cycle with AUTO_RECOVER=0; do not enable restart action while validating new transport classifications.
-5. Inspect JSON history and logs. Confirm same-node deltas, resets, node recreation, unavailable queries and metadata failures are classified as designed.
+5. Inspect JSON history and logs. Confirm same-node deltas, resets, node recreation, unavailable queries, metadata failures and the new signal-feature fields are classified as designed.
 6. Only after review, consider restoring the existing AUTO_RECOVER policy. The transport-conflict guard still applies.
 7. Verify the next scheduled cycle and inspect its persisted transport fields before considering deployment complete.
 
@@ -112,7 +139,7 @@ Run:
 
 Run the full Hearth tests from outside the repository root with PYTHONPATH set to src, so the compatibility hearth.py CLI shim at the root cannot shadow the package import.
 
-Current full-suite result for this branch: **676 passed, 75 skipped**. The skips are display/GUI and optional media-integration tests requiring a display or external media tools. Repository-wide Ruff lint and format checks pass, as do Python byte-compilation checks.
+Current full-suite result for this branch: **682 passed, 75 skipped**. The skips are display/GUI and optional media-integration tests requiring a display or external media tools. The signal-feature tests use pytest.importorskip("numpy") so minimal GUI-only CI collection environments without NumPy do not fail while collecting unrelated GUI tests. Repository-wide Ruff lint and format checks pass, as do Python byte-compilation checks.
 
 A non-capturing live --check run against the current user session also succeeded: Carla node present, B1 expected active, expected links present, pw-top and clock metadata queries successful. This --check does not open microphone taps. It is not a live audio-quality sample or a deployment verification.
 

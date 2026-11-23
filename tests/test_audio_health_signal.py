@@ -5,7 +5,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import numpy as np
+import pytest
+
+np = pytest.importorskip("numpy", reason="signal diagnostics require the optional NumPy dependency")
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -223,3 +225,113 @@ def test_band_level_deltas_expose_processing_chain_high_frequency_attenuation() 
     deltas = result["raw_to_processed"]["band_level_delta_db"]
     assert abs(deltas["250_500_hz"]) < 0.5
     assert deltas["5k_12k_hz"] < -10.0
+
+
+def test_signal_feature_summary_is_json_safe_and_contains_no_waveform() -> None:
+    import json
+
+    samples = _noise(81)
+    result = analyze_signal_features(samples, samples)
+    encoded = json.dumps(result, allow_nan=False)
+    assert "automatic_action" in result
+    assert "samples" not in result
+    assert len(encoded) < 24_000
+    assert "nan" not in encoded.lower()
+
+
+def test_signal_feature_analysis_rejects_invalid_sample_rate() -> None:
+    samples = _noise(82, seconds=1.0)
+    try:
+        analyze_signal_features(samples, samples, sample_rate=0)
+    except ValueError as exc:
+        assert "sample_rate" in str(exc)
+    else:
+        raise AssertionError("invalid sample rate must be rejected")
+
+
+def test_multicue_impulsive_candidate_avoids_near_silence_kurtosis_false_positive() -> None:
+    rate = 48_000
+    rng = np.random.default_rng(91)
+    clean = rng.normal(0.0, 0.0001, 8 * rate)
+    damaged = clean.copy()
+    impulse = 0.15 * np.sin(2 * np.pi * 9000 * np.arange(96) / rate)
+    for start in (1, 2, 3, 4, 5, 6):
+        offset = start * rate + rate // 3
+        damaged[offset : offset + impulse.size] += impulse
+
+    clean_result = analyze_signal_features(clean, clean, rate)
+    damaged_result = analyze_signal_features(damaged, damaged, rate)
+    assert clean_result["raw"]["impulsive_event_candidate"]["candidate"] is False
+    assert damaged_result["raw"]["impulsive_event_candidate"]["candidate"] is True
+    assert damaged_result["impulse_localization"] == "both_points_candidate"
+    assert damaged_result["raw"]["impulsive_event_candidate"]["automatic_action"] == "none"
+
+    quiet = np.zeros(8 * rate, dtype=np.float64)
+    quiet[100] = 0.1
+    quiet_result = analyze_signal_features(quiet, quiet, rate)
+    quiet_candidate = quiet_result["raw"]["impulsive_event_candidate"]
+    assert quiet_candidate["candidate"] is False
+    assert quiet_candidate["cues"]["high_frequency_activity"] is False
+
+
+def test_broadband_impulse_detector_finds_short_multi_band_clicks() -> None:
+    rate = 48_000
+    rng = np.random.default_rng(91)
+    samples = rng.normal(0.0, 0.00002, 8 * rate)
+    impulse_samples = int(rate * 0.0008)
+    envelope = np.exp(-np.arange(impulse_samples) / (rate * 0.00025))
+    impulse = 0.15 * envelope * rng.normal(size=impulse_samples)
+    expected = (1, 3, 5, 7)
+    for second in expected:
+        start = second * rate + rate // 3
+        samples[start : start + impulse_samples] += impulse
+    metrics = analyze_signal_features(samples, samples, rate)["raw"]["broadband_impulses"]
+    assert metrics["candidate_count"] >= 3
+    detected = [item["start_seconds"] for item in metrics["candidate_events"]]
+    assert all(
+        any(abs(time - (second + 1 / 3)) <= 0.03 for time in detected) for second in expected
+    )
+
+
+def test_broadband_impulse_detector_rejects_long_high_frequency_sibilance() -> None:
+    rate = 48_000
+    rng = np.random.default_rng(92)
+    samples = _noise(93)
+    for second in (1, 3, 5, 7):
+        start = second * rate
+        width = int(rate * 0.12)
+        samples[start : start + width] += rng.normal(0.0, 0.002, width)
+    metrics = analyze_signal_features(samples, samples, rate)["raw"]["broadband_impulses"]
+    assert metrics["candidate_count"] == 0
+
+
+def test_broadband_impulse_metrics_localize_processing_only_impulses() -> None:
+    rate = 48_000
+    raw = _noise(94)
+    processed = raw.copy()
+    rng = np.random.default_rng(95)
+    impulse = 0.12 * rng.normal(size=int(rate * 0.001))
+    for second in (1, 3, 5, 7):
+        start = second * rate + rate // 2
+        processed[start : start + impulse.size] += impulse
+    features = analyze_signal_features(raw, processed, rate)
+    assert (
+        features["processed"]["broadband_impulses"]["candidate_count"]
+        > (features["raw"]["broadband_impulses"]["candidate_count"])
+    )
+    assert features["raw_to_processed"]["broadband_impulse_candidate_delta"] > 0
+
+
+def test_broadband_impulse_event_list_is_bounded_while_total_count_is_retained() -> None:
+    rate = 48_000
+    rng = np.random.default_rng(96)
+    samples = rng.normal(0.0, 0.00002, 8 * rate)
+    impulse = 0.15 * rng.normal(size=int(rate * 0.0008))
+    for start_ms in range(200, 7800, 150):
+        offset = int(start_ms * rate / 1000)
+        samples[offset : offset + impulse.size] += impulse
+    metrics = analyze_signal_features(samples, samples, rate)["raw"]["broadband_impulses"]
+    assert metrics["candidate_count"] > 24
+    assert len(metrics["candidate_events"]) == 24
+    assert metrics["candidate_truncated"] is True
+    assert metrics["candidate_rate_per_second"] > 0.0

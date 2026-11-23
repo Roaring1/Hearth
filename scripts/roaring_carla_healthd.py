@@ -1152,6 +1152,26 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
         tone_scope = signal_features.get("tone_localization")
         raw_tones = signal_features.get("raw", {}).get("persistent_tones", [])
         processed_tones = signal_features.get("processed", {}).get("persistent_tones", [])
+        raw_impulses = signal_features.get("raw", {}).get("broadband_impulses", {})
+        processed_impulses = signal_features.get("processed", {}).get("broadband_impulses", {})
+        raw_integrity = signal_features.get("integrity", {}).get("raw", {})
+        processed_integrity = signal_features.get("integrity", {}).get("processed", {})
+        LOG.info(
+            "signal metrics (measurement only): tones=%s raw_impulses=%s/%.2fHz "
+            "processed_impulses=%s/%.2fHz hf_kurtosis=%.2f/%.2f "
+            "nonfinite=%s/%s",
+            tone_scope,
+            raw_impulses.get("candidate_count", 0),
+            raw_impulses.get("candidate_rate_per_second", 0.0),
+            processed_impulses.get("candidate_count", 0),
+            processed_impulses.get("candidate_rate_per_second", 0.0),
+            signal_features.get("raw", {}).get("transients", {}).get("hf_excess_kurtosis", 0.0),
+            signal_features.get("processed", {})
+            .get("transients", {})
+            .get("hf_excess_kurtosis", 0.0),
+            raw_integrity.get("nonfinite_samples", 0),
+            processed_integrity.get("nonfinite_samples", 0),
+        )
         if raw_tones or processed_tones:
             LOG.warning(
                 "persistent spectral-line candidates (measurement only): "
@@ -1159,6 +1179,17 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
                 tone_scope,
                 raw_tones,
                 processed_tones,
+            )
+        impulse_scope = signal_features.get("impulse_localization", "no_candidate")
+        raw_impulse = signal_features.get("raw", {}).get("impulsive_event_candidate", {})
+        post_impulse = signal_features.get("processed", {}).get("impulsive_event_candidate", {})
+        if impulse_scope != "no_candidate":
+            LOG.warning(
+                "high-frequency impulsive-event candidate (heuristic only, no action): "
+                "localization=%s raw_cues=%s processed_cues=%s",
+                impulse_scope,
+                raw_impulse.get("cues"),
+                post_impulse.get("cues"),
             )
     if isinstance(transport, dict):
         during = transport.get("during_sample", {})
