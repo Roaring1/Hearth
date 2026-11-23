@@ -99,3 +99,22 @@ def test_unpaired_tail_bytes_are_reported_per_tap_without_audio_content() -> Non
     assert result["processed"]["unpaired_tail_frames"] == 512
     assert result["processed"]["unpaired_tail_partial_sample_bytes"] == 0
     assert "audio" not in result
+
+
+def test_stereo_tap_frame_accounting_uses_eight_bytes_per_frame() -> None:
+    diagnostics = StreamReadDiagnostics(("raw", "processed", "processed_stereo"))
+    diagnostics.observe_read("processed_stereo", 38_400, 1.0)
+    diagnostics.record_buffer_overflow("processed_stereo", 16)
+    diagnostics.record_unpaired_tail("processed_stereo", 12)
+    summary = diagnostics.summary(
+        48_000,
+        4,
+        frame_bytes_by_device={"processed_stereo": 8},
+    )
+    stereo = summary["processed_stereo"]
+    assert stereo["frames_received"] == 4_800
+    assert stereo["frame_bytes"] == 8
+    assert stereo["trailing_partial_frame_bytes"] == 0
+    assert stereo["buffer_overflow_frames"] == 2
+    assert stereo["unpaired_tail_frames"] == 1
+    assert stereo["unpaired_tail_partial_frame_bytes"] == 4

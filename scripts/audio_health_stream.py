@@ -94,9 +94,16 @@ class StreamReadDiagnostics:
         else:
             self._both_repeat_streak = 0
 
-    def summary(self, sample_rate: int, sample_bytes: int = 4) -> dict[str, Any]:
+    def summary(
+        self,
+        sample_rate: int,
+        sample_bytes: int = 4,
+        *,
+        frame_bytes_by_device: dict[str, int] | None = None,
+    ) -> dict[str, Any]:
         if sample_bytes < 1:
             raise ValueError("sample_bytes must be at least one byte")
+        frame_bytes_by_device = frame_bytes_by_device or {}
         result: dict[str, Any] = {
             "sample_rate": int(sample_rate),
             "sample_bytes": int(sample_bytes),
@@ -118,18 +125,26 @@ class StreamReadDiagnostics:
         }
         for name, state in self._devices.items():
             bytes_received = int(state["bytes_received"])
+            frame_bytes = int(frame_bytes_by_device.get(name, sample_bytes))
+            if frame_bytes < 1:
+                raise ValueError(f"frame byte width for {name} must be at least one")
+            overflow_bytes = int(state["buffer_overflow_bytes"])
+            tail_bytes = int(state["unpaired_tail_bytes"])
             result[name] = {
                 "read_calls": state["read_calls"],
                 "bytes_received": bytes_received,
-                "frames_received": bytes_received // sample_bytes,
+                "frames_received": bytes_received // frame_bytes,
+                "frame_bytes": frame_bytes,
                 "trailing_partial_sample_bytes": bytes_received % sample_bytes,
+                "trailing_partial_frame_bytes": bytes_received % frame_bytes,
                 "max_inter_read_gap_ms": round(float(state["max_inter_read_gap_ms"]), 3),
                 "read_gaps_over_250ms": state["read_gaps_over_250ms"],
                 "buffer_overflow_bytes": state["buffer_overflow_bytes"],
-                "buffer_overflow_frames": state["buffer_overflow_bytes"] // sample_bytes,
-                "unpaired_tail_bytes": state["unpaired_tail_bytes"],
-                "unpaired_tail_frames": state["unpaired_tail_bytes"] // sample_bytes,
-                "unpaired_tail_partial_sample_bytes": state["unpaired_tail_bytes"] % sample_bytes,
+                "buffer_overflow_frames": overflow_bytes // frame_bytes,
+                "unpaired_tail_bytes": tail_bytes,
+                "unpaired_tail_frames": tail_bytes // frame_bytes,
+                "unpaired_tail_partial_sample_bytes": tail_bytes % sample_bytes,
+                "unpaired_tail_partial_frame_bytes": tail_bytes % frame_bytes,
             }
         result["automatic_action"] = "none"
         return result
