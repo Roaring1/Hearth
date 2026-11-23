@@ -61,6 +61,58 @@ sink. It does not use a substring match for destructive operations; for example,
 `vm_game.monitor-extra` is not considered the same source as
 `vm_game.monitor`.
 
+## Route guardian health contract (2026-11-19)
+
+The normal desktop output destination is the explicitly configured Astro A50
+Chat sink. The route guardian must fail closed if that exact sink is absent;
+it must never select another device by a generic `Astro` name or description.
+Astro Game is a separate spatialized endpoint and is not an automatic fallback.
+
+A module row is not proof that audio is connected. A healthy VM output route
+requires all four PipeWire edges through one loopback node: monitor FL to
+loopback input FL, monitor FR to loopback input FR, loopback output FL to the
+configured Chat playback FL, and loopback output FR to Chat playback FR.
+
+Health is classified as `healthy`, `degraded`, `unknown`, or `unavailable`.
+Only a positively observed `degraded` graph may be eligible for targeted
+repair. A failed `pw-link`/sink inventory query is `unknown`, not a missing
+route; an explicitly absent configured Chat sink is `unavailable`. Neither
+state authorizes automatic repair or endpoint substitution. Recovery must be
+idempotent and scoped to one exact VM source and the configured Chat sink. It
+must not change default output, bus gain/mute, microphone routes, Carla, or
+Screen Share.
+
+The repository now contains three staged pieces:
+
+- A pure four-edge verifier and conservative recovery planner in
+  `src/hearth/audio/route_health.py`.
+- A one-shot `src/hearth/audio/route_guard.py` that can create one exact
+  missing loopback or reconnect only missing edges when the inventory proves
+  a single, unambiguous owner. Unknown, unavailable, duplicate and
+  unidentifiable routes are not repaired. Per-route cooldown state is private,
+  atomically written, and refuses symlinked, hard-linked, foreign-owned or
+  malformed state.
+- A proposed replacement `scripts/roaring_audio_routesd.sh` that retains the
+  exact Astro Chat target policy and asks the typed guardian to verify the
+  actual graph on its existing five-second loop.
+
+The code has fixture-backed unit coverage and an opt-in integration test that
+starts a disposable PipeWire, PipeWire-Pulse and WirePlumber stack in a private
+temporary runtime with hardware monitors disabled. That isolated integration
+test passed on 2026-11-23.
+
+**Deployment boundary:** these files are staged source only. The proposed
+script has not been installed over the live daemon, the existing user unit has
+not been edited, and no service, PipeWire link, default sink, volume, mute,
+microphone route or Carla session was changed. The UI health hint is advisory;
+the UI itself does not repair anything.
+
+WirePlumber restart propagation (for example, a carefully ordered
+`PartOf=wireplumber.service` relationship), debouncing, retry policy review,
+and any production-unit migration remain separate work. Do not deploy this
+branch until the integration and lifecycle design have been reviewed against
+the exact installed unit and live configuration.
+
 ## Microphone inputs
 
 The raw microphone router daemon reads

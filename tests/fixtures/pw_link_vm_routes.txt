@@ -1,0 +1,44 @@
+vm_game:monitor_FL
+  |-> input.loopback-421-13:input_FL
+vm_game:monitor_FR
+  |-> input.loopback-421-13:input_FR
+vm_chat:monitor_FL
+  |-> input.loopback-421-14:input_FL
+vm_chat:monitor_FR
+  |-> input.loopback-421-14:input_FR
+vm_music:monitor_FL
+  |-> input.loopback-421-15:input_FL
+vm_music:monitor_FR
+  |-> input.loopback-421-15:input_FR
+alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FL
+  |<- output.loopback-421-13:output_FL
+  |<- output.loopback-421-14:output_FL
+  |<- output.loopback-421-15:output_FL
+alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FR
+  |<- output.loopback-421-13:output_FR
+  |<- output.loopback-421-14:output_FR
+  |<- output.loopback-421-15:output_FR
+output.loopback-421-13:output_FL
+  |-> alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FL
+output.loopback-421-13:output_FR
+  |-> alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FR
+input.loopback-421-13:input_FL
+  |<- vm_game:monitor_FL
+input.loopback-421-13:input_FR
+  |<- vm_game:monitor_FR
+output.loopback-421-14:output_FL
+  |-> alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FL
+output.loopback-421-14:output_FR
+  |-> alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FR
+input.loopback-421-14:input_FL
+  |<- vm_chat:monitor_FL
+input.loopback-421-14:input_FR
+  |<- vm_chat:monitor_FR
+output.loopback-421-15:output_FL
+  |-> alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FL
+output.loopback-421-15:output_FR
+  |-> alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat:playback_FR
+input.loopback-421-15:input_FL
+  |<- vm_music:monitor_FL
+input.loopback-421-15:input_FR
+  |<- vm_music:monitor_FR

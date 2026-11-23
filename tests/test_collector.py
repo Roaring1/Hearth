@@ -8,6 +8,7 @@ import threading
 import pytest
 
 from hearth import collector
+from hearth.audio.route_health import RouteState
 from hearth.errors import CommandError
 
 
@@ -134,6 +135,13 @@ def test_collect_builds_route_graph_off_the_ui_thread(
         return modules
 
     monkeypatch.setattr(collector.pactl, "modules", read_modules)
+    monkeypatch.setattr(
+        collector.proc,
+        "run",
+        lambda argv, **kwargs: type(
+            "Result", (), {"stdout": fixture_text("pw_link_vm_routes.txt")}
+        )(),
+    )
     monkeypatch.setattr(collector.services, "states", lambda _units: {})
     monkeypatch.setattr(collector.pactl, "server_version", lambda: "1.4.11")
     monkeypatch.setattr(collector.pactl, "default_sink", lambda: "vm_game")
@@ -145,6 +153,13 @@ def test_collect_builds_route_graph_off_the_ui_thread(
     for loop in collector.pactl.select_loopbacks(modules):
         expected.setdefault(loop.source, set()).add(loop.sink)
     assert snapshot.routes == expected
+    assert snapshot.route_health is not None
+    for source in ("vm_game.monitor", "vm_chat.monitor", "vm_music.monitor"):
+        health = snapshot.route_health[source][
+            "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"
+        ]
+        assert health.state is RouteState.HEALTHY
+        assert health.verified_links == 4
     assert module_options == {"strict": True, "timeout": 0.75}
     # The parsed sink inventory already carries hardware mute state, avoiding
     # additional per-output mute commands from the GTK callback.
@@ -174,6 +189,114 @@ def test_optional_route_query_failure_marks_routes_unknown_but_keeps_snapshot(
 
     assert snapshot.sinks
     assert snapshot.routes is None
+    assert snapshot.route_health is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Linux-only PipeWire route collector")
+def test_collect_marks_route_health_unknown_when_pw_link_query_fails(
+    monkeypatch: pytest.MonkeyPatch, fixture_text
+) -> None:
+    outputs = {
+        ("list", "sinks"): fixture_text("pactl_sinks.txt"),
+        ("list", "sink-inputs"): fixture_text("pactl_sink_inputs.txt"),
+        ("list", "short", "sources"): fixture_text("pactl_short_sources.txt"),
+    }
+    monkeypatch.setattr(collector.pactl, "raw_checked", lambda *args: outputs[args])
+    modules = collector.pactl.parse_modules(fixture_text("pactl_short_modules.txt"))
+    monkeypatch.setattr(collector.pactl, "modules", lambda **_kwargs: modules)
+
+    def failed_links(*_args, **_kwargs):
+        raise CommandError(["pw-link", "-iol"], stderr="PipeWire graph query timed out")
+
+    monkeypatch.setattr(collector.proc, "run", failed_links)
+    monkeypatch.setattr(collector.services, "states", lambda _units: {})
+    monkeypatch.setattr(collector.pactl, "server_version", lambda: "")
+    monkeypatch.setattr(collector.pactl, "default_sink", lambda: "")
+
+    snapshot = collector.collect([])
+
+    assert snapshot.routes is not None
+    assert snapshot.route_health is None
+
+
+def test_build_route_health_marks_partial_stereo_link_degraded(fixture_text):
+    modules = collector.pactl.parse_modules(fixture_text("pactl_short_modules.txt"))
+    graph = (
+        fixture_text("pw_link_vm_routes.txt")
+        .replace("  |-> input.loopback-421-13:input_FR\n", "")
+        .replace("  |<- vm_game:monitor_FR\n", "")
+    )
+    health = collector.build_route_health(
+        modules,
+        graph,
+        {
+            "vm_game",
+            "vm_chat",
+            "vm_music",
+            "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat",
+        },
+    )
+    game = health["vm_game.monitor"]["alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"]
+    # Missing a source-side edge retains the identified loopback but is not healthy.
+    assert game.state is RouteState.DEGRADED
+    assert game.verified_links == 3
+    # The other two buses sharing Astro Chat do not affect this route's result.
+    assert (
+        health["vm_chat.monitor"]["alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"].state
+        is RouteState.HEALTHY
+    )
+
+
+def test_build_route_health_keeps_empty_pipewire_inventory_unknown(fixture_text):
+    modules = collector.pactl.parse_modules(fixture_text("pactl_short_modules.txt"))
+    health = collector.build_route_health(
+        modules,
+        "",
+        {"vm_game", "vm_chat", "vm_music", "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"},
+    )
+    assert (
+        health["vm_game.monitor"]["alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"].state
+        is RouteState.UNKNOWN
+    )
+
+
+def test_build_route_health_marks_duplicate_modules_unknown(fixture_text):
+    modules = collector.pactl.parse_modules(fixture_text("pactl_short_modules.txt"))
+    duplicate = next(
+        item
+        for item in modules
+        if item.name == "module-loopback" and item.arg("source") == "vm_game.monitor"
+    )
+    health = collector.build_route_health(
+        [*modules, duplicate],
+        fixture_text("pw_link_vm_routes.txt"),
+        {"vm_game", "vm_chat", "vm_music", "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"},
+    )
+    game = health["vm_game.monitor"]["alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"]
+    assert game.state is RouteState.UNKNOWN
+    assert "ownership is ambiguous" in game.detail
+
+
+def test_build_route_health_marks_missing_sink_unavailable_even_with_empty_graph(fixture_text):
+    modules = collector.pactl.parse_modules(fixture_text("pactl_short_modules.txt"))
+    health = collector.build_route_health(
+        modules,
+        "",
+        {"vm_game", "vm_chat", "vm_music"},
+    )
+    game = health["vm_game.monitor"]["alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"]
+    assert game.state is RouteState.UNAVAILABLE
+
+
+def test_build_route_health_marks_missing_sink_unavailable(fixture_text):
+    modules = collector.pactl.parse_modules(fixture_text("pactl_short_modules.txt"))
+    health = collector.build_route_health(
+        modules,
+        fixture_text("pw_link_vm_routes.txt"),
+        {"vm_game", "vm_chat", "vm_music"},
+    )
+    game = health["vm_game.monitor"]["alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"]
+    assert game.state is RouteState.UNAVAILABLE
 
 
 def test_collector_thread_delivers_and_stops(monkeypatch):
