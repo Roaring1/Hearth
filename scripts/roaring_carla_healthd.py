@@ -25,6 +25,7 @@ from collections.abc import Callable, Sequence
 from contextlib import suppress
 
 import numpy as np
+from audio_health_signal import analyze_signal_features
 from audio_health_transport import (
     compare_snapshots,
     snapshot_for_state,
@@ -975,6 +976,10 @@ def capture_sample(seconds: float = 8.0) -> dict:
     raw_levels: list[float] = []
     post_levels: list[float] = []
     correlations: list[float] = []
+    # Retain only this bounded 3-20 second sample in process memory so
+    # sub-second blocks can be combined for low-frequency spectral resolution.
+    feature_raw_chunks: list[np.ndarray] = []
+    feature_post_chunks: list[np.ndarray] = []
     active_windows = valid_windows = candidate_windows = dropout_windows = 0
     tracker = QualityTracker()
     fault_confirmed = False
@@ -1022,6 +1027,8 @@ def capture_sample(seconds: float = 8.0) -> dict:
                 capture_error = "a microphone capture process exited"
                 break
             for raw, processed in _drain_aligned_blocks(buffers, BLOCK_FRAMES):
+                feature_raw_chunks.append(np.asarray(raw, dtype=np.float32))
+                feature_post_chunks.append(np.asarray(processed, dtype=np.float32))
                 result = analyze_pair(raw, processed)
                 raw_rms = float(result.get("raw_rms", 0.0))
                 post_rms = float(result.get("post_rms", 0.0))
@@ -1056,8 +1063,21 @@ def capture_sample(seconds: float = 8.0) -> dict:
                 proc.wait()
         selector.close()
 
+    signal_features: dict | None = None
+    if not muted_during_capture and feature_raw_chunks and feature_post_chunks:
+        try:
+            signal_features = analyze_signal_features(
+                np.concatenate(feature_raw_chunks),
+                np.concatenate(feature_post_chunks),
+                RATE,
+            )
+        except (FloatingPointError, ValueError, TypeError, OverflowError) as exc:
+            LOG.exception("signal feature extraction failed; preserving primary sample: %s", exc)
+
     summary = {
         "sample_seconds": round(time.monotonic() - start, 2),
+        "diagnostic_scope": "raw_vs_b1; transient_dropout_plus_measurement_only_spectral_features",
+        "signal_features": signal_features,
         "windows": len(raw_levels),
         "active_windows": active_windows,
         "valid_windows": valid_windows,
@@ -1127,6 +1147,19 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
     )
     state["scheduled_transport_snapshot"] = transport_baseline
     transport = first.get("transport", {})
+    signal_features = first.get("signal_features")
+    if isinstance(signal_features, dict):
+        tone_scope = signal_features.get("tone_localization")
+        raw_tones = signal_features.get("raw", {}).get("persistent_tones", [])
+        processed_tones = signal_features.get("processed", {}).get("persistent_tones", [])
+        if raw_tones or processed_tones:
+            LOG.warning(
+                "persistent spectral-line candidates (measurement only): "
+                "localization=%s raw=%s processed=%s",
+                tone_scope,
+                raw_tones,
+                processed_tones,
+            )
     if isinstance(transport, dict):
         during = transport.get("during_sample", {})
         interval = transport.get("since_previous_sample", {})
