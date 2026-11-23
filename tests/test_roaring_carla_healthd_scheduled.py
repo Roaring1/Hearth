@@ -15,7 +15,10 @@ try:
 except ImportError:
     # The scheduled-path test exercises orchestration, not NumPy DSP routines.
     # Production installs provide NumPy; CI's core test extra intentionally does not.
-    sys.modules["numpy"] = types.ModuleType("numpy")
+    numpy_stub = types.ModuleType("numpy")
+    numpy_stub.asarray = lambda values, dtype=None: values
+    numpy_stub.float64 = float
+    sys.modules["numpy"] = numpy_stub
 healthd = importlib.import_module("roaring_carla_healthd")
 
 
@@ -223,3 +226,8 @@ def test_exact_ninety_percent_coverage_is_the_minimum_accepted_boundary() -> Non
     }
     verdict, _ = healthd.classify_sample(summary)
     assert verdict == "CORRECT"
+
+
+def test_alignment_lag_summary_uses_median_and_mad_not_mean() -> None:
+    assert healthd._alignment_lag_summary([10, 11, 10, 9, 3000]) == (10, 1.0, 5)
+    assert healthd._alignment_lag_summary([]) == (None, None, 0)

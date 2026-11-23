@@ -18,6 +18,7 @@ import pathlib
 import re
 import selectors
 import signal
+import statistics
 import subprocess
 import sys
 import time
@@ -918,6 +919,15 @@ def _percentile(values: list[float], fraction: float) -> float | None:
     return round(float(ordered[index]), 7)
 
 
+def _alignment_lag_summary(lags: Sequence[int]) -> tuple[int | None, float | None, int]:
+    """Return median lag, median absolute deviation and count for valid paired windows."""
+    if not lags:
+        return None, None, 0
+    median_lag = float(statistics.median(lags))
+    lag_mad = float(statistics.median(abs(float(value) - median_lag) for value in lags))
+    return round(median_lag), round(lag_mad, 2), len(lags)
+
+
 def _capture_coverage(
     seconds: float,
     raw_chunks: Sequence[np.ndarray],
@@ -1005,6 +1015,7 @@ def capture_sample(seconds: float = 8.0) -> dict:
     raw_levels: list[float] = []
     post_levels: list[float] = []
     correlations: list[float] = []
+    alignment_lags: list[int] = []
     # Retain only this bounded 3-20 second sample in process memory so
     # sub-second blocks can be combined for low-frequency spectral resolution.
     feature_raw_chunks: list[np.ndarray] = []
@@ -1081,6 +1092,10 @@ def capture_sample(seconds: float = 8.0) -> dict:
                 raw_levels.append(raw_rms)
                 post_levels.append(post_rms)
                 correlations.append(correlation)
+                if bool(result.get("valid")) and isinstance(
+                    result.get("lag_samples"), (int, float)
+                ):
+                    alignment_lags.append(int(result["lag_samples"]))
                 if raw_rms >= RAW_ACTIVITY_RMS_FLOOR:
                     active_windows += 1
                 if bool(result.get("valid")):
@@ -1111,6 +1126,7 @@ def capture_sample(seconds: float = 8.0) -> dict:
     stream_diagnostics.record_unpaired_tail("raw", len(buffers[RAW_SOURCE]))
     stream_diagnostics.record_unpaired_tail("processed", len(buffers[PROCESSED_SOURCE]))
 
+    lag_p50, lag_mad, lag_count = _alignment_lag_summary(alignment_lags)
     signal_features: dict | None = None
     if not muted_during_capture and feature_raw_chunks and feature_post_chunks:
         try:
@@ -1118,6 +1134,9 @@ def capture_sample(seconds: float = 8.0) -> dict:
                 np.concatenate(feature_raw_chunks),
                 np.concatenate(feature_post_chunks),
                 RATE,
+                alignment_lag_samples=lag_p50,
+                alignment_lag_mad_samples=lag_mad,
+                alignment_lag_observations=lag_count,
             )
         except (FloatingPointError, ValueError, TypeError, OverflowError) as exc:
             LOG.exception("signal feature extraction failed; preserving primary sample: %s", exc)
@@ -1144,6 +1163,9 @@ def capture_sample(seconds: float = 8.0) -> dict:
         "post_rms_p90": _percentile(post_levels, 0.90),
         "post_rms_p99": _percentile(post_levels, 0.99),
         "correlation_p50": _percentile(correlations, 0.50),
+        "alignment_lag_samples_p50": lag_p50,
+        "alignment_lag_samples_mad": round(lag_mad, 2) if lag_mad is not None else None,
+        "alignment_lag_observations": lag_count,
         "capture_error": capture_error,
         "muted": muted_during_capture,
     }
@@ -1277,6 +1299,19 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
                 raw_impulse.get("cues"),
                 post_impulse.get("cues"),
             )
+        event_match = signal_features.get("impulse_event_time_matching", {})
+        LOG.info(
+            "transient event timing (diagnostic only): status=%s matched=%s "
+            "raw_unmatched=%s processed_unmatched=%s lag_samples=%s lag_mad=%s "
+            "observations=%s",
+            event_match.get("status"),
+            event_match.get("matched_count"),
+            event_match.get("raw_unmatched_count"),
+            event_match.get("processed_unmatched_count"),
+            event_match.get("alignment_lag_samples"),
+            event_match.get("alignment_lag_mad_samples"),
+            event_match.get("alignment_lag_observations"),
+        )
     if isinstance(transport, dict):
         during = transport.get("during_sample", {})
         interval = transport.get("since_previous_sample", {})
