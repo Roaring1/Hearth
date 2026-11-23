@@ -9,7 +9,8 @@ It is the GUI head of a Voicemeeter-style setup:
 - five virtual output buses — **GAME**, **CHAT**, **MUSIC**, **SHARE**
   (screen-share audio, deliberately excluding chat so the far end never
   hears itself) and **LAPTOP**
-- two mic buses — B1 (stream/OBS) and B2 (Discord/Moonlight)
+- two mic buses — B1 (default Discord microphone) and B2 (alternate microphone);
+  neither is screen-share audio
 - an Astro A50 headset with independent `stereo-chat` / `stereo-game` targets
 - a Focusrite interface for monitor speakers, with optional room correction
 - an AKAI LPD8 as a hardware control surface
@@ -35,6 +36,10 @@ Wayland**. Nothing is Nobara-specific; any PipeWire desktop should work.
 - **LPD8 Controls** — inspect and remap all eight pads and knobs; live control
   state is reflected from the mixer snapshot. Hotplug recovery is handled by
   the rig’s companion watcher, when installed.
+- **Screen Share overview** — a visible SCREEN SHARE entry opens a separate
+  setup guide, and SET UP on the mixer strip opens the same window. It explains
+  the Hearth/Vesktop workflow; capture device discovery and active capture are
+  still in development.
 - **Single instance + IPC** — a second launch focuses the running window
   instead of starting a rival process.
 - **Status report** — `hearth --status` prints a plain-language report on the
@@ -115,6 +120,14 @@ shim kept so existing symlinks and launchers keep working.)
 For live routing behavior, including the mic-router config authority, exact
 loopback matching, and what happens when a route command fails, see
 [`docs/AUDIO_ROUTING.md`](docs/AUDIO_ROUTING.md).
+
+The **SCREEN SHARE** mixer strip is a separate master bus for the future
+capture workflow. At this checkpoint, Vesktop's saved audio selection still
+sends its selected sources directly; the Screen Share fader is **not yet
+connected to the audio Vesktop receives**. The overview shows saved selection
+intent and does not change routing. See
+[`docs/CAPTURE_MODE_OVERVIEW.md`](docs/CAPTURE_MODE_OVERVIEW.md) for the current
+UI plan, scope boundaries and no-card work order.
 
 ---
 
