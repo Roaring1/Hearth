@@ -192,6 +192,7 @@ def test_optional_route_query_failure_marks_routes_unknown_but_keeps_snapshot(
     assert snapshot.route_health is None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux-only PipeWire route collector")
 def test_collect_marks_route_health_unknown_when_pw_link_query_fails(
     monkeypatch: pytest.MonkeyPatch, fixture_text
 ) -> None:

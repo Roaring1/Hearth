@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+import pytest
 
 from hearth.audio.pactl import Module
 from hearth.audio.route_guard import InventoryError, check_and_recover
@@ -47,6 +50,7 @@ def _module(index: int = 1) -> Module:
     )
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux/PipeWire route recovery")
 def test_missing_module_creates_one_exact_route_and_respects_cooldown(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -87,6 +91,7 @@ def test_missing_module_creates_one_exact_route_and_respects_cooldown(
     assert state.stat().st_mode & 0o777 == 0o600
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux/PipeWire route recovery")
 def test_existing_module_repairs_only_the_exact_missing_edge(monkeypatch, tmp_path: Path) -> None:
     inventories = iter(
         (
@@ -116,6 +121,7 @@ def test_existing_module_repairs_only_the_exact_missing_edge(monkeypatch, tmp_pa
     assert "reconnected 1 missing link" in result[0]
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux/PipeWire inventory")
 def test_inventory_failure_is_unknown_and_never_mutates(monkeypatch, tmp_path: Path) -> None:
     commands: list[tuple[str, ...]] = []
 
@@ -162,6 +168,7 @@ def test_missing_chat_sink_is_unavailable_and_never_mutates(monkeypatch, tmp_pat
     assert calls == []
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux/PipeWire module ownership")
 def test_duplicate_module_ownership_is_unknown_and_not_repaired(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -204,6 +211,7 @@ def test_state_reader_refuses_symlinks_and_preserves_target(tmp_path: Path) -> N
     assert target.read_text(encoding="utf-8") == '{"vm_game|astro.chat": 123.0}'
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="POSIX hard-link ownership semantics")
 def test_state_reader_refuses_hard_links(tmp_path: Path) -> None:
     import os
 
@@ -222,6 +230,7 @@ def test_state_reader_refuses_hard_links(tmp_path: Path) -> None:
         raise AssertionError("hard-linked cooldown state must be refused")
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="POSIX-owned private cooldown state")
 def test_corrupt_state_fails_closed_instead_of_resetting_cooldown(tmp_path: Path) -> None:
     from hearth.audio.route_guard import _load_attempts
 
@@ -236,6 +245,7 @@ def test_corrupt_state_fails_closed_instead_of_resetting_cooldown(tmp_path: Path
         raise AssertionError("corrupt cooldown state must not be treated as empty")
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux/POSIX route guardian state")
 def test_guard_refuses_state_symlink_before_collect_or_mutation(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -267,6 +277,7 @@ def test_guard_refuses_state_symlink_before_collect_or_mutation(
     assert target.read_text(encoding="utf-8") == "{}"
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux/POSIX route guardian lock")
 def test_guard_refuses_symlinked_lock_before_collect_or_mutation(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -326,6 +337,7 @@ def test_guard_refuses_non_linux_before_state_or_graph_access(monkeypatch, tmp_p
     assert not state.parent.exists()
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux/POSIX route guardian lock")
 def test_guard_refuses_hard_linked_lock_before_collect_or_mutation(
     monkeypatch, tmp_path: Path
 ) -> None:

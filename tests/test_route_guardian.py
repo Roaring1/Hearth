@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    sys.platform != "linux", reason="Linux/Bash/PipeWire route guardian integration"
+)
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "roaring_audio_routesd.sh"
 
