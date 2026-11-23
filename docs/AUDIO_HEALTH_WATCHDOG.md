@@ -26,6 +26,11 @@ The new scheduled path takes bounded transport snapshots immediately before and 
 
 The capture remains short-lived and mute-gated. This helper persists only a small allowlist of bounded graph metadata and never receives PCM buffers.
 
+
+The scheduled capture also records stream-read metadata: read calls and bytes per tap, maximum inter-read gap, gaps over 250 ms, bytes discarded when the bounded capture buffer overflows, exact repeated aligned 100 ms window fingerprints and repeat streaks. Only short BLAKE2s digests and counters are retained; PCM itself is not written or persisted. Identical audio windows can occur legitimately (periodic tones, silence or steady signals), so repeat counters are evidence for review, not a standalone frozen-stream verdict.
+
+The classifier also requires **at least 75% paired raw/post PCM coverage** of the requested sample duration. Coverage uses the lesser of the raw and processed sample counts. If either tap provides too little data, the result is INCONCLUSIVE before evaluating a fault or healthy verdict. This prevents a small set of valid received windows from making a badly truncated sample look healthy, and prevents incomplete evidence from triggering Carla recovery.
+
 ## Counter semantics
 
 pw-top ERR is cumulative for a node. An increase is meaningful only when the node identity is the same. Therefore:
@@ -55,7 +60,9 @@ This is intentionally conservative. It does not itself change quantum, restart P
 
 - scripts/roaring_carla_healthd.py: repository-owned daemon copy with scheduled transport snapshots.
 - scripts/audio_health_transport.py: parser, state sanitizer and identity-safe snapshot comparator.
+- scripts/audio_health_stream.py: bounded per-tap read cadence, overflow and repeated-window diagnostics.
 - tests/test_audio_health_transport.py: transport helper tests.
+- tests/test_audio_health_stream.py: read cadence, overflow, repeated-window and no-fake-data tests.
 - tests/test_audio_health_signal.py: synthetic tone, noise, impulse, integrity and localization tests.
 - tests/test_roaring_carla_healthd_scheduled.py: scheduled-cycle integration and restart-conflict tests.
 
@@ -79,6 +86,7 @@ The measurement-only summary contains:
 - A heuristic multi-cue high-frequency impulsive-event candidate. It requires all of: HF RMS at least -55 dBFS, HF peak at least -35 dBFS, HF crest at least 27 dB, 5 kHz+ excess kurtosis at least 80 and high-frequency energy share at least 0.5%. The candidate is separately reported for raw and B1 and logged with its cue evidence. It is **not a click/crackle classifier** and cannot trigger a restart or notification.
 - Sample peak and near-full-scale fraction, separate from true-peak or analog-overload claims.
 - Sample-integrity counts for NaN/Inf values, long exact-zero runs, repeated nonzero sample plateaus and full-scale sample plateaus. The integrity pass preserves timing positions across non-finite samples. Long zero runs may be ordinary silence or an intentional gate; these are measurements, not faults.
+- Stream-read diagnostics: per-source read-call and byte counts, maximum time between successful reads, gaps exceeding 250 ms, bytes discarded when the aligned PCM buffer exceeds its 600 ms cap, and exact repeated adjacent 100 ms block fingerprints for raw and processed streams. Only 8-byte digests and counters are retained, not audio data. Repeating identical blocks can be normal for periodic tones or steady signals, so these are indicators only and never a verdict or repair trigger.
 - Raw-to-processed band-level changes, which quantify frequency attenuation or boosts within each measured band.
 
 All these results currently have automatic_action: none. They are measurements only. Zero-run and full-scale plateau counts are not automatic faults either: digital silence may be intentional, and a plateau requires context from the preceding/following samples and capture point. The transient frame event count is not a crackle verdict: on the actual labelled recordings it did not consistently rank the bad reference above the good one. The old user-described scratch/crackle reference did have much higher 5 kHz+ excess kurtosis (196.84 vs 34.96) and high-frequency energy share (0.856% vs 0.336%) than the user-confirmed clean reference, but the browser Opus takes differ. These are useful calibration evidence, not universal thresholds.
@@ -109,7 +117,7 @@ Each 30-second file took approximately 0.85-0.95 seconds for the complete featur
 
 ## Deployment contract - not yet performed
 
-The daemon and its two helpers must be installed together into the same directory, because the daemon imports audio_health_transport and audio_health_signal as sibling modules. Installing only the daemon will fail at import time.
+The daemon and its three helpers must be installed together into the same directory, because the daemon imports audio_health_transport, audio_health_signal and audio_health_stream as sibling modules. Installing only the daemon will fail at import time.
 
 Before a later deployment:
 
@@ -117,14 +125,15 @@ Before a later deployment:
    - ~/bin/roaring_carla_healthd.py
    - ~/bin/audio_health_transport.py (if it already exists).
    - ~/bin/audio_health_signal.py (if it already exists).
-2. Copy the daemon and both helper modules atomically or via a temporary staging directory, preserve executable mode for the daemon, and ensure user ownership.
+   - ~/bin/audio_health_stream.py (if it already exists).
+2. Copy the daemon and all three helper modules atomically or via a temporary staging directory, preserve executable mode for the daemon, and ensure user ownership.
 3. Run Python byte-compilation and --help from the target directory as a non-capturing smoke test.
 4. Initially run a shadow/diagnostic cycle with AUTO_RECOVER=0; do not enable restart action while validating new transport classifications.
-5. Inspect JSON history and logs. Confirm same-node deltas, resets, node recreation, unavailable queries, metadata failures and the new signal-feature fields are classified as designed.
+5. Inspect JSON history and logs. Confirm same-node deltas, resets, node recreation, unavailable queries, metadata failures, stream-read summaries, paired-frame coverage and signal-feature fields are classified as designed.
 6. Only after review, consider restoring the existing AUTO_RECOVER policy. The transport-conflict guard still applies.
 7. Verify the next scheduled cycle and inspect its persisted transport fields before considering deployment complete.
 
-Never replace the active script without both helpers alongside it. Keep all old files available for immediate file-level rollback. Do not restart PipeWire or WirePlumber as part of installing this detector.
+Never replace the active script without all three helpers alongside it. Keep all old files available for immediate file-level rollback. Do not restart PipeWire or WirePlumber as part of installing this detector.
 
 ## Validation
 
@@ -132,19 +141,19 @@ The change is tested without requiring a live PipeWire graph. Tests mock the sch
 
 Run:
 
-    ruff check scripts/audio_health_signal.py scripts/audio_health_transport.py scripts/roaring_carla_healthd.py tests/test_audio_health_signal.py tests/test_audio_health_transport.py tests/test_roaring_carla_healthd_scheduled.py
-    ruff format --check scripts/audio_health_signal.py scripts/audio_health_transport.py scripts/roaring_carla_healthd.py tests/test_audio_health_signal.py tests/test_audio_health_transport.py tests/test_roaring_carla_healthd_scheduled.py
-    python -m py_compile scripts/audio_health_signal.py scripts/audio_health_transport.py scripts/roaring_carla_healthd.py
-    pytest -q tests/test_audio_health_signal.py tests/test_audio_health_transport.py tests/test_roaring_carla_healthd_scheduled.py
+    ruff check scripts/audio_health_signal.py scripts/audio_health_stream.py scripts/audio_health_transport.py scripts/roaring_carla_healthd.py tests/test_audio_health_signal.py tests/test_audio_health_stream.py tests/test_audio_health_transport.py tests/test_roaring_carla_healthd_scheduled.py
+    ruff format --check scripts/audio_health_signal.py scripts/audio_health_stream.py scripts/audio_health_transport.py scripts/roaring_carla_healthd.py tests/test_audio_health_signal.py tests/test_audio_health_stream.py tests/test_audio_health_transport.py tests/test_roaring_carla_healthd_scheduled.py
+    python -m py_compile scripts/audio_health_signal.py scripts/audio_health_stream.py scripts/audio_health_transport.py scripts/roaring_carla_healthd.py
+    pytest -q tests/test_audio_health_signal.py tests/test_audio_health_stream.py tests/test_audio_health_transport.py tests/test_roaring_carla_healthd_scheduled.py
 
 Run the full Hearth tests from outside the repository root with PYTHONPATH set to src, so the compatibility hearth.py CLI shim at the root cannot shadow the package import.
 
-Current full-suite result for this branch: **682 passed, 75 skipped**. The skips are display/GUI and optional media-integration tests requiring a display or external media tools. The signal-feature tests use pytest.importorskip("numpy") so minimal GUI-only CI collection environments without NumPy do not fail while collecting unrelated GUI tests. Repository-wide Ruff lint and format checks pass, as do Python byte-compilation checks.
+Current full-suite result after the stream-read and paired-coverage tranche: **692 passed, 75 skipped**. The skips are display/GUI and optional media-integration tests requiring a display or external media tools. The signal-feature tests use pytest.importorskip("numpy") so minimal GUI-only CI collection environments without NumPy do not fail while collecting unrelated GUI tests. Repository-wide Ruff lint and format checks pass across 129 files, as do Python byte-compilation checks. New coverage tests prove that missing coverage cannot be CORRECT or INCORRECT, and stream diagnostics tests cover read gaps, overflow, exact repeated windows, unknown devices and empty reads.
 
 A non-capturing live --check run against the current user session also succeeded: Carla node present, B1 expected active, expected links present, pw-top and clock metadata queries successful. This --check does not open microphone taps. It is not a live audio-quality sample or a deployment verification.
 
 ## Remaining engineering work
 
-The implementation roadmap and wider fault taxonomy are in SiYuan: **Microphone Audio Quality Monitoring - Full Diagnostic Audit and Fix Plan (2026-11-22)**. The current branch implements transport observability and measurement-only signal features. It does not yet implement the perceptual LPC/ERB click classifier, calibrated persistent-noise baselines, repeated-block/timestamp corruption checks, oversampled true peak, full multi-stage tap localization or opt-in playback/output monitoring.
+The implementation roadmap and wider fault taxonomy are in SiYuan: **Microphone Audio Quality Monitoring - Full Diagnostic Audit and Fix Plan (2026-11-22)**. The current branch implements transport observability, measurement-only signal features, bounded read-cadence/overflow/repeat metadata and a 75% paired-frame coverage gate. It does not yet implement the perceptual LPC/ERB click classifier, calibrated persistent-noise baselines, complete timestamp/frame-gap and repeated-block corruption analysis, oversampled true peak, full multi-stage tap localization or opt-in playback/output monitoring.
 
 The next engineering slice should build multiscale perceptual click/crackle analysis, profile-specific noise baselines, sample integrity checks and stage-by-stage capture localization, with a synthetic + human-labelled corpus. None of those classifiers should trigger automatic repair until false-positive rates and source localization are validated.

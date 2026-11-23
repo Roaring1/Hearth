@@ -26,6 +26,7 @@ from contextlib import suppress
 
 import numpy as np
 from audio_health_signal import analyze_signal_features
+from audio_health_stream import StreamReadDiagnostics
 from audio_health_transport import (
     compare_snapshots,
     snapshot_for_state,
@@ -39,6 +40,7 @@ BLOCK_MS = 100
 BLOCK_FRAMES = RATE * BLOCK_MS // 1000
 SAMPLE_BYTES = 4
 MAX_CAPTURE_BUFFER_BLOCKS = 6
+MIN_CAPTURE_COVERAGE = 0.75
 RAW_SOURCE = "sm7b_mono"
 PROCESSED_SOURCE = "b1_mic"
 CARLA_APP_ID = "studio.kx.carla"
@@ -916,8 +918,35 @@ def _percentile(values: list[float], fraction: float) -> float | None:
     return round(float(ordered[index]), 7)
 
 
+def _capture_coverage(
+    seconds: float,
+    raw_chunks: Sequence[np.ndarray],
+    processed_chunks: Sequence[np.ndarray],
+) -> dict[str, int | float]:
+    """Measure paired PCM coverage against the requested capture duration."""
+    expected_frames = max(1, round(seconds * RATE))
+    raw_frames = sum(int(chunk.size) for chunk in raw_chunks)
+    processed_frames = sum(int(chunk.size) for chunk in processed_chunks)
+    paired_frames = min(raw_frames, processed_frames)
+    return {
+        "expected_frames": expected_frames,
+        "raw_frames": raw_frames,
+        "processed_frames": processed_frames,
+        "paired_frames": paired_frames,
+        "fraction": round(min(1.0, paired_frames / expected_frames), 4),
+    }
+
+
 def classify_sample(summary: dict) -> tuple[str, str]:
-    """Use three states so silence/poor correlation never causes a restart."""
+    """Use explicit coverage before judging signal quality or authorizing recovery."""
+    coverage = summary.get("capture_coverage")
+    fraction = coverage.get("fraction") if isinstance(coverage, dict) else None
+    if not isinstance(fraction, (int, float)) or fraction < MIN_CAPTURE_COVERAGE:
+        return (
+            "INCONCLUSIVE",
+            "Insufficient paired raw/post PCM coverage; sample cannot be marked "
+            "healthy or trigger recovery",
+        )
     if summary.get("fault_confirmed"):
         return "INCORRECT", "Repeated output-only crackle or confirmed B1 dropout"
     active = int(summary.get("active_windows", 0))
@@ -980,6 +1009,7 @@ def capture_sample(seconds: float = 8.0) -> dict:
     # sub-second blocks can be combined for low-frequency spectral resolution.
     feature_raw_chunks: list[np.ndarray] = []
     feature_post_chunks: list[np.ndarray] = []
+    stream_diagnostics = StreamReadDiagnostics(("raw", "processed"))
     active_windows = valid_windows = candidate_windows = dropout_windows = 0
     tracker = QualityTracker()
     fault_confirmed = False
@@ -1012,11 +1042,20 @@ def capture_sample(seconds: float = 8.0) -> dict:
                 except OSError:
                     chunk = b""
                 if chunk:
+                    stream_diagnostics.observe_read(
+                        "raw" if device == RAW_SOURCE else "processed",
+                        len(chunk),
+                        time.monotonic(),
+                    )
                     buffers[device].extend(chunk)
                     max_bytes = BLOCK_FRAMES * SAMPLE_BYTES * MAX_CAPTURE_BUFFER_BLOCKS
                     if len(buffers[device]) > max_bytes:
                         excess = len(buffers[device]) - max_bytes
                         excess -= excess % SAMPLE_BYTES
+                        stream_diagnostics.record_buffer_overflow(
+                            "raw" if device == RAW_SOURCE else "processed",
+                            excess,
+                        )
                         del buffers[device][:excess]
                 else:
                     capture_error = f"{device} capture stream ended"
@@ -1027,8 +1066,14 @@ def capture_sample(seconds: float = 8.0) -> dict:
                 capture_error = "a microphone capture process exited"
                 break
             for raw, processed in _drain_aligned_blocks(buffers, BLOCK_FRAMES):
-                feature_raw_chunks.append(np.asarray(raw, dtype=np.float32))
-                feature_post_chunks.append(np.asarray(processed, dtype=np.float32))
+                raw_array = np.asarray(raw, dtype=np.float32)
+                processed_array = np.asarray(processed, dtype=np.float32)
+                stream_diagnostics.record_aligned_window(
+                    raw_array.tobytes(),
+                    processed_array.tobytes(),
+                )
+                feature_raw_chunks.append(raw_array)
+                feature_post_chunks.append(processed_array)
                 result = analyze_pair(raw, processed)
                 raw_rms = float(result.get("raw_rms", 0.0))
                 post_rms = float(result.get("post_rms", 0.0))
@@ -1074,9 +1119,14 @@ def capture_sample(seconds: float = 8.0) -> dict:
         except (FloatingPointError, ValueError, TypeError, OverflowError) as exc:
             LOG.exception("signal feature extraction failed; preserving primary sample: %s", exc)
 
+    capture_coverage = _capture_coverage(seconds, feature_raw_chunks, feature_post_chunks)
     summary = {
         "sample_seconds": round(time.monotonic() - start, 2),
-        "diagnostic_scope": "raw_vs_b1; transient_dropout_plus_measurement_only_spectral_features",
+        "capture_coverage": capture_coverage,
+        "stream_diagnostics": stream_diagnostics.summary(RATE, SAMPLE_BYTES),
+        "diagnostic_scope": (
+            "raw_vs_b1; transient_dropout_plus_measurement_only_spectral_and_stream_diagnostics"
+        ),
         "signal_features": signal_features,
         "windows": len(raw_levels),
         "active_windows": active_windows,
@@ -1147,6 +1197,30 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
     )
     state["scheduled_transport_snapshot"] = transport_baseline
     transport = first.get("transport", {})
+    coverage = first.get("capture_coverage", {})
+    if isinstance(coverage, dict):
+        LOG.info(
+            "PCM capture coverage paired=%s/%s frames fraction=%.3f",
+            coverage.get("paired_frames", 0),
+            coverage.get("expected_frames", 0),
+            float(coverage.get("fraction", 0.0)),
+        )
+    stream = first.get("stream_diagnostics", {})
+    if isinstance(stream, dict):
+        raw_stream = stream.get("raw", {})
+        processed_stream = stream.get("processed", {})
+        repeats = stream.get("identical_adjacent_windows", {})
+        LOG.info(
+            "PCM stream diagnostics raw_reads=%s raw_gap_max=%.1fms raw_overflow=%sB "
+            "post_reads=%s post_gap_max=%.1fms post_overflow=%sB repeats=%s",
+            raw_stream.get("read_calls", 0),
+            float(raw_stream.get("max_inter_read_gap_ms", 0.0)),
+            raw_stream.get("buffer_overflow_bytes", 0),
+            processed_stream.get("read_calls", 0),
+            float(processed_stream.get("max_inter_read_gap_ms", 0.0)),
+            processed_stream.get("buffer_overflow_bytes", 0),
+            repeats,
+        )
     signal_features = first.get("signal_features")
     if isinstance(signal_features, dict):
         tone_scope = signal_features.get("tone_localization")
