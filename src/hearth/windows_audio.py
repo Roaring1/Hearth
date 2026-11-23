@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from hearth.audio.pactl import ShortEntry
@@ -39,9 +39,15 @@ def _com_apartment() -> Iterator[None]:
     """Initialize COM for this calling thread, respecting an existing apartment."""
     import comtypes
 
+    # comtypes exposes these native wrappers without Python annotations.
+    # Cast only their public zero-argument callable shape; runtime behavior
+    # and HRESULT handling remain owned by comtypes.
+    co_initialize = cast(Callable[[], None], comtypes.CoInitialize)
+    co_uninitialize = cast(Callable[[], None], comtypes.CoUninitialize)
+
     initialized = False
     try:
-        comtypes.CoInitialize()
+        co_initialize()
         initialized = True
     except OSError as exc:
         # RPC_E_CHANGED_MODE means this thread is already initialized using
@@ -53,7 +59,7 @@ def _com_apartment() -> Iterator[None]:
         yield
     finally:
         if initialized:
-            comtypes.CoUninitialize()
+            co_uninitialize()
 
 
 def _pycaw() -> tuple[Any, Any, Any, Any]:

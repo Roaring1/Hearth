@@ -93,22 +93,23 @@ LPD8_KNOBS: tuple[Control, ...] = (
     Control("knob", 8, "Microphone level"),
 )
 
-#: The LPD8 pads. A lit pad means that channel is on, not muted.
+#: The current LPD8 layout. Pads 4-7 are deliberately unassigned.
 LPD8_PADS: tuple[Control, ...] = (
-    Control("pad", 1, "Mute or unmute music"),
-    Control("pad", 2, "Mute or unmute chat"),
-    Control("pad", 3, "Switch the headset between chat and game"),
-    Control("pad", 4, "Mute or unmute the headset"),
-    Control("pad", 5, "Save a diagnostic report"),
-    Control("pad", 6, "Mute or unmute the microphone"),
-    Control("pad", 7, "Mute or unmute game audio"),
-    Control("pad", 8, "Switch the desk speakers on or off"),
+    Control("pad", 1, "Mute or unmute the B1 microphone"),
+    Control("pad", 2, "Mute or unmute the headset"),
+    Control("pad", 3, "Show Hearth"),
+    Control("pad", 4, "Unassigned"),
+    Control("pad", 5, "Unassigned"),
+    Control("pad", 6, "Unassigned"),
+    Control("pad", 7, "Unassigned"),
+    Control("pad", 8, "Toggle the desktop speakers"),
 )
 
 #: How to read the pad lights, shown alongside the legend.
 LED_NOTE = (
-    "Pad lights may show the controller's local state, not mixer mute status; "
-    "use the mixer UI to confirm mute state."
+    "On the original LPD8, a lit mute pad means muted; a dark pad means "
+    "normal. Its LEDs are local to the controller, so a mute change made "
+    "elsewhere on the PC cannot be reflected back to the physical pad."
 )
 
 
