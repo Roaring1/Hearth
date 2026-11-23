@@ -63,7 +63,7 @@ This is intentionally conservative. It does not itself change quantum, restart P
 - scripts/audio_health_stream.py: bounded per-tap read cadence, overflow and repeated-window diagnostics.
 - tests/test_audio_health_transport.py: transport helper tests.
 - tests/test_audio_health_stream.py: read cadence, overflow, repeated-window and no-fake-data tests.
-- tests/test_audio_health_signal.py: synthetic tone, noise, impulse, integrity and localization tests.
+- tests/test_audio_health_signal.py: synthetic tone, noise, impulse, LPC residual, integrity and localization tests.
 - tests/test_roaring_carla_healthd_scheduled.py: scheduled-cycle integration and restart-conflict tests.
 
 - scripts/audio_health_signal.py: measurement-only spectral, transient, broadband-impulse and sample-integrity features.
@@ -82,6 +82,8 @@ The measurement-only summary contains:
 - Candidate persistent spectral lines, using non-overlapping 2-second windows. Lower-energy windows nominate candidates, then every frame in the sample is checked for persistence and frequency stability; estimates include sub-bin peak position and local prominence. The detector does not call a line "mains hum" or "ground loop".
 - 5 kHz+ high-pass transient descriptors: RMS, peak, crest factor, excess kurtosis and 10 ms outlier-frame count/rate.
 - Short broadband impulse candidates from overlapping 5 ms windows at 2.5 ms hop. Three bands (2.5-5 kHz, 5-10 kHz, 10-20 kHz) are compared with a local median/MAD baseline. A candidate must elevate at least two bands and last no more than 15 ms. Event count, rate, bounded timestamps and threshold ratios are retained. Long high-frequency sibilance-like spans are excluded by duration.
+- For at most the 24 strongest retained impulse examples, calculate order-12 Yule-Walker LPC prediction-error RMS/peak ratios against the preceding 25 ms of context. Ratios are stored as descriptive values only; no binary 'click' or 'unpredictable' label is emitted and no recovery action uses them.
+The bounded LPC stage fits its predictor using preceding context, then compares prediction-error RMS and peak with that context. These ratios are not a perceptual click score: the labelled clean and post-restart OGGs produce more high-ratio events than the fault/pre-restart takes in this tiny corpus, so they are retained only as context for later human review.
 - Raw-to-processed deltas for high-frequency transient descriptors, to show whether the measured change first appears before or after the processing chain.
 - A heuristic multi-cue high-frequency impulsive-event candidate. It requires all of: HF RMS at least -55 dBFS, HF peak at least -35 dBFS, HF crest at least 27 dB, 5 kHz+ excess kurtosis at least 80 and high-frequency energy share at least 0.5%. The candidate is separately reported for raw and B1 and logged with its cue evidence. It is **not a click/crackle classifier** and cannot trigger a restart or notification.
 - Sample peak and near-full-scale fraction, separate from true-peak or analog-overload claims.
@@ -112,6 +114,17 @@ The impulse-candidate replay against the four supplied browser-Opus references p
 | November 9 confirmed-clean reference, 3fL9fHB_.ogg | 41 | 1.367 | 34.96 | 0.3361% |
 | November 22 before, test.ogg | 309 | 10.302 | 142.72 | 0.4644% |
 | November 22 after, fixed_test.ogg | 60 | 2.000 | 86.22 | 0.3997% |
+
+The LPC ratio replay on the 24 strongest retained candidates per file yielded:
+
+| Recording | Events with RMS ratio >4 and peak ratio >8 | Maximum RMS ratio | Maximum peak ratio |
+|---|---:|---:|---:|
+| November 9 fault reference | 2/24 | 9.59 | 78.82 |
+| November 9 confirmed-clean reference | 7/24 | 16.75 | 108.67 |
+| November 22 before | 8/24 | 814.40 | 5047.86 |
+| November 22 after | 13/24 | 32.82 | 172.27 |
+
+The replay confirms the LPC result must remain a pair of numeric features, not a boolean click verdict: normal speech transitions can be less predictable than the preceding context, and the apparently better files can score higher.
 
 Each 30-second file took approximately 0.85-0.95 seconds for the complete feature pass in the local offline replay. This suggests the scheduled 8-second sample should fit the existing oneshot budget, but a live resource measurement is still required. Candidate counts are not subjective click labels: the samples differ in spoken content and the test files use browser Opus. The detector's purpose at this stage is to expose repeatable features and locations, not to declare crackle or drive restart.
 
@@ -148,7 +161,7 @@ Run:
 
 Run the full Hearth tests from outside the repository root with PYTHONPATH set to src, so the compatibility hearth.py CLI shim at the root cannot shadow the package import.
 
-Current full-suite result after the stream-read and paired-coverage tranche: **694 passed, 75 skipped**. The skips are display/GUI and optional media-integration tests requiring a display or external media tools. The signal-feature tests use pytest.importorskip("numpy") so minimal GUI-only CI collection environments without NumPy do not fail while collecting unrelated GUI tests. Repository-wide Ruff lint and format checks pass across 129 files, as do Python byte-compilation checks. New coverage tests prove that missing or sub-90% coverage cannot be CORRECT or INCORRECT and that exactly 90% is the minimum accepted level. Stream diagnostics tests cover read gaps, overflow, exact repeated windows, unknown devices, empty reads and unmatched raw/post tails.
+Current full-suite result after the stream-read and paired-coverage tranche: **696 passed, 75 skipped**. The skips are display/GUI and optional media-integration tests requiring a display or external media tools. The signal-feature tests use pytest.importorskip("numpy") so minimal GUI-only CI collection environments without NumPy do not fail while collecting unrelated GUI tests. Repository-wide Ruff lint and format checks pass across 129 files, as do Python byte-compilation checks. New coverage tests prove that missing or sub-90% coverage cannot be CORRECT or INCORRECT and that exactly 90% is the minimum accepted level. Stream diagnostics tests cover read gaps, overflow, exact repeated windows, unknown devices, empty reads and unmatched raw/post tails.
 
 A non-capturing live --check run against the current user session also succeeded: Carla node present, B1 expected active, expected links present, pw-top and clock metadata queries successful. This --check does not open microphone taps. It is not a live audio-quality sample or a deployment verification.
 

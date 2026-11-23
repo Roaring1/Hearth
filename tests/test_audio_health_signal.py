@@ -334,4 +334,39 @@ def test_broadband_impulse_event_list_is_bounded_while_total_count_is_retained()
     assert metrics["candidate_count"] > 24
     assert len(metrics["candidate_events"]) == 24
     assert metrics["candidate_truncated"] is True
+    assert metrics["lpc_checked_events"] == 24
     assert metrics["candidate_rate_per_second"] > 0.0
+
+
+def test_lpc_prediction_residual_is_high_for_an_injected_short_click() -> None:
+    rate = 48_000
+    time = np.arange(4 * rate, dtype=np.float64) / rate
+    voice = (
+        0.025 * np.sin(2 * np.pi * 115.0 * time)
+        + 0.012 * np.sin(2 * np.pi * 230.0 * time)
+        + 0.006 * np.sin(2 * np.pi * 345.0 * time)
+    )
+    samples = voice.copy()
+    rng = np.random.default_rng(101)
+    click = 0.2 * np.exp(-np.arange(48) / 8.0) * rng.normal(size=48)
+    start = 2 * rate + rate // 2
+    samples[start : start + click.size] += click
+    features = analyze_signal_features(samples, samples, rate)
+    events = features["raw"]["broadband_impulses"]["candidate_events"]
+    near_click = [item for item in events if abs(item["start_seconds"] - 2.5) < 0.03]
+    assert near_click
+    event = max(near_click, key=lambda item: item["lpc_prediction_error_ratio"] or 0.0)
+    assert event["lpc_prediction_error_ratio"] is not None
+    assert event["lpc_prediction_error_ratio"] >= 4.0
+    assert event["lpc_prediction_peak_ratio"] >= 8.0
+    assert features["automatic_action"] == "none"
+
+
+def test_lpc_prediction_residual_is_not_evaluated_without_prior_context() -> None:
+    from audio_health_signal import _lpc_prediction_residual
+
+    samples = np.sin(2 * np.pi * 100 * np.arange(100) / 48_000)
+    result = _lpc_prediction_residual(samples, 10, 30, 48_000)
+    assert result["prediction_error_ratio"] is None
+    assert "prediction_error_ratio" in result
+    assert result["prediction_error_ratio"] is None
