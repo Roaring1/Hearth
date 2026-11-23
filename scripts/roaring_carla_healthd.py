@@ -378,13 +378,17 @@ def _b1_expected_active() -> bool:
             if not stripped or stripped.startswith("#") or "=" not in stripped:
                 continue
             key, value = (part.strip().strip('"').strip("'") for part in stripped.split("=", 1))
-            if key in {"B1_ACTIVE", "CARLA_TO_B1"}:
+            if key in {"B1_ACTIVE", "CARLA_TO_B1", "B1_ROUTE"}:
                 flags[key] = value.lower()
     except OSError:
         _B1_ACTIVE_CACHE = (now + _B1_ACTIVE_CACHE_SECONDS, False)
         return False
 
-    if flags.get("B1_ACTIVE") != "true" or flags.get("CARLA_TO_B1") != "true":
+    if (
+        flags.get("B1_ACTIVE") != "true"
+        or flags.get("CARLA_TO_B1") != "true"
+        or flags.get("B1_ROUTE") not in {"sm7b", "astro", "both"}
+    ):
         _B1_ACTIVE_CACHE = (now + _B1_ACTIVE_CACHE_SECONDS, False)
         return False
 
