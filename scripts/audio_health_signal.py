@@ -84,6 +84,7 @@ _TONE_MIN_PROMINENCE_DB = 15.0
 _TONE_FRAME_PERSISTENCE = 0.80
 _TONE_MAX_LINES = 8
 _NOISE_FLOOR_MIN_FRAMES = 20  # 2 seconds of 100-ms low-energy frames
+_DC_OFFSET_CANDIDATE_THRESHOLD = 0.01  # 1% FS, diagnostic only
 # Exploratory heuristics for 8-second samples; never authorize automatic repair.
 _IMPULSE_MIN_HF_RMS_DBFS = -55.0
 _IMPULSE_MIN_HF_PEAK_DBFS = -35.0
@@ -829,8 +830,14 @@ def _integrity_metrics(
             "full_scale_samples": 0,
             "full_scale_runs_ge_2_samples": 0,
             "max_full_scale_run_ms": None,
+            "dc_offset": None,
+            "dc_offset_dbfs": None,
+            "dc_offset_candidate": False,
         }
 
+    dc_offset = float(np.mean(values[finite]))
+    dc_offset_dbfs = 20.0 * math.log10(max(abs(dc_offset), _EPS))
+    dc_offset_candidate = abs(dc_offset) >= _DC_OFFSET_CANDIDATE_THRESHOLD
     minimum_zero = max(1, round(sample_rate * 0.001))
     zero_runs, max_zero = _run_summary(finite & (np.abs(values) <= 1e-12), minimum_zero)
     if values.size > 1:
@@ -858,6 +865,9 @@ def _integrity_metrics(
         "max_full_scale_run_ms": round(max_full_scale * 1000.0 / sample_rate, 3)
         if max_full_scale
         else 0.0,
+        "dc_offset": round(dc_offset, 6),
+        "dc_offset_dbfs": round(dc_offset_dbfs, 3),
+        "dc_offset_candidate": bool(dc_offset_candidate),
     }
 
 

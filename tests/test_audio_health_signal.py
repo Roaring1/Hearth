@@ -656,3 +656,26 @@ def test_low_energy_rms_dbfs_uses_rms_conversion_not_power_conversion() -> None:
     result = _low_energy_metrics(samples, 48_000)
     assert result["noise_floor_valid"] is True
     assert abs(result["rms_dbfs"] - (-40.0)) < 0.2
+
+
+def test_sample_integrity_reports_and_flags_dc_offset_measurement_only() -> None:
+    from audio_health_signal import _integrity_metrics
+
+    rate = 48_000
+    index = np.arange(rate, dtype=np.float64)
+    samples = 0.1 * np.sin(2.0 * np.pi * 440 * index / rate) + 0.02
+    result = _integrity_metrics(samples, rate)
+    assert abs(result["dc_offset"] - 0.02) < 1e-4
+    assert abs(result["dc_offset_dbfs"] - (-33.98)) < 0.1
+    assert result["dc_offset_candidate"] is True
+
+
+def test_sample_integrity_does_not_flag_centered_sine_for_dc_offset() -> None:
+    from audio_health_signal import _integrity_metrics
+
+    rate = 48_000
+    index = np.arange(rate, dtype=np.float64)
+    samples = 0.1 * np.sin(2.0 * np.pi * 440 * index / rate)
+    result = _integrity_metrics(samples, rate)
+    assert abs(result["dc_offset"]) < 1e-10
+    assert result["dc_offset_candidate"] is False
