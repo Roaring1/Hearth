@@ -10,6 +10,7 @@ from threading import Event
 import pytest
 
 from hearth.capture_devices import AudioAssociationStatus, AudioSourceCandidate
+from hearth.capture_frame_health import FrameHealthSnapshot
 from hearth.capture_mpv_ipc import ViewerInputOpenError
 from hearth.capture_runtime import CaptureAudioAssociationError
 from hearth.capture_session import (
@@ -38,6 +39,7 @@ class FakeViewer:
     no_signal: bool = False
     no_signal_callback: Callable[[bool], None] | None = field(default=None, repr=False)
     monitor_error: Exception | None = field(default=None, repr=False)
+    frame_health: FrameHealthSnapshot | None = None
 
     def wait(self, timeout: float | None = None) -> int:
         if not self.exit_event.wait(timeout):
@@ -267,6 +269,49 @@ def test_start_failure_with_incomplete_rollback_requires_explicit_stop_retry() -
     with pytest.raises(CaptureSessionError, match="cannot start while the session is failed"):
         manager.start(PLAN)
     assert manager.stop().state is SessionState.DORMANT
+
+
+def test_session_snapshot_exposes_frame_health_only_while_running() -> None:
+    runtime = FakeRuntime()
+    manager = CaptureSessionManager(runtime)
+
+    started = manager.start(PLAN)
+    assert started.frame_health is None
+    assert runtime.viewer is not None
+    health = FrameHealthSnapshot(
+        ready=True,
+        state="mostly_black",
+        width=1920,
+        height=1080,
+        sample_count=4,
+        black_fraction=0.995,
+        unchanged_s=6.0,
+        black_s=6.0,
+    )
+    runtime.viewer.frame_health = health
+
+    running = manager.snapshot()
+    assert running.state is SessionState.RUNNING
+    assert running.frame_health == health
+
+    failed = manager.viewer_exited(17)
+    assert failed.state is SessionState.FAILED
+    assert failed.frame_health is None
+
+    stopped = manager.stop()
+    assert stopped.state is SessionState.DORMANT
+    assert stopped.frame_health is None
+
+
+def test_session_snapshot_does_not_expose_malformed_frame_health() -> None:
+    runtime = FakeRuntime()
+    manager = CaptureSessionManager(runtime)
+    manager.start(PLAN)
+    assert runtime.viewer is not None
+    runtime.viewer.frame_health = {"raw": "unvalidated"}  # type: ignore[assignment]
+
+    assert manager.snapshot().frame_health is None
+    manager.stop()
 
 
 def test_stop_while_dormant_is_idempotent() -> None:
