@@ -16,6 +16,11 @@ from hearth.capture_frame_health import (
     write_frame_health_script,
 )
 
+requires_posix_owner = pytest.mark.skipif(
+    not callable(getattr(os, "getuid", None)),
+    reason="frame-health script permissions require POSIX user ownership semantics",
+)
+
 
 def _payload(**changes: object) -> dict[str, object]:
     value: dict[str, object] = {
@@ -97,6 +102,7 @@ def test_script_refuses_runtime_directory_when_posix_uid_is_unavailable(
     assert not (runtime / "frame-health.lua").exists()
 
 
+@requires_posix_owner
 def test_script_is_created_private_and_contains_only_the_probe(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime"
     runtime.mkdir(mode=0o700)
@@ -110,6 +116,7 @@ def test_script_is_created_private_and_contains_only_the_probe(tmp_path: Path) -
     assert path.read_text(encoding="utf-8") == FRAME_HEALTH_LUA
 
 
+@requires_posix_owner
 def test_script_writer_refuses_non_private_runtime_directory(tmp_path: Path) -> None:
     runtime = tmp_path / "shared-runtime"
     runtime.mkdir(mode=0o755)
@@ -121,6 +128,7 @@ def test_script_writer_refuses_non_private_runtime_directory(tmp_path: Path) -> 
     assert list(runtime.iterdir()) == []
 
 
+@requires_posix_owner
 def test_existing_script_is_never_overwritten_or_removed(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime"
     runtime.mkdir(mode=0o700)
@@ -136,9 +144,13 @@ def test_existing_script_is_never_overwritten_or_removed(tmp_path: Path) -> None
 
 
 @pytest.mark.skipif(
-    not os.environ.get("DISPLAY") or shutil.which("mpv") is None or shutil.which("ffmpeg") is None,
+    os.name == "nt"
+    or not os.environ.get("DISPLAY")
+    or shutil.which("mpv") is None
+    or shutil.which("ffmpeg") is None,
     reason="requires mpv, ffmpeg and an isolated X display",
 )
+@requires_posix_owner
 def test_no_signal_overlay_renders_and_clears_in_real_mpv(tmp_path: Path) -> None:
     """Exercise the actual ASS overlay, not just the generated Lua source."""
     import json

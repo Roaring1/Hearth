@@ -26,6 +26,19 @@ from hearth.capture_mpv_ipc import (
     create_private_mpv_log_file,
 )
 
+requires_unix_sockets = pytest.mark.skipif(
+    not hasattr(socket, "AF_UNIX"),
+    reason="the Linux mpv capture IPC backend requires POSIX Unix-domain sockets",
+)
+requires_posix_owner = pytest.mark.skipif(
+    not callable(getattr(os, "getuid", None)),
+    reason="the capture IPC backend requires POSIX user ownership semantics",
+)
+requires_posix_ipc = pytest.mark.skipif(
+    not hasattr(socket, "AF_UNIX") or not callable(getattr(os, "getuid", None)),
+    reason="the capture IPC backend requires POSIX user ownership and Unix sockets",
+)
+
 
 class FakeProcess:
     def __init__(self, exit_code: int | None = None) -> None:
@@ -111,6 +124,7 @@ def _viewer(tmp_path: Path, process: FakeProcess | None = None) -> MpvViewerProc
     return MpvViewerProcess(process or FakeProcess(), runtime, runtime / "mpv.sock")
 
 
+@requires_posix_ipc
 def test_stale_capture_directory_sweep_removes_only_old_private_dirs(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime"
     runtime.mkdir(mode=0o700)
@@ -156,6 +170,7 @@ def test_stale_capture_directory_sweep_preserves_unknown_user_content(tmp_path: 
     assert marker.read_text(encoding="utf-8") == "user-owned"
 
 
+@requires_unix_sockets
 def test_stale_capture_directory_sweep_removes_refused_mpv_socket() -> None:
     with tempfile.TemporaryDirectory(prefix="hc-", dir="/tmp") as temporary:
         runtime = Path(temporary) / "r"
@@ -179,6 +194,7 @@ def test_stale_capture_directory_sweep_removes_refused_mpv_socket() -> None:
         assert not stale.exists()
 
 
+@requires_unix_sockets
 def test_stale_capture_directory_sweep_preserves_live_mpv_socket(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime"
     runtime.mkdir(mode=0o700)
@@ -243,6 +259,7 @@ def test_capture_ipc_helpers_fail_closed_without_posix_identity_or_unix_sockets(
         capture_mpv_ipc._require_unix_socket_family()
 
 
+@requires_posix_ipc
 def test_private_ipc_directory_requires_current_users_private_runtime_dir(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -266,6 +283,7 @@ def test_private_ipc_directory_requires_current_users_private_runtime_dir(
         directory.rmdir()
 
 
+@requires_posix_owner
 def test_private_mpv_log_file_is_created_mode_0600_and_never_overwritten(
     tmp_path: Path,
 ) -> None:
@@ -283,6 +301,7 @@ def test_private_mpv_log_file_is_created_mode_0600_and_never_overwritten(
     assert log_path.read_text(encoding="utf-8") == "existing"
 
 
+@requires_posix_ipc
 def test_create_private_ipc_directory_runs_stale_sweep_only_on_explicit_creation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -302,6 +321,7 @@ def test_create_private_ipc_directory_runs_stale_sweep_only_on_explicit_creation
     assert stat.S_IMODE(created.stat().st_mode) == 0o700
 
 
+@requires_posix_ipc
 def test_private_ipc_directory_rejects_group_or_world_access(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -314,6 +334,7 @@ def test_private_ipc_directory_rejects_group_or_world_access(
         create_private_ipc_directory()
 
 
+@requires_unix_sockets
 def test_first_frame_requires_picture_type_dimensions_and_configured_output(
     tmp_path: Path,
 ) -> None:
@@ -385,6 +406,7 @@ def test_non_error_end_file_event_is_not_misclassified() -> None:
     assert classify_mpv_input_error("timeout", "", stale_log) is None
 
 
+@requires_unix_sockets
 def test_first_frame_uses_private_mpv_log_to_classify_generic_loading_failed(
     tmp_path: Path,
 ) -> None:
@@ -407,6 +429,7 @@ def test_first_frame_uses_private_mpv_log_to_classify_generic_loading_failed(
     assert caught.value.category == "device_unavailable"
 
 
+@requires_unix_sockets
 def test_first_frame_timeout_does_not_classify_log_without_end_file_error(
     tmp_path: Path,
 ) -> None:
@@ -426,6 +449,7 @@ def test_first_frame_timeout_does_not_classify_log_without_end_file_error(
         viewer.wait_for_first_frame(timeout_s=0.1)
 
 
+@requires_unix_sockets
 def test_first_frame_surfaces_device_busy_from_mpv_end_file_event(tmp_path: Path) -> None:
     viewer = _viewer(tmp_path)
 
@@ -446,6 +470,7 @@ def test_first_frame_surfaces_device_busy_from_mpv_end_file_event(tmp_path: Path
     assert "already in use" in caught.value.user_message
 
 
+@requires_unix_sockets
 def test_first_frame_retries_unavailable_frame_properties(tmp_path: Path) -> None:
     viewer = _viewer(tmp_path)
     picture_reads = 0
@@ -479,6 +504,7 @@ def test_first_frame_retries_unavailable_frame_properties(tmp_path: Path) -> Non
         ("I", {"w": 640, "h": 360}, False),
     ],
 )
+@requires_unix_sockets
 def test_first_frame_rejects_partial_readiness(
     tmp_path: Path, picture: object, dimensions: object, vo_ready: bool
 ) -> None:
@@ -497,6 +523,7 @@ def test_first_frame_rejects_partial_readiness(
         viewer.wait_for_first_frame(timeout_s=0.12)
 
 
+@requires_unix_sockets
 def test_first_frame_reports_generic_input_error_when_mpv_exits_nonzero(
     tmp_path: Path,
 ) -> None:
@@ -508,6 +535,7 @@ def test_first_frame_reports_generic_input_error_when_mpv_exits_nonzero(
     assert caught.value.category == "open_failed"
 
 
+@requires_unix_sockets
 def test_first_frame_timeout_when_ipc_socket_never_appears(tmp_path: Path) -> None:
     viewer = _viewer(tmp_path)
 
@@ -528,6 +556,7 @@ def test_stop_reaps_process_then_removes_only_its_private_ipc_directory(
     assert not runtime.exists()
 
 
+@requires_unix_sockets
 def test_socket_response_matching_ignores_unrelated_events(tmp_path: Path) -> None:
     viewer = _viewer(tmp_path)
 
@@ -707,6 +736,7 @@ class FakeFrameMonitorServer:
         assert self.errors == []
 
 
+@requires_unix_sockets
 def test_stream_monitor_uses_time_pos_events_and_returns_when_player_exits(
     tmp_path: Path,
 ) -> None:
@@ -717,6 +747,7 @@ def test_stream_monitor_uses_time_pos_events_and_returns_when_player_exits(
         assert viewer.monitor_until_exit(stall_timeout_s=0.2) == 0
 
 
+@requires_unix_sockets
 def test_stream_monitor_shows_no_signal_after_timestamp_stall_and_keeps_waiting(
     tmp_path: Path,
 ) -> None:
@@ -737,6 +768,7 @@ def test_stream_monitor_shows_no_signal_after_timestamp_stall_and_keeps_waiting(
         (None, "open_failed"),
     ],
 )
+@requires_unix_sockets
 def test_stream_monitor_classifies_hard_input_end_file_error(
     tmp_path: Path, file_error: str | None, category: str
 ) -> None:
@@ -760,6 +792,7 @@ def test_stream_monitor_classifies_hard_input_end_file_error(
     assert viewer.no_signal is False
 
 
+@requires_unix_sockets
 def test_stream_monitor_clears_no_signal_when_time_pos_resumes(tmp_path: Path) -> None:
     process = FakeProcess()
     viewer = _viewer(tmp_path, process=process)
@@ -787,6 +820,7 @@ def test_stream_monitor_clears_no_signal_when_time_pos_resumes(tmp_path: Path) -
     assert observed == [True, False]
 
 
+@requires_unix_sockets
 def test_stream_monitor_exposes_validated_pixel_health_without_failing_the_stream(
     tmp_path: Path,
 ) -> None:
@@ -814,6 +848,7 @@ def test_stream_monitor_exposes_validated_pixel_health_without_failing_the_strea
     assert viewer.frame_health.black_fraction == 0.995
 
 
+@requires_unix_sockets
 def test_stream_monitor_keeps_timestamp_liveness_when_frame_health_is_unavailable(
     tmp_path: Path,
 ) -> None:

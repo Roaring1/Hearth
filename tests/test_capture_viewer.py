@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import socket
 import tempfile
 from pathlib import Path
 
@@ -14,6 +15,11 @@ from hearth.capture_viewer import (
     MpvCaptureViewer,
     UnsupportedCaptureFormat,
     build_mpv_viewer_argv,
+)
+
+requires_unix_sockets = pytest.mark.skipif(
+    not hasattr(socket, "AF_UNIX"),
+    reason="the Linux mpv capture adapter requires POSIX Unix-domain sockets",
 )
 
 
@@ -111,6 +117,7 @@ def test_frame_health_script_is_an_explicit_absolute_mpv_argument() -> None:
         build_mpv_viewer_argv(_device(), log_file_path="relative.log")
 
 
+@requires_unix_sockets
 def test_mpv_viewer_adapter_builds_and_delegates_to_owned_process_factory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -153,6 +160,7 @@ def test_mpv_viewer_adapter_builds_and_delegates_to_owned_process_factory(
     shutil.rmtree(runtime)
 
 
+@requires_unix_sockets
 def test_mpv_viewer_adapter_removes_private_directory_when_process_start_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

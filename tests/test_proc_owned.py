@@ -15,7 +15,7 @@ import pytest
 from hearth import proc
 from hearth.errors import CommandError
 
-pytestmark = pytest.mark.skipif(
+requires_linux_pdeathsig = pytest.mark.skipif(
     not sys.platform.startswith("linux"), reason="Linux PDEATHSIG is required"
 )
 
@@ -39,6 +39,7 @@ def test_spawn_owned_refuses_non_linux_platform(
         proc.spawn_owned([sys.executable, "-c", "pass"])
 
 
+@requires_linux_pdeathsig
 def test_spawn_owned_runs_and_stops_synthetic_child() -> None:
     child = proc.spawn_owned([sys.executable, "-c", "import time; time.sleep(30)"])
     assert child.pid > 1
@@ -51,11 +52,13 @@ def test_spawn_owned_runs_and_stops_synthetic_child() -> None:
     assert child.wait(timeout=0.1) == result
 
 
+@requires_linux_pdeathsig
 def test_spawn_owned_surfaces_exec_failure() -> None:
     with pytest.raises(CommandError, match="exec failed"):
         proc.spawn_owned(["hearth-capture-no-such-executable"])
 
 
+@requires_linux_pdeathsig
 def test_spawn_owned_parent_thread_exit_terminates_child(tmp_path: Path) -> None:
     """An owner subprocess exits without Stop; its child must receive SIGTERM."""
     helper = r"""
@@ -98,6 +101,7 @@ os._exit(0)
             parent.stderr.close()
 
 
+@requires_linux_pdeathsig
 def test_owned_process_wait_timeout_does_not_stop_child() -> None:
     child = proc.spawn_owned([sys.executable, "-c", "import time; time.sleep(30)"])
     with pytest.raises(subprocess.TimeoutExpired):
@@ -106,6 +110,7 @@ def test_owned_process_wait_timeout_does_not_stop_child() -> None:
     child.stop(timeout=0.3)
 
 
+@requires_linux_pdeathsig
 def test_creator_thread_exit_terminates_child_while_parent_process_stays_alive() -> None:
     """PDEATHSIG is tied to the creating thread, not merely the process PID."""
     holder: dict[str, subprocess.Popen[bytes]] = {}
@@ -147,6 +152,7 @@ def test_parent_death_signal_refuses_non_linux_platform(
         _capture_exec.install_parent_death_signal(123)
 
 
+@requires_linux_pdeathsig
 def test_exec_wrapper_refuses_to_exec_when_parent_died_before_signal_install(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -172,6 +178,7 @@ def test_exec_wrapper_refuses_to_exec_when_parent_died_before_signal_install(
     assert status == b"Eparent exited before PDEATHSIG was armed"
 
 
+@requires_linux_pdeathsig
 def test_exec_wrapper_reports_parent_death_signal_setup_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
