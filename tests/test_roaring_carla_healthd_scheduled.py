@@ -155,18 +155,18 @@ def test_confirmed_signal_fault_does_not_restart_when_transport_errors_also_incr
 def test_capture_coverage_uses_minimum_of_raw_and_processed_frames() -> None:
     block = healthd.np.zeros(healthd.BLOCK_FRAMES, dtype=healthd.np.float32)
     raw = [block for _ in range(80)]
-    processed = [block for _ in range(60)]
+    processed = [block for _ in range(72)]
     result = healthd._capture_coverage(8.0, raw, processed)
     assert result["expected_frames"] == 8 * 48_000
     assert result["raw_frames"] == 80 * healthd.BLOCK_FRAMES
-    assert result["processed_frames"] == 60 * healthd.BLOCK_FRAMES
-    assert result["paired_frames"] == 60 * healthd.BLOCK_FRAMES
-    assert result["fraction"] == 0.75
+    assert result["processed_frames"] == 72 * healthd.BLOCK_FRAMES
+    assert result["paired_frames"] == 72 * healthd.BLOCK_FRAMES
+    assert result["fraction"] == 0.9
 
 
 def test_low_paired_coverage_is_inconclusive_even_with_confirmed_fault() -> None:
     result = {
-        "capture_coverage": {"fraction": 0.5},
+        "capture_coverage": {"fraction": 0.89},
         "fault_confirmed": True,
         "active_windows": 20,
         "valid_windows": 20,
@@ -210,3 +210,16 @@ def test_sufficient_coverage_preserves_existing_quality_verdicts() -> None:
     )
     assert correct == "CORRECT"
     assert incorrect == "INCORRECT"
+
+
+def test_exact_ninety_percent_coverage_is_the_minimum_accepted_boundary() -> None:
+    summary = {
+        "capture_coverage": {"fraction": 0.90},
+        "fault_confirmed": False,
+        "active_windows": 20,
+        "valid_windows": 20,
+        "candidate_windows": 0,
+        "dropout_windows": 0,
+    }
+    verdict, _ = healthd.classify_sample(summary)
+    assert verdict == "CORRECT"
