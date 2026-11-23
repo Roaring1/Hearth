@@ -27,6 +27,7 @@ What folded in from the old GTK3 window, and what did not:
 from __future__ import annotations
 
 import logging
+import os
 import threading
 
 import gi
@@ -126,6 +127,50 @@ class SetupWindow(Gtk.Window):
 
         self.connect("map", self._on_map)
         self.connect("unmap", self._on_unmap)
+        if os.name == "nt":
+            self._configure_windows_port()
+
+    def _configure_windows_port(self) -> None:
+        """Explain which Setup actions belong to the Linux rig and disable them."""
+        self.verdict.set_text(
+            "Windows Core Audio is active. Linux systemd services, PipeWire routing, "
+            "Carla configuration and ALSA headset routing are not managed by this build."
+        )
+        self.verdict.remove_css_class("bad")
+        self.verdict.set_visible(True)
+        self.reset_failed.set_visible(False)
+        self.reset_failed.set_sensitive(False)
+
+        for widget in (self.astro_chat, self.astro_game, self.latency, self.save_devices):
+            widget.set_sensitive(False)
+        self.save_devices.set_tooltip_text(
+            "This setting restarts the Linux PipeWire routing service and is unavailable on Windows."
+        )
+
+        self.ml_stream.set_sensitive(False)
+        self.ml_chat.set_sensitive(False)
+        self.ml_note.set_text(
+            "Moonlight source switching is tied to the Linux router service and is unavailable on Windows."
+        )
+        self.flow.set_text(
+            "Windows microphone and playback endpoints are read from Core Audio. "
+            "The Linux Carla/PipeWire signal chain is not part of this Windows backend."
+        )
+
+        self.lpd8_state.set_text(
+            "Padfire owns the Windows LPD8 connection; Hearth will not open the controller."
+        )
+        self.reconnect_lpd8.set_visible(False)
+        self.remap_lpd8.set_sensitive(False)
+        self.remap_lpd8.set_tooltip_text(
+            "LPD8 remapping is disabled while the Windows Padfire application owns the controller."
+        )
+        self.lpd8_map.set_text(
+            "Hearth LPD8 remapping is disabled on Windows to preserve Padfire's controller ownership."
+        )
+        self.lpd8_clash.set_visible(False)
+        self.everything.set_label("Linux service units (not available on Windows)")
+        self.everything.set_sensitive(False)
 
     # -- the focal block -------------------------------------------------
     def _build_verdict(self) -> Gtk.Widget:
@@ -159,6 +204,8 @@ class SetupWindow(Gtk.Window):
         return box
 
     def _on_reset_failed(self, button: Gtk.Button) -> None:
+        if os.name == "nt":
+            return
         failed = [u.name for u in self._units if u.failed]
         if failed:
             if not services_mod.reset_failed(*failed):
@@ -171,6 +218,8 @@ class SetupWindow(Gtk.Window):
             GLib.timeout_add_seconds(2, self._refresh_once)
 
     def _on_restart(self, button: Gtk.Button, unit: str) -> None:
+        if os.name == "nt":
+            return
         if not services_mod.restart(unit):
             button.set_tooltip_text("Could not start systemctl; check the user session")
             return
@@ -239,6 +288,8 @@ class SetupWindow(Gtk.Window):
         return box
 
     def _on_save_devices(self, _button: Gtk.Button) -> None:
+        if os.name == "nt":
+            return
         if self._device_save_pending:
             return
         core = self._core
@@ -269,6 +320,8 @@ class SetupWindow(Gtk.Window):
             self._finish_save_devices(False, False, f"Could not start config save: {exc}")
 
     def _save_devices_worker(self, updates: dict[str, str]) -> None:
+        if os.name == "nt":
+            return
         saved = False
         restart_started = False
         error = ""
@@ -365,6 +418,8 @@ class SetupWindow(Gtk.Window):
         return both
 
     def _on_moonlight(self, button: Gtk.CheckButton, source: str) -> None:
+        if os.name == "nt":
+            return
         if not button.get_active() or self._moonlight_updating:
             return
         previous = "b2_mic" if source == "b1_mic" else "b1_mic"
@@ -384,6 +439,8 @@ class SetupWindow(Gtk.Window):
             self._moonlight_done(previous, f"Could not save Moonlight mic source: {exc}")
 
     def _set_moonlight(self, source: str, previous: str) -> None:
+        if os.name == "nt":
+            return
         error = ""
         restart_queued = False
         try:
@@ -465,6 +522,8 @@ class SetupWindow(Gtk.Window):
         return box
 
     def _on_remap(self, _button: Gtk.Button) -> None:
+        if os.name == "nt":
+            return
         """Hand off to the mixer, which owns the single LPD8 window.
 
         Opening a second copy from here would let two windows write the
@@ -537,6 +596,8 @@ class SetupWindow(Gtk.Window):
 
     # -- polling, only while on screen -----------------------------------
     def _on_map(self, *_args) -> None:
+        if os.name == "nt":
+            return
         self._refresh_once()
         self._refresh_controller()
         # Read once per opening, not on the tick: the config only changes

@@ -23,15 +23,18 @@ pad would move only in whichever mode the hardware preset happens to be in.
 
 from __future__ import annotations
 
-import fcntl
 import logging
 import os
 import re
 import stat
 import tempfile
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+from hearth import paths
+from hearth.platform.locking import lock_file, unlock_file
 
 log = logging.getLogger(__name__)
 
@@ -112,7 +115,7 @@ def read_map(script: Path | None = None) -> dict[str, int]:
     return found
 
 
-def _edit(path: Path, transform: Callable[[str], str | None]) -> bool:
+def _edit_unlocked(path: Path, transform: Callable[[str], str | None]) -> bool:
     """Lock, read, transform and atomically replace one LPD8 script edit.
 
     The lock covers the entire read/modify/write transaction so concurrent
@@ -124,20 +127,14 @@ def _edit(path: Path, transform: Callable[[str], str | None]) -> bool:
     flags |= getattr(os, "O_NOFOLLOW", 0)
     lock_fd = os.open(lock_path, flags, 0o600)
     try:
-        lock_metadata = os.fstat(lock_fd)
-        if not stat.S_ISREG(lock_metadata.st_mode):
-            raise OSError(f"refusing non-regular LPD8 lock file: {lock_path}")
-        if lock_metadata.st_uid != os.getuid():
-            raise PermissionError(f"LPD8 lock file is not owned by this user: {lock_path}")
-        if lock_metadata.st_nlink != 1:
-            raise OSError(f"refusing hard-linked LPD8 lock file: {lock_path}")
-        os.fchmod(lock_fd, 0o600)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        paths.ensure_private_fd(lock_fd, lock_path)
+        if os.name != "nt":
+            os.fchmod(lock_fd, 0o600)  # type: ignore[attr-defined]
+        lock_file(lock_fd)
         metadata = path.lstat()
         if not stat.S_ISREG(metadata.st_mode):
             raise OSError(f"refusing to edit non-regular LPD8 script: {path}")
-        if metadata.st_uid != os.getuid():
-            raise PermissionError(f"LPD8 script is not owned by this user: {path}")
+        paths.ensure_private_file(path)
         text = path.read_text(encoding="utf-8")
         updated = transform(text)
         if updated is None or updated == text:
@@ -150,7 +147,9 @@ def _edit(path: Path, transform: Callable[[str], str | None]) -> bool:
                 stream.write(updated)
                 stream.flush()
                 os.fsync(stream.fileno())
-            tmp.chmod(stat.S_IMODE(metadata.st_mode))
+            if os.name != "nt":
+                tmp.chmod(stat.S_IMODE(metadata.st_mode))
+            paths.ensure_private_file(tmp)
             tmp.replace(path)
         except BaseException:
             tmp.unlink(missing_ok=True)
@@ -158,12 +157,22 @@ def _edit(path: Path, transform: Callable[[str], str | None]) -> bool:
         return True
     finally:
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            unlock_file(lock_fd)
         except OSError as exc:
             # Closing the descriptor releases the lock as a fallback.
             log.debug("could not unlock LPD8 map %s: %s", path, exc)
         finally:
             os.close(lock_fd)
+
+
+# Serialize read/modify/write edits between threads in this process; the
+# persistent advisory lock inside _edit_unlocked coordinates other processes.
+_EDIT_LOCK = threading.RLock()
+
+
+def _edit(path: Path, transform: Callable[[str], str | None]) -> bool:
+    with _EDIT_LOCK:
+        return _edit_unlocked(path, transform)
 
 
 def _set_const(text: str, const: str, value: int, *, required: bool) -> str | None:

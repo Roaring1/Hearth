@@ -20,6 +20,8 @@ import pytest
 from hearth.errors import IpcError
 from hearth.ipc import client, protocol, server
 
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX Unix sockets")
+
 
 @pytest.fixture
 def sock_path(tmp_path):

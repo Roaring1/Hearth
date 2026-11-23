@@ -60,7 +60,12 @@ def test_set_knob_rewrites_only_that_constant(script):
 
 def test_set_knob_keeps_the_script_executable(script):
     lpd8map.set_knob("CC_VM_CHAT", 3, script)
-    assert script.stat().st_mode & 0o111
+    if os.name == "nt":
+        from hearth import paths
+
+        paths.ensure_private_file(script)
+    else:
+        assert script.stat().st_mode & 0o111
 
 
 def test_setting_the_same_knob_twice_is_a_no_op(script):
@@ -117,6 +122,7 @@ def test_lpd8_edit_refuses_a_hard_linked_lock_without_chmodding_its_target(scrip
     assert victim.stat().st_nlink == 2
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows ownership uses ACLs rather than st_uid")
 def test_lpd8_edit_refuses_a_script_owned_by_another_user(script, monkeypatch):
     original = script.read_text(encoding="utf-8")
     real_lstat = Path.lstat
@@ -170,8 +176,14 @@ def test_concurrent_lpd8_edits_to_different_constants_do_not_get_lost(script):
     mapping = lpd8map.read_map(script)
     assert mapping["CC_VM_MUSIC"] == 1
     assert mapping["CC_VM_CHAT"] == 2
-    assert script.stat().st_mode & 0o111
-    assert (script.parent / f".{script.name}.lock").stat().st_mode & 0o777 == 0o600
+    if os.name == "nt":
+        from hearth import paths
+
+        paths.ensure_private_file(script)
+        paths.ensure_private_file(script.parent / f".{script.name}.lock")
+    else:
+        assert script.stat().st_mode & 0o111
+        assert (script.parent / f".{script.name}.lock").stat().st_mode & 0o777 == 0o600
     assert list(script.parent.glob("lpd8_mixer.sh.tmp.*")) == []
 
 

@@ -23,6 +23,9 @@ XDG_VARS = (
 )
 
 
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+
+
 @pytest.fixture
 def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     for var in XDG_VARS:
