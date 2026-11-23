@@ -53,8 +53,13 @@ step "pytest"
 if "$PY" -c 'import pytest' >/dev/null 2>&1; then
     (
         cd "$(mktemp -d)" || exit 1
-        PYTHONPATH="$ROOT/src" "$PY" -m pytest -q \
-            --rootdir "$ROOT" -c "$ROOT/pyproject.toml" "$ROOT/tests"
+        if command -v xvfb-run >/dev/null 2>&1; then
+            PYTHONPATH="$ROOT/src" xvfb-run -a "$PY" -m pytest -q \
+                --rootdir "$ROOT" -c "$ROOT/pyproject.toml" "$ROOT/tests"
+        else
+            PYTHONPATH="$ROOT/src" "$PY" -m pytest -q \
+                --rootdir "$ROOT" -c "$ROOT/pyproject.toml" "$ROOT/tests"
+        fi
     ) || fail=1
 else
     skip "pytest not importable"

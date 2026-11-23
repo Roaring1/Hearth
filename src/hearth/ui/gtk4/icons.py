@@ -19,16 +19,21 @@ The letter chip remains the last resort, so an unknown app still renders.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock, Thread
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
-from gi.repository import Gdk, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+
+log = logging.getLogger(__name__)
 
 #: Extra names to try for apps whose PipeWire name will never match an entry.
 #: Each value is tried in order, through both fetchers.
@@ -47,6 +52,13 @@ _ALIASES: dict[str, tuple[str, ...]] = {
 
 _IMAGE_SUFFIXES = (".svg", ".png", ".xpm")
 _WORD = re.compile(r"[^a-z0-9]+")
+
+# Resolving a rare app icon may require walking tens of thousands of theme files.
+# That is fine as a one-time cache build, but never do it in a GTK render callback.
+_INDEX_LOCK = Lock()
+_INDEX_READY = False
+_INDEX_BUILDING = False
+_INDEX_CALLBACKS: list[Callable[[], bool | None]] = []
 
 
 def _key(value: str) -> str:
@@ -198,30 +210,36 @@ def _themed(name: str) -> bool:
     return Gtk.IconTheme.get_for_display(display).has_icon(name)
 
 
-def resolve(app: str) -> str:
-    """An icon name or absolute file path for an app, or "" if there is none."""
+def resolve(app: str, *, allow_index_scan: bool = True) -> str:
+    """An icon name/path or "". UI callers can forbid a cold filesystem scan."""
     names = _candidates(app)
+    entries_ready = allow_index_scan or _entry_index.cache_info().currsize > 0
+    files_ready = allow_index_scan or _file_index.cache_info().currsize > 0
     for name in names:  # fetcher one: entries, then the theme's own names
-        icon = _from_entries(name)
+        icon = _from_entries(name) if entries_ready else ""
         if icon.startswith("/") or (icon and _themed(icon)):
             return icon
         if _themed(name):
             return name
     for name in names:  # fetcher two: the icon files themselves
-        path = _from_files(name)
+        path = _from_files(name) if files_ready else ""
         if path:
             return path
-        entry_icon = _from_entries(name)
-        if entry_icon:
+        entry_icon = _from_entries(name) if entries_ready else ""
+        if entry_icon and files_ready:
             path = _from_files(entry_icon)
             if path:
                 return path
     return ""
 
 
-def icon_image(app: str, size: int) -> Gtk.Image | None:
-    """A themed or on-disk icon for this app, or None to use the letter chip."""
-    icon = resolve(app)
+def icon_image(app: str, size: int, *, allow_index_scan: bool = True) -> Gtk.Image | None:
+    """A themed or on-disk icon, or None to keep the letter chip for now.
+
+    UI code passes ``allow_index_scan=False`` to avoid blocking GTK on the first
+    rare-icon lookup. Call :func:`warm_indexes` and retry from its main-loop callback.
+    """
+    icon = resolve(app, allow_index_scan=allow_index_scan)
     if not icon:
         return None
     if icon.startswith("/"):
@@ -232,4 +250,60 @@ def icon_image(app: str, size: int) -> Gtk.Image | None:
         image = Gtk.Image.new_from_icon_name(icon)
     image.set_pixel_size(size)
     image.set_tooltip_text(app)
+    # The application name is rendered in the adjacent label; the icon is
+    # decorative and should not become a duplicate stop for screen readers.
+    image.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
     return image
+
+
+def warm_indexes(callback: Callable[[], bool | None] | None = None) -> None:
+    """Build the desktop-entry and filesystem indexes on a daemon worker.
+
+    Optional callbacks are scheduled on GTK's main loop after the index is
+    ready, where callers may safely resolve/create Gtk.Image widgets. Multiple
+    rows share the same worker and callback queue.
+    """
+    global _INDEX_BUILDING, _INDEX_READY
+    start_worker = False
+    run_now = False
+    with _INDEX_LOCK:
+        if _INDEX_READY:
+            run_now = callback is not None
+        else:
+            if callback is not None:
+                _INDEX_CALLBACKS.append(callback)
+            if not _INDEX_BUILDING:
+                _INDEX_BUILDING = True
+                start_worker = True
+    if run_now:
+        GLib.idle_add(callback)
+        return
+    if not start_worker:
+        return
+
+    def build() -> None:
+        global _INDEX_BUILDING, _INDEX_READY
+        ready = False
+        try:
+            _entry_index()
+            _file_index()
+            ready = True
+        except Exception:
+            log.exception("could not build the app-icon indexes")
+        with _INDEX_LOCK:
+            _INDEX_BUILDING = False
+            _INDEX_READY = ready
+            callbacks = list(_INDEX_CALLBACKS)
+            _INDEX_CALLBACKS.clear()
+        for item in callbacks:
+            GLib.idle_add(item)
+
+    try:
+        Thread(target=build, name="hearth-icon-index", daemon=True).start()
+    except RuntimeError:
+        with _INDEX_LOCK:
+            _INDEX_BUILDING = False
+            callbacks = list(_INDEX_CALLBACKS)
+            _INDEX_CALLBACKS.clear()
+        for item in callbacks:
+            GLib.idle_add(item)

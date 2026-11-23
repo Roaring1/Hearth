@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from hearth import paths, proc
-from hearth.errors import AudioError
+from hearth.errors import AudioError, CommandError
 
 log = logging.getLogger(__name__)
 
@@ -121,7 +121,13 @@ class Status:
 def _run(args: list[str], *, timeout: float = 10.0) -> str:
     if not available():
         raise AudioError("roaring_share_ctl.py is not installed")
-    result = proc.run([str(script_path()), *args], timeout=timeout, check=False)
+    try:
+        result = proc.run([str(script_path()), *args], timeout=timeout, check=False)
+    except CommandError as exc:
+        # Missing shebang interpreter, permissions and timeouts still raise
+        # even with check=False. Present them through the same error contract
+        # as a controller that starts and returns a non-zero exit code.
+        raise AudioError(f"share_ctl {args[0]} could not run: {exc}") from exc
     if not result.ok:
         raise AudioError(f"share_ctl {args[0]} failed: {result.stderr.strip()}")
     return result.stdout

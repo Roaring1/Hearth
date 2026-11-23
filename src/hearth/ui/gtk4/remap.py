@@ -15,11 +15,13 @@ imported or built until somebody opens it, and the window reads the map
 only while it is on screen: no poll, just a re-read on every open, which
 also covers the user editing the script by hand.
 
-The controls also show where they actually are. A knob's notch sits at the
-volume that knob last wrote, and a pad glows while the bus it watches is
-audible, matching the pad's own LED. None of that is polled from here: the
-mixer hands this window the snapshot it was already taking, so an open
-LPD8 window costs a few redraws and no extra reads at all.
+The controls also show the mixer's current state. A knob's notch sits at the
+volume that knob last wrote, and a pad glows in this window while the bus it
+watches is audible. This is an on-screen indicator, not a readback of the
+physical pad LED; the original LPD8 cannot receive Note feedback to mirror
+mute state. None of the state is polled from here: the mixer hands this window
+the snapshot it was already taking, so an open LPD8 window costs a few redraws
+and no extra reads at all.
 
 Every edit is written straight to ``~/bin/lpd8_mixer.sh`` and the unit is
 restarted, because a mapping the hardware is not using yet is not a
@@ -31,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 
 import gi
 
@@ -126,6 +129,7 @@ class _Pad(Gtk.Button, _Control):
         self.number = pad
         self.add_css_class("lpd8-pad")
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.update_property([Gtk.AccessibleProperty.LABEL], [f"LPD8 pad {pad}; unassigned"])
         self.cap = Gtk.Label(label=f"PAD {pad}", xalign=0.0)
         self.cap.add_css_class("lpd8-cap")
         self.job = Gtk.Label(label="", xalign=0.0)
@@ -143,6 +147,10 @@ class _Pad(Gtk.Button, _Control):
     def show_job(self, text: str, tooltip: str) -> None:
         self.job.set_text(text)
         self.set_tooltip_text(tooltip)
+        assignment = f": {text}" if text else "; unassigned"
+        self.update_property(
+            [Gtk.AccessibleProperty.LABEL], [f"LPD8 pad {self.number}{assignment}"]
+        )
         # An unused pad is drawn as an empty box rather than hidden: the
         # hardware still has eight pads whether or not the script uses them.
         if text:
@@ -181,6 +189,7 @@ class _Knob(Gtk.Button, _Control):
         self.open = False
         #: 0-1, or None when nothing has said where this knob is.
         self.level: float | None = None
+        self.update_property([Gtk.AccessibleProperty.LABEL], [f"LPD8 knob {knob}; unassigned"])
         self.add_css_class("lpd8-knob")
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         box.set_halign(Gtk.Align.CENTER)
@@ -207,6 +216,10 @@ class _Knob(Gtk.Button, _Control):
     def show_job(self, text: str, tooltip: str) -> None:
         self.job.set_text(text)
         self.set_tooltip_text(tooltip)
+        assignment = f": {text}" if text else "; unassigned"
+        self.update_property(
+            [Gtk.AccessibleProperty.LABEL], [f"LPD8 knob {self.number}{assignment}"]
+        )
         self.assigned = bool(text)
         self.face.queue_draw()
 
@@ -273,6 +286,12 @@ class RemapWindow(Gtk.Window):
 
         self.pal = style_mod.palette()
         self._restart_id = 0
+        self._write_pending = False
+        self._write_error = ""
+        self._service_state: str | None = None
+        self._service_query_pending = False
+        self._map_usable = False
+        self._clash_note = ""
         self._pads: dict[int, _Pad] = {}
         self._knobs: dict[int, _Knob] = {}
         #: pad -> slots it triggers, and knob -> constants it drives.
@@ -390,20 +409,50 @@ class RemapWindow(Gtk.Window):
         self._refresh_map()
 
     def _service_note(self) -> str:
-        """Say the service is down only when it is known to be down.
-
-        ``is_active()`` folds "systemd did not answer" into False, which
-        would print a confident lie. The raw state keeps three answers:
-        running, not running, and don't know -- and only the middle one is
-        worth a line on screen.
-        """
-        try:
-            state = services_mod.states([lpd8map.UNIT]).get(lpd8map.UNIT)
-        except Exception:  # pragma: no cover - a dead systemd is not a crash
-            return ""
+        """Describe the last asynchronously queried service state, if known."""
+        state = self._service_state
         if state in (None, "", services_mod.UNKNOWN, "active"):
             return ""
         return "The LPD8 service is not running \u2014 knobs and pads do nothing until it is"
+
+    def _queue_service_state_refresh(self) -> None:
+        """Read systemd away from GTK and update only the cached status."""
+        if self._service_query_pending:
+            return
+        self._service_query_pending = True
+
+        def query() -> None:
+            try:
+                state = services_mod.states([lpd8map.UNIT]).get(lpd8map.UNIT)
+            except Exception as exc:  # pragma: no cover - systemd failures are diagnostic
+                log.warning("could not read %s state: %s", lpd8map.UNIT, exc)
+                state = None
+            GLib.idle_add(self._finish_service_state, state)
+
+        try:
+            threading.Thread(target=query, daemon=True, name="hearth-remap-service-state").start()
+        except RuntimeError as exc:
+            self._service_query_pending = False
+            log.warning("could not queue %s state read: %s", lpd8map.UNIT, exc)
+
+    def _finish_service_state(self, state: str | None) -> bool:
+        self._service_query_pending = False
+        self._service_state = state
+        self._show_status()
+        return False
+
+    def _show_status(self) -> None:
+        if self._write_pending:
+            self._say("Saving LPD8 mapping…")
+        elif self._write_error:
+            self._say(self._write_error)
+        elif not self._map_usable:
+            self._say(
+                f"No map found in {lpd8map.SCRIPT} — nothing here can be "
+                "changed until that script is back"
+            )
+        else:
+            self._say("; ".join(x for x in (self._clash_note, self._service_note()) if x))
 
     def _refresh_map(self) -> None:
         try:
@@ -438,18 +487,20 @@ class RemapWindow(Gtk.Window):
             widget.show_job(short, full or f"Knob {knob} moves nothing yet")
 
         usable = bool(knobs or pads)
+        self._map_usable = usable
         for widget in (*self._pads.values(), *self._knobs.values()):
-            widget.set_sensitive(usable)
+            widget.set_sensitive(usable and not self._write_pending)
         if not usable:
-            self._say(
-                f"No map found in {lpd8map.SCRIPT} \u2014 nothing here can be "
-                "changed until that script is back"
-            )
+            self._clash_note = ""
+            self._show_status()
+            self._queue_service_state_refresh()
             return
 
         if self._open is not None:
             self._fill_choice(self._open)
-        self._say("; ".join(x for x in (self._clashes(knobs, pads), self._service_note()) if x))
+        self._clash_note = self._clashes(knobs, pads)
+        self._show_status()
+        self._queue_service_state_refresh()
         # A control that just changed job now watches a different bus.
         self._paint_live()
 
@@ -532,6 +583,11 @@ class RemapWindow(Gtk.Window):
     def _fill_choice(self, widget: _Pad | _Knob) -> None:
         """Put that control's job list in the dropdown."""
         number = widget.number
+        kind = "pad" if widget.kind == "pad" else "knob"
+        self.choice.update_property(
+            [Gtk.AccessibleProperty.LABEL],
+            [f"Choose assignment for LPD8 {kind} {number}"],
+        )
         if widget.kind == "pad":
             self.menu_name.set_text(f"Pad {number} does")
             names = [s.label for s in lpd8map.PAD_SLOTS]
@@ -563,7 +619,7 @@ class RemapWindow(Gtk.Window):
 
     # -- writing ---------------------------------------------------------
     def _on_choice(self, drop: Gtk.DropDown, _param) -> None:
-        if self._open is None:
+        if self._write_pending or self._open is None:
             return
         widget = self._open
         number = widget.number
@@ -581,17 +637,40 @@ class RemapWindow(Gtk.Window):
         self.menu.popdown()
 
     def _write(self, edit) -> None:
-        """Run one edit and queue the restart."""
+        """Save one mapping off GTK and queue restart only after success."""
+        if self._write_pending:
+            return
+        self._write_error = ""
+        self._write_pending = True
+        for widget in (*self._pads.values(), *self._knobs.values()):
+            widget.set_sensitive(False)
+        self._show_status()
+
+        def run() -> None:
+            changed = False
+            error = ""
+            try:
+                changed = bool(edit())
+            except Exception as exc:  # surfaced to the GTK thread below
+                log.warning("LPD8 remap failed: %s", exc)
+                error = str(exc) or type(exc).__name__
+            GLib.idle_add(self._finish_write, changed, error)
+
         try:
-            changed = edit()
-        except (OSError, ValueError) as exc:
-            log.warning("LPD8 remap failed: %s", exc)
-            self._say(f"Could not save that: {exc}")
-            return
-        if not changed:
-            return
+            threading.Thread(target=run, daemon=True, name="hearth-lpd8-map-save").start()
+        except RuntimeError as exc:
+            self._finish_write(False, f"Could not start LPD8 map save: {exc}")
+
+    def _finish_write(self, changed: bool, error: str = "") -> bool:
+        """Restore controls and publish the worker result on the GTK thread."""
+        self._write_pending = False
+        self._write_error = f"Could not save that: {error}" if error else ""
         self._refresh_map()
-        self._queue_restart()
+        if error:
+            self._say(self._write_error)
+        elif changed:
+            self._queue_restart()
+        return False
 
     def _queue_restart(self) -> None:
         if self._restart_id:
@@ -605,10 +684,13 @@ class RemapWindow(Gtk.Window):
 
     def _restart(self) -> None:
         try:
-            services_mod.restart(lpd8map.UNIT)
+            started = services_mod.restart(lpd8map.UNIT)
         except Exception as exc:  # pragma: no cover - surfaced, not raised
             log.warning("could not restart %s: %s", lpd8map.UNIT, exc)
             self._say(f"Could not restart the LPD8 service: {exc}")
+            return
+        if not started:
+            self._say("Could not restart the LPD8 service: systemctl could not be started")
 
     def _on_close(self, *_args) -> bool:
         # A queued restart must not outlive the window that promised it.

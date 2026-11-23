@@ -12,6 +12,7 @@ import pytest
 
 from hearth import proc
 from hearth.audio import pactl
+from hearth.errors import CommandError
 
 
 @pytest.fixture
@@ -63,6 +64,66 @@ def test_select_loopbacks_filters_source_and_sink(fixture_text):
     assert pactl.select_loopbacks(modules, sinks=pactl.DEFAULT_LOOPBACK_SINKS) == []
 
 
+def test_exact_source_filter_does_not_match_similarly_named_sources():
+    modules = [
+        pactl.Module(
+            index=1,
+            name="module-loopback",
+            args="source=vm_game.monitor-extra sink=vm_chat",
+        ),
+        pactl.Module(
+            index=2,
+            name="module-loopback",
+            args="source=vm_game.monitor sink=vm_music",
+        ),
+    ]
+
+    # Legacy substring lookup remains available, but route UI needs exactness.
+    assert len(pactl.select_loopbacks(modules, source="vm_game.monitor")) == 2
+    exact = pactl.select_loopbacks(modules, source="vm_game.monitor", exact_source=True)
+    assert [loop.index for loop in exact] == [2]
+
+
+def test_unload_loopbacks_only_unloads_the_exact_source(monkeypatch):
+    modules = [
+        pactl.Module(
+            index=1,
+            name="module-loopback",
+            args="source=vm_game.monitor-extra sink=vm_chat",
+        ),
+        pactl.Module(
+            index=2,
+            name="module-loopback",
+            args="source=vm_game.monitor sink=vm_chat",
+        ),
+    ]
+    calls: list[list[str]] = []
+    monkeypatch.setattr(pactl, "modules", lambda **_kwargs: modules)
+    monkeypatch.setattr(proc, "run", lambda argv, **_kwargs: calls.append(list(argv)))
+
+    assert pactl.unload_loopbacks("vm_game.monitor", ["vm_chat"]) == 1
+    assert calls == [["pactl", "unload-module", "2"]]
+
+
+def test_unload_loopbacks_reports_failures_instead_of_success(monkeypatch):
+    modules = [
+        pactl.Module(
+            index=2,
+            name="module-loopback",
+            args="source=vm_game.monitor sink=vm_chat",
+        )
+    ]
+    monkeypatch.setattr(pactl, "modules", lambda **_kwargs: modules)
+
+    def rejected(argv, **_kwargs):
+        raise CommandError(argv, returncode=1, stderr="server rejected unload")
+
+    monkeypatch.setattr(proc, "run", rejected)
+
+    with pytest.raises(CommandError, match="server rejected unload"):
+        pactl.unload_loopbacks("vm_game.monitor", ["vm_chat"])
+
+
 def test_module_arg_parsing():
     mod = pactl.Module(index=1, name="module-loopback", args="source=a sink=b latency_msec=12")
     assert mod.arg("sink") == "b"
@@ -82,13 +143,39 @@ def test_commands_are_argv_and_never_shell(monkeypatch):
     pactl.set_volume("vm_game", 55)
     pactl.set_default_sink("vm_game")
     pactl.set_stream_mute("412", True)
+    pactl.set_stream_volume("412", 73)
     pactl.set_stream_mute("", True)  # no index, no command
+    pactl.set_stream_volume("", 73)
 
     assert calls[0] == ["pactl", "set-sink-mute", "vm game; rm -rf /", "1"]
     assert calls[3] == ["pactl", "set-sink-input-mute", "412", "1"]
-    assert len(calls) == 4
+    assert calls[4] == ["pactl", "set-sink-input-volume", "412", "73%"]
+    assert len(calls) == 5
     assert calls[1] == ["pactl", "set-sink-volume", "vm_game", "55%"]
     assert calls[2] == ["pactl", "set-default-sink", "vm_game"]
+
+
+@pytest.mark.parametrize(
+    ("name", "args"),
+    [
+        ("set_mute", ("vm_game", True)),
+        ("move_sink_input", ("42", "vm_chat")),
+        ("set_source_mute", ("sm7b_mono", True)),
+        ("set_stream_mute", ("42", True)),
+        ("set_stream_volume", ("42", 65)),
+        ("set_volume", ("vm_game", 65)),
+        ("set_default_sink", ("vm_game",)),
+    ],
+)
+def test_detached_mutators_report_immediate_spawn_failure(
+    monkeypatch, name: str, args: tuple[object, ...]
+) -> None:
+    def fail(argv, **_kwargs):
+        raise CommandError(argv, stderr="pactl is not executable")
+
+    monkeypatch.setattr(proc, "spawn", fail)
+
+    assert getattr(pactl, name)(*args) is False
 
 
 def test_empty_sink_name_is_a_no_op(monkeypatch):
@@ -103,6 +190,35 @@ def test_empty_sink_name_is_a_no_op(monkeypatch):
     pactl.set_volume("", 10)
     pactl.set_default_sink("")
     assert not called, "an unset monitor sink must not produce a pactl call"
+
+
+def test_load_loopback_waits_for_a_bounded_command(monkeypatch):
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        return proc.Result(tuple(argv), 0, "42", "")
+
+    monkeypatch.setattr(proc, "run", fake_run)
+
+    pactl.load_loopback("vm_game.monitor", "vm_chat", latency_msec=20)
+
+    argv, kwargs = calls[0]
+    assert argv[:3] == ["pactl", "load-module", "module-loopback"]
+    assert "source=vm_game.monitor" in argv
+    assert "sink=vm_chat" in argv
+    assert "latency_msec=20" in argv
+    assert kwargs["timeout"] == 2.0
+
+
+def test_load_loopback_surfaces_a_rejected_route(monkeypatch):
+    def rejected(argv, **_kwargs):
+        raise CommandError(argv, returncode=1, stderr="No such source")
+
+    monkeypatch.setattr(proc, "run", rejected)
+
+    with pytest.raises(CommandError, match="No such source"):
+        pactl.load_loopback("missing.monitor", "vm_chat")
 
 
 def test_reads_survive_a_missing_pactl():

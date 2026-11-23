@@ -96,7 +96,7 @@ def test_problems_excludes_the_healthy_shapes(rig: list[units.Unit]) -> None:
 def test_the_count_only_claims_what_it_can_judge(rig: list[units.Unit]) -> None:
     """Oneshots and uninstalled units are excluded from the tally."""
     judged = [u for u in rig if u.healthy is not None and u.kind not in ("oneshot", "ondemand")]
-    assert units.summary(rig) == f"All {len(judged)} audio services are running"
+    assert units.summary(rig) == f"All {len(judged)} monitored services are healthy"
     assert len(judged) < len(rig)
 
 

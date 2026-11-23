@@ -21,9 +21,13 @@ onto the main loop with ``GLib.idle_add`` before a widget is touched.
 from __future__ import annotations
 
 import logging
+import os
+import stat
 import sys
+import tempfile
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,7 +38,7 @@ gi.require_version("Gdk", "4.0")
 
 from gi.repository import Gdk, GLib, Gtk  # noqa: E402 - must follow require_version
 
-from hearth import collector as collector_mod  # noqa: E402
+from hearth import APP_ID, collector as collector_mod  # noqa: E402
 from hearth import control  # noqa: E402
 from hearth import ipc as ipc_mod  # noqa: E402
 from hearth import leds  # noqa: E402
@@ -43,7 +47,8 @@ from hearth import mic_routes  # noqa: E402
 from hearth import services as services_mod  # noqa: E402
 from hearth import settings as settings_mod  # noqa: E402
 from hearth.audio import pactl  # noqa: E402
-from hearth.ui.gtk4 import icons as icons_mod  # noqa: E402
+
+from hearth.ui.gtk4 import action_icons, icons as icons_mod  # noqa: E402
 from hearth.ui.gtk4 import style as style_mod  # noqa: E402
 from hearth.ui.gtk4.widgets import Fader, Meter, Scale, Sliver, parse_rgb, rounded  # noqa: E402
 
@@ -53,7 +58,6 @@ log = logging.getLogger(__name__)
 #: wildly between icon packs; these do not.
 ART_DIR = Path(__file__).resolve().parents[4] / "assets" / "art"
 
-APP_ID = "co.roaring.Hearth"
 
 #: Meter height, expanded and compact. Everything else in a strip is fixed, so
 #: this single number is what "show apps" actually changes.
@@ -172,14 +176,6 @@ APP_CLASSES = {
 }
 
 
-def _sources_safe() -> list:
-    """Live capture devices, or nothing if pactl is unreachable."""
-    try:
-        return pactl.sources()
-    except OSError:  # pragma: no cover - no pactl, no sources
-        return []
-
-
 def app_class(name: str) -> str:
     """The mark CSS class for an application name, or "" for the default."""
     key = (name or "").lower()
@@ -221,8 +217,9 @@ class Listener:
     name: str
     muted: bool = False
     live: bool = True
-    #: PulseAudio sink-input index, needed to mute this app alone.
+    #: PulseAudio sink-input index, needed to mute/adjust this app alone.
     index: str = ""
+    volume: int = 100
 
 
 @dataclass
@@ -256,13 +253,25 @@ class Strip(Gtk.Box):
         self.set_valign(Gtk.Align.START)
         self._held_until = 0.0
         self._hw_until = 0.0
-        # Destination checkboxes, kept so one endpoint can untick another.
+        # Route controls are tracked so one serialized mutation disables every
+        # affected input/output selector, not just the checkbox that started it.
         self._out_checks: dict[str, Gtk.CheckButton] = {}
+        self._in_checks: dict[str, Gtk.CheckButton] = {}
+        self._carla_check: Gtk.CheckButton | None = None
         self._routing = False
+        self._route_busy = False
+        self._route_errors: dict[str, str] = {}
+        self._route_prior_sensitivity: list[tuple[Gtk.Widget, bool]] = []
+        self._route_generation = 0
+        self._route_popover_dirty = False
+        self._listener_volume_controls: dict[str, tuple[Gtk.Scale, Gtk.Label, int]] = {}
+        self._listener_move_controls: dict[str, Gtk.Widget] = {}
+        self._listener_volume_held: dict[str, float] = {}
 
         # header: grip, name, minimise
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         grip = self._grip()
+        self.reorder_handle = grip
         header.append(grip)
         # Single-word bus names shout; a two-word name like "Discord mic"
         # reads better as typed and would not fit the strip uppercased.
@@ -274,9 +283,12 @@ class Strip(Gtk.Box):
         name.set_hexpand(True)
         name.set_tooltip_text(channel.name)
         header.append(name)
-        minimise = Gtk.Button(label="\u2013")
+        minimise = Gtk.Button()
         minimise.add_css_class("minbox")
+        minimise.set_child(action_icons.image("collapse", 12))
+        action_icons.accessible_label(minimise, f"Minimise {channel.name} to the rail")
         minimise.set_tooltip_text(f"Minimise {channel.name} to the rail")
+        self.minimise_button = minimise
         minimise.connect("clicked", lambda _b: window.minimise(channel.sink))
         header.append(minimise)
         # Double clicking a bus header collapses it, the same way a
@@ -296,7 +308,9 @@ class Strip(Gtk.Box):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
         row.set_halign(Gtk.Align.CENTER)
         self.meter = Meter(self.pal, height=window.meter_h)
+        action_icons.accessible_label(self.meter, f"{channel.name} audio level")
         self.fader = Fader(self.pal, height=window.meter_h)
+        action_icons.accessible_label(self.fader, f"{channel.name} volume")
         self.fader.connect("moved", self._on_moved)
         # The ruler used to be drawn once per group, hanging off the right
         # edge where it read as clipped and belonged to nothing. One per
@@ -321,6 +335,8 @@ class Strip(Gtk.Box):
             chip = Gtk.Button(label=channel.bind)
             chip.add_css_class("bind")
             chip.set_valign(Gtk.Align.CENTER)
+            accessible_name = f"Open LPD8 remapping for {channel.name} (knob {channel.bind})"
+            action_icons.accessible_label(chip, accessible_name)
             chip.set_tooltip_text(self._bind_tip())
             chip.connect("clicked", lambda _b: self.win.open_remap())
             self.bind_button = chip
@@ -341,6 +357,7 @@ class Strip(Gtk.Box):
         self.mute = Gtk.ToggleButton(label="MUTE")
         self.mute.add_css_class("mute")
         self.mute.set_hexpand(True)
+        action_icons.accessible_label(self.mute, f"Mute {channel.name}")
         self._mute_handler = self.mute.connect("toggled", self._on_mute)
         brow.append(self.mute)
         self.append(brow)
@@ -350,7 +367,9 @@ class Strip(Gtk.Box):
         self.out_button = Gtk.MenuButton()
         self.out_button.set_label("OUT")
         self.out_button.add_css_class("outbtn")
-        self.out_button.set_tooltip_text(f"Choose where {channel.name} is sent")
+        out_label = f"Choose where {channel.name} is sent"
+        action_icons.accessible_label(self.out_button, out_label)
+        self.out_button.set_tooltip_text(out_label)
         self.out_popover = Gtk.Popover()
         self.out_popover.add_css_class("outpop")
         self.out_button.set_popover(self.out_popover)
@@ -365,7 +384,9 @@ class Strip(Gtk.Box):
             self.in_button = Gtk.MenuButton()
             self.in_button.set_label("IN")
             self.in_button.add_css_class("outbtn")
-            self.in_button.set_tooltip_text(f"Choose what feeds {channel.name}")
+            in_label = f"Choose what feeds {channel.name}"
+            action_icons.accessible_label(self.in_button, in_label)
+            self.in_button.set_tooltip_text(in_label)
             self.in_popover = Gtk.Popover()
             self.in_popover.add_css_class("outpop")
             self.in_button.set_popover(self.in_popover)
@@ -389,19 +410,63 @@ class Strip(Gtk.Box):
     # -- construction helpers -------------------------------------------
     def _grip(self) -> Gtk.DrawingArea:
         area = Gtk.DrawingArea()
-        area.set_content_width(10)
-        area.set_content_height(12)
-        area.set_tooltip_text("Drag to reorder")
+        # This is a drag handle, not a clickable button. Keep its native role
+        # honest, but make it reachable by Tab and let Left/Right reorder a
+        # strip for users who cannot drag with a pointer.
+        area.set_content_width(16)
+        area.set_content_height(16)
+        area.set_focusable(True)
+        area.set_accessible_role(Gtk.AccessibleRole.GROUP)
+        area.update_property(
+            [Gtk.AccessibleProperty.LABEL],
+            [f"Reorder {self.channel.name}; press Left or Right to move"],
+        )
+        area.set_tooltip_text("Drag to reorder; focus and press Left/Right to move")
 
         def draw(_a, cr, w, h):
             cr.set_source_rgb(*parse_rgb(self.pal["button"]))
             for col in range(2):
                 for rowi in range(3):
-                    cr.arc(3 + col * 4, 3 + rowi * 3.5, 1.1, 0, 6.2832)
+                    cr.arc(4 + col * 5, 3.5 + rowi * 4.5, 1.15, 0, 6.2832)
                     cr.fill()
 
         area.set_draw_func(draw)
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_grip_key_pressed)
+        area.add_controller(keys)
         return area
+
+    def _on_grip_key_pressed(
+        self,
+        _controller: Gtk.EventControllerKey,
+        keyval: int,
+        _keycode: int,
+        _state: Gdk.ModifierType,
+    ) -> bool:
+        """Move one visible strip with arrow keys while the drag handle is focused."""
+        if keyval not in (Gdk.KEY_Left, Gdk.KEY_Right):
+            return False
+        direction = -1 if keyval == Gdk.KEY_Left else 1
+        visible = [
+            sink
+            for sink in self.win.order
+            if sink in self.win.strips
+            and (channel := self.win._channel(sink)) is not None
+            and channel.group == self.channel.group
+        ]
+        try:
+            index = visible.index(self.channel.sink)
+        except ValueError:
+            return False
+        destination = index + direction
+        if not 0 <= destination < len(visible):
+            # It's a supported key, but moving past a group's edge is a no-op.
+            return True
+        self.win.reorder(self.channel.sink, visible[destination])
+        # Reorder rebuilds every strip. Return focus to the same logical handle
+        # after the new hierarchy is attached so repeated arrow presses work.
+        GLib.idle_add(self.win._focus_reorder_handle, self.channel.sink)
+        return True
 
     def _bind_tip(self) -> str:
         pad = f", pad {self.channel.pad}" if self.channel.pad else ""
@@ -425,12 +490,54 @@ class Strip(Gtk.Box):
     def _on_drop(self, _t: Gtk.DropTarget, value: str, _x: float, _y: float) -> bool:
         payload = str(value)
         if payload.startswith("app:"):
-            # An application landed on this strip: move its stream here
-            # rather than reordering anything.
-            pactl.move_sink_input(payload[4:], self.channel.sink)
-            GLib.timeout_add(400, self._route_settled)
-            return True
+            # Pointer drag and keyboard movement share the same stream-move path.
+            return self._move_app_to(payload[4:])
         self.win.reorder(payload, self.channel.sink)
+        return True
+
+    def _move_app_to(self, listener_index: str, *, restore_focus: bool = False) -> bool:
+        """Move one application stream onto this bus, preserving drag behavior."""
+        if not pactl.move_sink_input(listener_index, self.channel.sink):
+            self.set_tooltip_text("Could not move this app; check pactl/PipeWire")
+            return False
+        self.set_tooltip_text(None)
+        if restore_focus:
+            # The next verified snapshot rebuilds the source and destination
+            # rows. Keep both identities so a stale snapshot can't restore focus
+            # to the stream's old row and prematurely clear this request.
+            self.win._pending_listener_focus = listener_index
+            self.win._pending_listener_focus_sink = self.channel.sink
+        GLib.timeout_add(400, self._route_settled)
+        return True
+
+    def _on_listener_name_key_pressed(
+        self,
+        _controller: Gtk.EventControllerKey,
+        keyval: int,
+        _keycode: int,
+        _state: Gdk.ModifierType,
+        listener_index: str,
+    ) -> bool:
+        """Move a focused app row left/right across visible mixer buses."""
+        if keyval not in (Gdk.KEY_Left, Gdk.KEY_Right):
+            return False
+        # The key controller bubbles from the focused row. If a child slider
+        # owns focus, its arrow keys must adjust volume rather than moving the
+        # app to another bus. Only the row itself authorizes this action.
+        move_control = self._listener_move_controls.get(listener_index)
+        if move_control is None or not move_control.has_focus():
+            return False
+        visible = [sink for sink in self.win.order if sink in self.win.strips]
+        try:
+            position = visible.index(self.channel.sink)
+        except ValueError:
+            return False
+        destination = position + (-1 if keyval == Gdk.KEY_Left else 1)
+        if not 0 <= destination < len(visible):
+            return True
+        target = self.win.strips.get(visible[destination])
+        if target is not None:
+            target._move_app_to(listener_index, restore_focus=True)
         return True
 
     # -- user input ------------------------------------------------------
@@ -438,12 +545,37 @@ class Strip(Gtk.Box):
         self._held_until = time.monotonic() + HOLD_S
         self.win.quicken()
         self.value.set_text(f"{value}")
-        pactl.set_volume(self.channel.sink, value)
+
+        def failed() -> None:
+            self._held_until = 0.0
+            self.fader.set_tooltip_text("Could not set volume; check pactl/PipeWire")
+            self.win.collector.refresh_now()
+
+        if not self.win.queue_volume("sink", self.channel.sink, value, failed):
+            failed()
+            return
+        self.fader.set_tooltip_text(None)
 
     def _on_mute(self, button: Gtk.ToggleButton) -> None:
         active = button.get_active()
+        if not pactl.set_mute(self.channel.sink, active):
+            # Restore the last known mute state without recursively issuing
+            # another pactl command from the toggled signal.
+            self.mute.handler_block(self._mute_handler)
+            try:
+                button.set_active(not active)
+                button.set_label("MUTED" if not active else "MUTE")
+                action = "Unmute" if not active else "Mute"
+                action_icons.accessible_label(button, f"{action} {self.channel.name}")
+                button.set_tooltip_text("Could not change mute; check pactl/PipeWire")
+            finally:
+                self.mute.handler_unblock(self._mute_handler)
+            self.win.collector.refresh_now()
+            return
         button.set_label("MUTED" if active else "MUTE")
-        pactl.set_mute(self.channel.sink, active)
+        action = "Unmute" if active else "Mute"
+        action_icons.accessible_label(button, f"{action} {self.channel.name}")
+        button.set_tooltip_text(None)
 
     # -- state -----------------------------------------------------------
     @property
@@ -476,30 +608,45 @@ class Strip(Gtk.Box):
         self.listeners.set_visible(expanded)
 
     def apply(self, state: ChannelState) -> None:
-        dead = not state.present
+        # The first collector snapshot is not the same as a confirmed missing
+        # device. Keep the strip in a quiet skeleton state until that snapshot
+        # arrives; only then render the real unavailable/working state.
+        loading = not state.seen
+        dead = state.seen and not state.present
         self.set_css_state(dead)
-        self.meter.set_state(muted=state.muted, dead=dead)
-        self.set_muted_look(state.muted and not dead)
-        self.fader.set_dead(dead)
-        if not dead and time.monotonic() > self._held_until:
+        if loading:
+            self.add_css_class("ghost")
+        else:
+            self.remove_css_class("ghost")
+        self.meter.set_state(muted=state.muted, dead=dead or loading)
+        self.set_muted_look(state.muted and not dead and not loading)
+        self.fader.set_dead(dead or loading)
+        if not dead and not loading and time.monotonic() > self._held_until:
             self.fader.set_value(state.volume)
             self.value.set_text(f"{state.volume}")
-        if dead:
+        elif loading:
+            self.value.set_text("\u2026")
+        else:
             self.value.set_text("--")
         self.mute.handler_block(self._mute_handler)
-        self.mute.set_active(state.muted and not dead)
-        self.mute.set_label("MUTED" if (state.muted and not dead) else "MUTE")
-        self.mute.set_sensitive(not dead)
+        active = state.muted and not dead and not loading
+        self.mute.set_active(active)
+        self.mute.set_label("MUTED" if active else "MUTE")
+        action = "Unmute" if active else "Mute"
+        action_icons.accessible_label(self.mute, f"{action} {self.channel.name}")
+        self.mute.set_sensitive(not dead and not loading)
         self.mute.handler_unblock(self._mute_handler)
 
         self.device.remove_css_class("missing")
-        if dead:
+        if loading:
+            self.device.set_text("checking\u2026")
+        elif dead:
             self.device.add_css_class("missing")
             self.device.set_text("no device")
         else:
             self.device.set_text(state.device or "\u2014")
 
-        self._fill_listeners(state.listeners)
+        self._fill_listeners(state.listeners, loading=loading)
 
     def set_muted_look(self, muted: bool) -> None:
         """Tint the whole strip while its bus is muted.
@@ -527,32 +674,65 @@ class Strip(Gtk.Box):
 
     def _mark(self, app: str, size: int) -> Gtk.Widget:
         """The installed icon for an app, falling back to a letter chip."""
-        image = icons_mod.icon_image(app, size)
+        image = icons_mod.icon_image(app, size, allow_index_scan=False)
         if image is not None:
             image.set_valign(Gtk.Align.CENTER)
             return image
+
+        # Never freeze GTK while looking through every installed icon theme.
+        # Show a real, styled fallback immediately; replace it on the main loop
+        # if the background file index finds a genuine icon for this app.
         chip = Gtk.Label(label=app[:1].upper() or "?")
         chip.add_css_class("mark")
         chip.set_valign(Gtk.Align.CENTER)
         chip.set_tooltip_text(app)
+        chip.set_accessible_role(Gtk.AccessibleRole.PRESENTATION)
         brand = app_class(app)
         if brand:
             chip.add_css_class(brand)
-        return chip
+        holder = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        holder.set_valign(Gtk.Align.CENTER)
+        holder.set_size_request(size + 8, size)
+        holder.append(chip)
+
+        def install_icon() -> bool:
+            # A listener row may have been replaced while the index was built.
+            if holder.get_root() is None:
+                return False
+            resolved = icons_mod.icon_image(app, size, allow_index_scan=False)
+            if resolved is None:
+                return False
+            previous = holder.get_first_child()
+            if previous is not None:
+                holder.remove(previous)
+            resolved.set_valign(Gtk.Align.CENTER)
+            holder.append(resolved)
+            return False
+
+        icons_mod.warm_indexes(install_icon)
+        return holder
 
     def _fill_outputs(self) -> None:
-        """Build the routing list from the live module table.
+        """Build routing controls from the latest background snapshot.
 
-        Read at open time rather than cached: somebody else's script can
-        load or unload a loopback at any moment, and a checkbox that
-        disagrees with the graph is worse than no checkbox.
+        The collector refreshes the route graph several times per second.
+        Reading system state here would block GTK if the Pulse compatibility
+        server is slow. While no verified graph is available, keep controls
+        disabled rather than showing a guessed all-off state.
         """
+        if self._route_busy:
+            # A popover may be opened while an earlier operation owns the
+            # graph. Mark it dirty so worker completion re-renders it enabled.
+            self._route_popover_dirty = True
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         source = f"{self.channel.sink}.monitor"
-        try:
-            live = {loop.sink for loop in pactl.select_loopbacks(pactl.modules(), source=source)}
-        except Exception:  # pragma: no cover - a dead server must not crash the UI
-            live = set()
+        live = self.win._routes.get(source, set())
+        known = self.win._routes_known
+        if not known:
+            hint = Gtk.Label(label="Waiting for live routing state…", xalign=0.0)
+            hint.add_css_class("outhint")
+            hint.set_wrap(True)
+            box.append(hint)
         if self.channel.group == "mic":
             hint = Gtk.Label(
                 label="2i2 \u2192 Carla \u2192 this bus. Tick a device to hear it.",
@@ -567,7 +747,16 @@ class Strip(Gtk.Box):
             if sink == self.channel.sink:
                 continue
             check = Gtk.CheckButton(label=label)
+            action_icons.accessible_label(check, f"Send {self.channel.name} to {label}")
             check.set_active(sink in live)
+            check.set_sensitive(known and not self._route_busy)
+            route_errors = getattr(self, "_route_errors", {})
+            if sink in route_errors:
+                check.set_tooltip_text(route_errors[sink])
+            elif not known:
+                check.set_tooltip_text("Waiting for a verified live routing snapshot")
+            elif self._route_busy:
+                check.set_tooltip_text("Another route change is still running")
             check.connect("toggled", self._on_route, sink)
             self._out_checks[sink] = check
             box.append(check)
@@ -575,12 +764,20 @@ class Strip(Gtk.Box):
 
     def _fill_inputs(self) -> None:
         """Which capture devices are poured into this mic bus."""
+        if self._route_busy:
+            self._route_popover_dirty = True
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         hint = Gtk.Label(label="Feeding this mic bus", xalign=0.0)
         hint.add_css_class("outhint")
         box.append(hint)
         live = {source for source, sinks in self.win._routes.items() if self.channel.sink in sinks}
-        present = {entry.name for entry in _sources_safe()}
+        sources_known = self.win._sources_known
+        present = self.win._sources_present if sources_known else set()
+        if not sources_known:
+            note = Gtk.Label(label="Waiting for capture-device inventory…", xalign=0.0)
+            note.add_css_class("outhint")
+            note.set_wrap(True)
+            box.append(note)
         conf = mic_routes.read()
 
         # Carla's processed chain comes first because on this rig it is the
@@ -588,28 +785,62 @@ class Strip(Gtk.Box):
         # used to be wired into both mic buses at login with no way to say
         # no, so B2 was a copy of B1 whether or not anyone asked.
         carla = Gtk.CheckButton(label="SM7B via Carla")
+        action_icons.accessible_label(carla, f"Route SM7B via Carla into {self.channel.name}")
         carla.set_active(mic_routes.carla_enabled(conf, self.channel.sink))
         carla.set_tooltip_text("2i2 \u2192 Carla \u2192 this bus")
+        carla.set_sensitive(not self._route_busy)
+        if self._route_busy:
+            carla.set_tooltip_text("Another route change is still running")
         carla.connect("toggled", self._on_carla_in)
+        self._carla_check = carla
+        self._in_checks = {}
         box.append(carla)
 
         for label, source in MIC_SOURCES:
             check = Gtk.CheckButton(label=label)
+            action_icons.accessible_label(check, f"Route {label} into {self.channel.name}")
             known = source in mic_routes.RAW_TOKEN
             check.set_active(
                 mic_routes.raw_enabled(conf, self.channel.sink, source) if known else source in live
             )
-            check.set_sensitive(source in present)
-            if source not in present:
+            check.set_sensitive(sources_known and source in present and not self._route_busy)
+            if not sources_known:
+                check.set_tooltip_text("Waiting for capture-device inventory")
+            elif self._route_busy:
+                check.set_tooltip_text("Another route change is still running")
+            elif source not in present:
                 check.set_tooltip_text("Not plugged in")
             check.connect("toggled", self._on_mic_in, source)
+            self._in_checks[source] = check
             box.append(check)
         self.in_popover.set_child(box)
 
     def _on_carla_in(self, check: Gtk.CheckButton) -> None:
         """Turn Carla's processed output into this bus on or off."""
-        mic_routes.set_carla(self.channel.sink, check.get_active())
-        GLib.timeout_add(400, self._route_settled)
+        if self._routing:
+            return
+        wanted = check.get_active()
+        if self._route_busy:
+            self._routing = True
+            try:
+                check.set_active(not wanted)
+                check.set_tooltip_text("Another route change is still running")
+            finally:
+                self._routing = False
+            return
+
+        def mutate() -> None:
+            if not mic_routes.set_carla(self.channel.sink, wanted):
+                raise RuntimeError("microphone routing config could not be saved")
+
+        # set_carla can run pw-link commands with several-second timeouts; do
+        # that off GTK just like module-loopback mutations.
+        self._start_route_job(
+            mutate,
+            check,
+            wanted,
+            error_prefix="Could not save or apply Carla routing",
+        )
 
     def _on_mic_in(self, check: Gtk.CheckButton, source: str) -> None:
         """Wire or unwire one capture device into this mic bus.
@@ -619,68 +850,413 @@ class Strip(Gtk.Box):
         here looked like it worked and was undone three seconds later.
         Anything else is a plain loopback, which nothing else touches.
         """
-        wanted = check.get_active()
-        if source in mic_routes.RAW_TOKEN:
-            conf = mic_routes.read()
-            mic_routes.write(mic_routes.raw_edits(conf, self.channel.sink, source, wanted))
-            GLib.timeout_add_seconds(4, self._route_settled)
+        if self._routing:
             return
-        if wanted:
-            pactl.load_loopback(
-                source,
-                self.channel.sink,
-                latency_msec=int(self.win.cfg.get("latency_msec", 12) or 12),
+        wanted = check.get_active()
+        if self._route_busy:
+            self._routing = True
+            try:
+                check.set_active(not wanted)
+                check.set_tooltip_text("Another route change is still running")
+            finally:
+                self._routing = False
+            return
+        if source in mic_routes.RAW_TOKEN:
+            # The router config write takes an advisory lock and fsyncs an
+            # atomic replacement. Keep even this short disk path off GTK.
+            def save_route() -> None:
+                conf = mic_routes.read()
+                if not mic_routes.write(
+                    mic_routes.raw_edits(conf, self.channel.sink, source, wanted)
+                ):
+                    raise RuntimeError("microphone routing config could not be saved")
+
+            self._start_route_job(
+                save_route,
+                check,
+                wanted,
+                error_prefix="Could not save microphone routing",
             )
-        else:
-            pactl.unload_loopbacks(source, [self.channel.sink])
-        GLib.timeout_add(400, self._route_settled)
+            return
+
+        def mutate() -> None:
+            if wanted:
+                pactl.load_loopback(
+                    source,
+                    self.channel.sink,
+                    latency_msec=int(self.win.cfg.get("latency_msec", 12) or 12),
+                )
+            else:
+                pactl.unload_loopbacks(source, [self.channel.sink])
+
+        self._start_route_job(
+            mutate,
+            check,
+            wanted,
+            error_prefix=f"Could not route {source}",
+        )
 
     def _on_route(self, check: Gtk.CheckButton, sink: str) -> None:
         """Wire or unwire one destination for this bus."""
-        if self._routing:
-            # A partner checkbox is being corrected; its toggle is not a
-            # user decision and must not re-enter this handler.
+        if self._routing or self._route_busy:
             return
         source = f"{self.channel.sink}.monitor"
-        if check.get_active():
-            pactl.load_loopback(
-                source, sink, latency_msec=int(self.win.cfg.get("latency_msec", 12) or 12)
+        wanted = check.get_active()
+        partner = EXCLUSIVE.get(sink) if wanted else None
+        self._route_errors.pop(sink, None)
+        if partner:
+            self._route_errors.pop(partner, None)
+
+        def mutate() -> None:
+            if wanted:
+                pactl.load_loopback(
+                    source, sink, latency_msec=int(self.win.cfg.get("latency_msec", 12) or 12)
+                )
+                # Selecting one exclusive endpoint removes its partner only
+                # after the requested load has actually completed.
+                if partner:
+                    pactl.unload_loopbacks(source, [partner])
+            else:
+                pactl.unload_loopbacks(source, [sink])
+
+        self._start_route_job(
+            mutate,
+            check,
+            wanted,
+            route_sink=sink,
+            error_prefix=f"Could not route {source}",
+        )
+
+    def _start_route_job(
+        self,
+        operation: Callable[[], None],
+        check: Gtk.CheckButton,
+        desired: bool,
+        *,
+        route_sink: str | None = None,
+        error_prefix: str = "Could not change this route",
+    ) -> None:
+        """Serialize a bounded route mutation and its verification off GTK."""
+        if self._route_busy:
+            self._routing = True
+            try:
+                check.set_active(not desired)
+                check.set_tooltip_text("Another route change is still running")
+            finally:
+                self._routing = False
+            return
+
+        self._route_busy = True
+        self._route_generation += 1
+        generation = self._route_generation
+        self._route_prior_sensitivity = []
+        seen: set[int] = set()
+        controls = [
+            *self._out_checks.values(),
+            *getattr(self, "_in_checks", {}).values(),
+        ]
+        carla_check = getattr(self, "_carla_check", None)
+        if carla_check is not None:
+            controls.append(carla_check)
+        controls.append(check)
+        for widget in controls:
+            if id(widget) in seen:
+                continue
+            seen.add(id(widget))
+            self._route_prior_sensitivity.append((widget, widget.get_sensitive()))
+            widget.set_sensitive(False)
+
+        def run() -> None:
+            error: Exception | None = None
+            live: set[str] | None = None
+            verification_error: Exception | None = None
+            try:
+                operation()
+            except Exception as exc:
+                error = exc
+                log.warning("route change failed for %s: %s", route_sink or self.channel.sink, exc)
+
+            # Route verification is I/O too. Keep it off GTK so a wedged Pulse
+            # compatibility server cannot freeze the whole mixer for 2 seconds.
+            if route_sink is not None and self._out_checks:
+                source = f"{self.channel.sink}.monitor"
+                try:
+                    modules = pactl.modules(strict=True)
+                    if modules:
+                        live = {
+                            loop.sink
+                            for loop in pactl.select_loopbacks(
+                                modules, source=source, exact_source=True
+                            )
+                        }
+                    else:
+                        verification_error = RuntimeError(
+                            "pactl returned an empty module table; live state is unknown"
+                        )
+                except Exception as exc:
+                    verification_error = exc
+                    log.warning("could not verify route state for %s: %s", source, exc)
+
+            GLib.idle_add(
+                self._finish_route_job,
+                check,
+                desired,
+                route_sink,
+                error_prefix,
+                error,
+                live,
+                verification_error,
+                generation,
             )
-            partner = EXCLUSIVE.get(sink)
-            if partner:
-                # Both A50 endpoints were ending up ticked, so a bus played
-                # into the same ears twice. Choosing one endpoint is
-                # choosing, not adding.
-                pactl.unload_loopbacks(source, [partner])
-                widget = self._out_checks.get(partner)
-                if widget is not None and widget.get_active():
-                    self._routing = True
-                    try:
-                        widget.set_active(False)
-                    finally:
-                        self._routing = False
+
+        try:
+            threading.Thread(
+                target=run, name=f"hearth-route-{self.channel.sink}", daemon=True
+            ).start()
+        except RuntimeError as exc:
+            self._finish_route_job(
+                check, desired, route_sink, error_prefix, exc, None, None, generation
+            )
+
+    def _finish_route_job(
+        self,
+        check: Gtk.CheckButton,
+        desired: bool,
+        route_sink: str | None,
+        error_prefix: str,
+        error: Exception | None,
+        live: set[str] | None,
+        verification_error: Exception | None,
+        generation: int,
+    ) -> bool:
+        """Return to GTK after I/O completes; apply only the latest graph read."""
+        if generation != self._route_generation:
+            return False
+
+        self._route_busy = False
+        for widget, was_sensitive in self._route_prior_sensitivity:
+            widget.set_sensitive(was_sensitive)
+        self._route_prior_sensitivity = []
+
+        if route_sink is not None:
+            if error is not None:
+                self._route_errors[route_sink] = f"{error_prefix}: {error}"
+            elif verification_error is not None:
+                self._route_errors[route_sink] = (
+                    f"Route command finished, but live state could not be verified: "
+                    f"{verification_error}"
+                )
+            else:
+                self._route_errors.pop(route_sink, None)
+
+        if error is not None:
+            self._routing = True
+            try:
+                check.set_active(not desired)
+                check.set_tooltip_text(f"{error_prefix}: {error}")
+            finally:
+                self._routing = False
+        elif route_sink is not None and verification_error is not None:
+            check.set_tooltip_text(self._route_errors[route_sink])
         else:
-            pactl.unload_loopbacks(source, [sink])
-        GLib.timeout_add_seconds(1, self._route_settled)
+            check.set_tooltip_text(None)
+
+        dirty = getattr(self, "_route_popover_dirty", False)
+        self._refresh_visible_route_popovers(
+            routes_changed=dirty,
+            sources_changed=dirty,
+        )
+        if route_sink is not None:
+            if live is not None:
+                self._apply_live_routes(live)
+            self.win.collector.refresh_now()
+        else:
+            self.win.collector.refresh_now()
+        return False
+
+    def _refresh_visible_route_popovers(
+        self, *, routes_changed: bool = False, sources_changed: bool = False
+    ) -> None:
+        """Refresh only visible popovers, deferring replacement while busy."""
+        dirty = getattr(self, "_route_popover_dirty", False)
+        routes_changed = routes_changed or dirty
+        sources_changed = sources_changed or dirty
+        if not routes_changed and not sources_changed:
+            return
+        if self._route_busy:
+            self._route_popover_dirty = dirty or routes_changed or sources_changed
+            return
+        if routes_changed and self.out_popover.get_visible():
+            self._fill_outputs()
+        if (
+            (routes_changed or sources_changed)
+            and self.in_button is not None
+            and self.in_popover.get_visible()
+        ):
+            self._fill_inputs()
+        self._route_popover_dirty = False
+
+    def _apply_live_routes(self, live: set[str]) -> None:
+        """Paint route checkbox state from a verified graph snapshot."""
+        self._routing = True
+        try:
+            for sink, widget in self._out_checks.items():
+                widget.set_active(sink in live)
+                widget.set_tooltip_text(self._route_errors.get(sink))
+        finally:
+            self._routing = False
+
+    def _apply_route_snapshot(self, generation: int, live: set[str] | None) -> bool:
+        if generation != self._route_generation or self._route_busy or live is None:
+            return False
+        self._apply_live_routes(live)
+        return False
 
     def _route_settled(self) -> bool:
+        """Refresh state without querying PipeWire from the GTK main thread."""
         self.win.collector.refresh_now()
+        if not self._out_checks or self._route_busy:
+            return False
+
+        self._route_generation += 1
+        generation = self._route_generation
+        source = f"{self.channel.sink}.monitor"
+
+        def query() -> None:
+            live: set[str] | None = None
+            try:
+                modules = pactl.modules(strict=True)
+                if modules:
+                    live = {
+                        loop.sink
+                        for loop in pactl.select_loopbacks(
+                            modules, source=source, exact_source=True
+                        )
+                    }
+            except Exception as exc:  # pragma: no cover - logged from worker
+                log.warning("could not refresh routes for %s: %s", source, exc)
+            GLib.idle_add(self._apply_route_snapshot, generation, live)
+
+        try:
+            threading.Thread(
+                target=query, name=f"hearth-route-query-{self.channel.sink}", daemon=True
+            ).start()
+        except RuntimeError as exc:  # pragma: no cover - thread creation is exceptionally rare
+            log.warning("could not start route query for %s: %s", source, exc)
         return False
 
     def _on_app_mute(self, button: Gtk.Button, listener: Listener) -> None:
         """Mute one app without touching the bus everything else rides on."""
         muted = not listener.muted
-        pactl.set_stream_mute(listener.index, muted)
-        # Paint immediately; the next snapshot confirms it.
+        if not pactl.set_stream_mute(listener.index, muted):
+            button.set_tooltip_text("Could not change app mute; check pactl/PipeWire")
+            self.win.collector.refresh_now()
+            return
+        # Paint immediately, but advance the cache to that optimistic state.
+        # If the next collector snapshot disagrees (the command launched but
+        # PipeWire did not apply it), its signature must differ and rebuild
+        # the row back to the state actually observed from the backend.
         listener.muted = muted
+        signature = getattr(self, "_listener_signature", None)
+        if signature is not None:
+            self._listener_signature = tuple(
+                (
+                    index,
+                    name,
+                    muted if index == listener.index and name == listener.name else was_muted,
+                )
+                for index, name, was_muted in signature
+            )
         _set_mute_icon(button, muted)
-        button.set_tooltip_text(f"Unmute {listener.name}" if muted else f"Mute {listener.name}")
+        label = f"Unmute {listener.name}" if muted else f"Mute {listener.name}"
+        action_icons.accessible_label(button, label)
+        button.set_tooltip_text(label)
         if muted:
             button.add_css_class("on")
         else:
             button.remove_css_class("on")
 
-    def _fill_listeners(self, listeners: list[Listener]) -> None:
+        # Cached rows are intentionally retained between snapshots, so keep
+        # the visible app-name styling in sync with the mute button as well.
+        row = button.get_parent()
+        mark = row.get_first_child() if row is not None else None
+        name_label = mark.get_next_sibling() if mark is not None else None
+        if name_label is not None:
+            if muted:
+                name_label.add_css_class("muted")
+            else:
+                name_label.remove_css_class("muted")
+
+    def _on_app_volume(self, scale: Gtk.Scale, listener: Listener) -> None:
+        """Adjust one sink input without changing the bus volume."""
+        if not listener.index:
+            return
+        percent = max(0, min(150, round(scale.get_value())))
+        self._listener_volume_held[listener.index] = time.monotonic() + HOLD_S
+        controls = self._listener_volume_controls.get(listener.index)
+        if controls is not None:
+            _control, value_label, _handler = controls
+            value_label.set_text(f"{percent}%")
+        scale.set_tooltip_text(f"{listener.name}: {percent}%")
+
+        def failed() -> None:
+            self._listener_volume_held[listener.index] = 0.0
+            scale.set_tooltip_text("Could not set app volume; check pactl/PipeWire")
+            self.win.collector.refresh_now()
+
+        if not self.win.queue_volume("stream", listener.index, percent, failed):
+            failed()
+
+    def _sync_listener_volumes(self, listeners: list[Listener]) -> None:
+        """Sync unchanged app rows to snapshots without fighting the user."""
+        now = time.monotonic()
+        for listener in listeners:
+            controls = self._listener_volume_controls.get(listener.index)
+            if controls is None or now <= self._listener_volume_held.get(listener.index, 0.0):
+                continue
+            scale, value_label, handler = controls
+            percent = max(0, min(150, int(listener.volume)))
+            if round(scale.get_value()) != percent:
+                scale.handler_block(handler)
+                try:
+                    scale.set_value(percent)
+                finally:
+                    scale.handler_unblock(handler)
+            value_label.set_text(f"{percent}%")
+            scale.set_tooltip_text(f"{listener.name}: {percent}%")
+
+    def _fill_listeners(self, listeners: list[Listener], *, loading: bool = False) -> None:
+        # A snapshot arrives every 250-500 ms. Recreating these rows on each
+        # poll is unnecessary GTK churn and can disturb pointer/keyboard focus.
+        # The displayed list is capped at five, so cache only what is visible.
+        if loading:
+            signature = (("__loading__", "Loading apps\u2026", False),)
+        else:
+            signature = tuple(
+                (listener.index, listener.name, listener.muted) for listener in listeners[:5]
+            )
+        if getattr(self, "_listener_signature", None) == signature:
+            self._sync_listener_volumes(listeners[:5])
+            return
+        if loading:
+            self._listener_signature = signature
+            self._listener_volume_controls = {}
+            self._listener_move_controls = {}
+            self._clear(self.listeners)
+            placeholder = Gtk.Label(label="Loading apps\u2026", xalign=0.0)
+            placeholder.add_css_class("listener")
+            placeholder.set_can_target(False)
+            self.listeners.append(placeholder)
+            return
+        now = time.monotonic()
+        held_values = {
+            index: round(scale.get_value())
+            for index, (scale, _label, _handler) in self._listener_volume_controls.items()
+            if now <= self._listener_volume_held.get(index, 0.0)
+        }
+        self._listener_signature = signature
+        self._listener_volume_controls = {}
+        self._listener_move_controls = {}
         self._clear(self.listeners)
         for listener in listeners[:5]:
             # Round 10 gives every app its own row: brand chip, name, and the
@@ -699,7 +1275,7 @@ class Strip(Gtk.Box):
                     "prepare",
                     lambda *_a, idx=listener.index: Gdk.ContentProvider.new_for_value(f"app:{idx}"),
                 )
-                row.add_controller(grab)
+                app_drag = grab
                 row.set_tooltip_text(f"{listener.name} \u2014 drag onto another bus")
             row.append(mark)
             name = Gtk.Label(label=listener.name, xalign=0.0)
@@ -712,17 +1288,59 @@ class Strip(Gtk.Box):
             name.set_width_chars(0)
             name.set_hexpand(True)
             name.set_tooltip_text(listener.name)
+            if listener.index:
+                # The visible app name remains the drag source. The containing
+                # row is the keyboard move handle, so focus has a real GTK
+                # focus target and the accessible group contains the app label,
+                # volume slider and mute action together.
+                name.add_controller(app_drag)
+                name.set_tooltip_text(f"{listener.name} — drag to another bus")
+                row.set_focusable(True)
+                row.set_accessible_role(Gtk.AccessibleRole.GROUP)
+                action_name = (
+                    f"Move {listener.name} between mixer buses; press Left or Right to move"
+                )
+                action_icons.accessible_label(row, action_name)
+                row.set_tooltip_text(
+                    f"{listener.name} — drag its name to another bus, or focus this row and press Left/Right"
+                )
+                move_keys = Gtk.EventControllerKey()
+                move_keys.connect("key-pressed", self._on_listener_name_key_pressed, listener.index)
+                row.add_controller(move_keys)
+                self._listener_move_controls[listener.index] = row
             if listener.muted:
                 name.add_css_class("muted")
             row.append(name)
+            initial_volume = max(0, min(150, held_values.get(listener.index, int(listener.volume))))
+            volume = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 150.0, 1.0)
+            action_icons.accessible_label(volume, f"{listener.name} volume")
+            volume.add_css_class("app-volume")
+            volume.set_draw_value(False)
+            volume.set_hexpand(False)
+            volume.set_size_request(46, -1)
+            volume.set_sensitive(bool(listener.index))
+            volume.set_value(initial_volume)
+            volume.set_tooltip_text(f"{listener.name}: {initial_volume}%")
+            volume_value = Gtk.Label(label=f"{initial_volume}%", xalign=1.0)
+            volume_value.add_css_class("app-volume-value")
+            volume_value.set_width_chars(4)
+            row.append(volume)
+            row.append(volume_value)
+            volume_handler = volume.connect("value-changed", self._on_app_volume, listener)
+            if listener.index:
+                self._listener_volume_controls[listener.index] = (
+                    volume,
+                    volume_value,
+                    volume_handler,
+                )
             box = Gtk.Button()
             box.add_css_class("appmute")
             _set_mute_icon(box, listener.muted)
             if listener.muted:
                 box.add_css_class("on")
-            box.set_tooltip_text(
-                f"Unmute {listener.name}" if listener.muted else f"Mute {listener.name}"
-            )
+            mute_label = f"Unmute {listener.name}" if listener.muted else f"Mute {listener.name}"
+            action_icons.accessible_label(box, mute_label)
+            box.set_tooltip_text(mute_label)
             box.set_sensitive(bool(listener.index))
             box.connect("clicked", self._on_app_mute, listener)
             row.append(box)
@@ -755,8 +1373,12 @@ class MixerWindow(Gtk.ApplicationWindow):
         # are deliberately not written to mixer_hidden -- hiding is the
         # user's choice, absence is the world's.
         self.absent: set[str] = set()
-        #: source -> sinks, refreshed with every snapshot.
+        #: source -> sinks, refreshed with every background snapshot.
         self._routes: dict[str, set[str]] = {}
+        self._routes_known = False
+        #: Source inventory from the same checked background snapshot.
+        self._sources_present: set[str] = set()
+        self._sources_known = False
         #: destinations that are muted at the device itself
         self._muted_outs: set[str] = set()
         #: in-flight window resize, if any
@@ -772,10 +1394,23 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.states: dict[str, ChannelState] = {c.sink: ChannelState() for c in CHANNELS}
         self.strips: dict[str, Strip] = {}
         self.slivers: dict[str, Sliver] = {}
+        self._pending_listener_focus: str | None = None
+        self._pending_listener_focus_sink: str | None = None
         self.group_tags: dict[str, Gtk.Label] = {}
         # Looked up lazily: the controller is often not plugged in, and
         # asking ALSA at startup would slow every launch for a lamp.
         self._led_port: str | None = None
+        # LED I/O can block for seconds if ALSA is restarting or the controller
+        # is unplugged. Coalesce desired mute states and perform all MIDI
+        # discovery/writes on one worker, never inside a GTK snapshot callback.
+        self._led_lock = threading.Lock()
+        self._led_pending: dict[str, bool] = {}
+        self._led_worker_active = False
+        # Fader gestures can emit many value changes per second. Keep only
+        # the newest pending value per sink/stream and send at a bounded rate.
+        self._volume_lock = threading.Lock()
+        self._volume_pending: dict[tuple[str, str], tuple[int, Callable[[], None]]] = {}
+        self._volume_worker_active = False
         # Laptop audio is plugged in occasionally; when it has been
         # silent and unused for a while it should get out of the way
         # rather than hold a full strip open.
@@ -800,6 +1435,7 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.banner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.banner.add_css_class("banner")
         self.banner_text = Gtk.Label(label="", xalign=0.0)
+        self.banner_text.set_accessible_role(Gtk.AccessibleRole.STATUS)
         self.banner_text.add_css_class("banner-text")
         self.banner_text.set_hexpand(True)
         self.banner.append(self.banner_text)
@@ -807,6 +1443,7 @@ class MixerWindow(Gtk.ApplicationWindow):
         # carries the one command that would fix it.
         self.banner_units: tuple[str, ...] = ()
         self.banner_button = Gtk.Button(label="RESTART")
+        action_icons.accessible_label(self.banner_button, "Restart affected audio services")
         self.banner_button.add_css_class("banner-restart")
         self.banner_button.connect("clicked", self._on_restart)
         self.banner.append(self.banner_button)
@@ -996,11 +1633,13 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.rail.set_valign(Gtk.Align.FILL if vertical else Gtk.Align.START)
         self.rail.set_halign(Gtk.Align.START if vertical else Gtk.Align.FILL)
         self.rail_handle.set_label("\u2193" if vertical else "\u2192")
-        self.rail_handle.set_tooltip_text(
+        label = (
             "Stack minimised channels along the bottom"
             if vertical
             else "Stack minimised channels down the right"
         )
+        action_icons.accessible_label(self.rail_handle, label)
+        self.rail_handle.set_tooltip_text(label)
 
     def _on_rail_dock(self, _button: Gtk.Button) -> None:
         self.rail_dock = "bottom" if self.rail_dock == "right" else "right"
@@ -1037,10 +1676,8 @@ class MixerWindow(Gtk.ApplicationWindow):
             )
             sliver.set_vexpand(vertical)
             sliver.set_hexpand(not vertical)
-            click = Gtk.GestureClick()
-            click.connect("released", lambda *_a, s=sink: self.restore(s))
             sliver.add_css_class("sliver")
-            sliver.add_controller(click)
+            sliver.connect("clicked", lambda _sliver, s=sink: self.restore(s))
             sliver.set_tooltip_text(f"Restore {channel.name}")
             self.rail.append(sliver)
             self.slivers[sink] = sliver
@@ -1062,6 +1699,13 @@ class MixerWindow(Gtk.ApplicationWindow):
         self.hidden.discard(sink)
         self.rebuild()
         self._save()
+
+    def _focus_reorder_handle(self, sink: str) -> bool:
+        """Restore keyboard focus after a reorder rebuilt the strip widgets."""
+        strip = self.strips.get(sink)
+        if strip is not None:
+            strip.reorder_handle.grab_focus()
+        return False
 
     def reorder(self, moved: str, target: str) -> None:
         if moved == target or moved not in self.order or target not in self.order:
@@ -1112,42 +1756,49 @@ class MixerWindow(Gtk.ApplicationWindow):
     def _on_snapshot(self, snapshot) -> None:
         GLib.idle_add(self._apply_snapshot, snapshot)
 
-    def _read_routes(self) -> dict[str, set[str]]:
-        """source -> sinks, straight from the live module table."""
-        routes: dict[str, set[str]] = {}
-        try:
-            for loop in pactl.select_loopbacks(pactl.modules()):
-                routes.setdefault(loop.source, set()).add(loop.sink)
-        except OSError:  # pragma: no cover - no pactl means no routing
-            return {}
-        return routes
-
-    def _read_muted_outs(self) -> set[str]:
-        """Friendly names of destination devices that are muted themselves.
-
-        The LPD8 script mutes hardware endpoints directly, so the mixer can
-        show every bus open and the room can still be silent. This is the
-        one place that discrepancy becomes visible.
-        """
-        muted: set[str] = set()
-        wanted = {sink for _label, sink in OUTPUTS}
-        reachable = {entry.name for entry in pactl.sinks()} if wanted else set()
-        for label, sink in OUTPUTS:
-            if sink in reachable and pactl.is_muted(sink):
-                muted.add(label)
-        return muted
-
     def _apply_snapshot(self, snapshot) -> bool:
-        self._routes = self._read_routes()
-        try:
-            self._muted_outs = self._read_muted_outs()
-        except OSError:  # pragma: no cover - pactl gone
-            self._muted_outs = set()
+        # These fields are collected off the GTK thread. None means the
+        # optional route query failed; keep the last verified graph rather
+        # than painting every route as disconnected during a transient error.
+        routes = getattr(snapshot, "routes", None)
+        routes_changed = routes is not None and (not self._routes_known or routes != self._routes)
+        if routes is not None:
+            self._routes = routes
+            self._routes_known = True
+        sources_present = set(snapshot.sources)
+        sources_changed = not self._sources_known or sources_present != self._sources_present
+        self._sources_present = sources_present
+        self._sources_known = True
+
+        # Rebuild open routing popovers only when their backing inventory
+        # changed. Rebuilding on every poll disrupts clicks; while a mutation
+        # is busy the strip defers the redraw until its worker completes.
+        if routes_changed or sources_changed:
+            for strip in self.strips.values():
+                strip._refresh_visible_route_popovers(
+                    routes_changed=routes_changed,
+                    sources_changed=sources_changed,
+                )
+
+        # The verbose sink snapshot already includes each sink's mute state.
+        # Derive destination mute labels from it instead of launching another
+        # sinks query plus one get-mute command per output on GTK's main loop.
+        self._muted_outs = {
+            label
+            for label, name in OUTPUTS
+            if (output := snapshot.sinks.get(name)) is not None and output.muted
+        }
         # Snapshot keeps both of these as dicts keyed by sink name.
         sinks = dict(snapshot.sinks)
         streams: dict[str, list[Listener]] = {
             sink: [
-                Listener(name=s.name or "app", muted=bool(s.muted), index=s.index) for s in entries
+                Listener(
+                    name=s.name or "app",
+                    muted=bool(s.muted),
+                    index=s.index,
+                    volume=int(s.volume),
+                )
+                for s in entries
             ]
             for sink, entries in snapshot.streams.items()
         }
@@ -1170,42 +1821,171 @@ class MixerWindow(Gtk.ApplicationWindow):
             was_muted, first = state.muted, not was_seen
             state.muted = bool(sink.muted) if sink else False
             if state.present and (first or state.muted != was_muted):
-                # Done here rather than in the mute handler so a mute from
-                # anywhere -- this window, a pad, pavucontrol, a script --
-                # reaches the pad LED. The surface has no screen; a lit pad
-                # over a silent bus is the whole problem.
+                # Queue best-effort feedback for a controller that explicitly
+                # supports incoming LED notes. This is not hardware readback;
+                # the mixer snapshot remains the source of truth for mute state.
                 self._push_led(channel.sink, state.muted)
             state.listeners = streams.get(channel.sink, [])
             state.device = self._device_label(channel, snapshot)
         if self._track_absent():
             self.rebuild()
         self.apply_states()
+        if self._pending_listener_focus is not None:
+            # Keep the request pending if this snapshot arrives before PipeWire
+            # reports the stream on its destination; a later verified snapshot
+            # will retry without stealing focus from a different control.
+            GLib.idle_add(self._restore_listener_focus, self._pending_listener_focus)
         self._update_banner()
         self._feed_remap()
         return False
 
-    def _push_led(self, sink: str, muted: bool) -> None:
-        """Mirror one bus's mute state onto its LPD8 pad.
+    def _restore_listener_focus(self, listener_index: str) -> bool:
+        """Focus the moved app only after it appears on its verified destination bus."""
+        sink = self._pending_listener_focus_sink
+        strip = self.strips.get(sink) if sink is not None else None
+        name = strip._listener_move_controls.get(listener_index) if strip is not None else None
+        if name is not None:
+            name.grab_focus()
+            if self._pending_listener_focus == listener_index:
+                self._pending_listener_focus = None
+                self._pending_listener_focus_sink = None
+        return False
 
-        The port is looked up once and re-looked-up only after a failed
-        write, so an unplugged controller costs one failed ``amidi`` call
-        rather than one per snapshot.
+    def queue_volume(
+        self, kind: str, target: str, percent: int, on_failure: Callable[[], None]
+    ) -> bool:
+        """Queue a volume update, coalescing rapid changes per target.
+
+        The UI updates immediately, but only the latest value for each bus or
+        app stream is sent every 30 ms. Pactl mutations stay off GTK, and a
+        burst of pointer events cannot create a matching burst of processes.
+        True means the worker was queued/already active, not that pactl has
+        finished changing the server state.
         """
+        if kind not in {"sink", "stream"} or not target:
+            return False
+        key = (kind, target)
+        with self._volume_lock:
+            self._volume_pending[key] = (max(0, min(150, int(percent))), on_failure)
+            if self._volume_worker_active:
+                return True
+            self._volume_worker_active = True
+
+        try:
+            threading.Thread(
+                target=self._drain_volume_updates,
+                daemon=True,
+                name="hearth-volume-writer",
+            ).start()
+        except RuntimeError as exc:
+            with self._volume_lock:
+                self._volume_pending.clear()
+                self._volume_worker_active = False
+            log.warning("could not queue volume update: %s", exc)
+            return False
+        return True
+
+    def _drain_volume_updates(self) -> None:
+        """Send coalesced bus/app volume changes on one worker thread."""
+        try:
+            while True:
+                time.sleep(0.03)
+                with self._volume_lock:
+                    if not self._volume_pending:
+                        self._volume_worker_active = False
+                        return
+                    pending = self._volume_pending
+                    self._volume_pending = {}
+
+                for (kind, target), (percent, on_failure) in pending.items():
+                    try:
+                        if kind == "sink":
+                            started = pactl.set_volume(target, percent)
+                        else:
+                            started = pactl.set_stream_volume(target, percent)
+                    except Exception as exc:
+                        log.warning("volume update for %s failed to start: %s", target, exc)
+                        started = False
+                    if not started:
+                        GLib.idle_add(on_failure)
+        except Exception as exc:
+            # Never let an unexpected worker error permanently wedge the queue.
+            log.warning("volume worker failed: %s", exc)
+            with self._volume_lock:
+                self._volume_worker_active = False
+
+    def _push_led(self, sink: str, muted: bool) -> None:
+        """Queue the latest desired LED state without blocking GTK."""
         if leds.pad_for_sink(sink) is None:
             return
-        if self._led_port is None:
-            self._led_port = leds.find_port()
-            if self._led_port is None:
+        with self._led_lock:
+            self._led_pending[sink] = muted
+            if self._led_worker_active:
                 return
-        channel = int(
-            self.cfg.get("led_midi_channel", leds.DEFAULT_CHANNEL) or leds.DEFAULT_CHANNEL
-        )
+            self._led_worker_active = True
         try:
-            sent = leds.set_sink_mute(self._led_port, sink, muted, channel)
-        except OSError:  # pragma: no cover - the surface is not load-bearing
-            sent = False
-        if not sent:
-            self._led_port = None
+            threading.Thread(
+                target=self._drain_led_updates,
+                daemon=True,
+                name="hearth-led-writer",
+            ).start()
+        except RuntimeError as exc:
+            with self._led_lock:
+                self._led_worker_active = False
+            log.warning("could not queue LPD8 LED update: %s", exc)
+
+    def _drain_led_updates(self) -> None:
+        """Drain coalesced MIDI LED updates on a background worker."""
+        try:
+            while True:
+                with self._led_lock:
+                    if not self._led_pending:
+                        self._led_worker_active = False
+                        return
+                    updates = self._led_pending
+                    self._led_pending = {}
+
+                if self._led_port is None:
+                    try:
+                        self._led_port = leds.find_port()
+                    except Exception as exc:
+                        log.debug("could not find the LPD8 port: %s", exc)
+                        self._led_port = None
+                if self._led_port is None:
+                    # Drop this batch if no controller can be found. A later
+                    # real mute change will queue a fresh discovery attempt.
+                    continue
+
+                try:
+                    channel = int(
+                        self.cfg.get("led_midi_channel", leds.DEFAULT_CHANNEL)
+                        or leds.DEFAULT_CHANNEL
+                    )
+                except (TypeError, ValueError):
+                    channel = leds.DEFAULT_CHANNEL
+
+                for index, (sink, muted) in enumerate(updates.items()):
+                    try:
+                        sent = leds.set_sink_mute(self._led_port, sink, muted, channel)
+                    except Exception as exc:
+                        log.debug("could not update LPD8 LED for %s: %s", sink, exc)
+                        sent = False
+                    if sent:
+                        continue
+
+                    # A failed write invalidates the cached port. Re-queue
+                    # later sinks only when no newer desired value is waiting.
+                    self._led_port = None
+                    with self._led_lock:
+                        for later_sink, later_muted in list(updates.items())[index + 1 :]:
+                            self._led_pending.setdefault(later_sink, later_muted)
+                    break
+        except Exception as exc:
+            # A controller failure must never escape a daemon worker or wedge
+            # the queue permanently.
+            log.warning("LPD8 LED worker failed: %s", exc)
+            with self._led_lock:
+                self._led_worker_active = False
 
     def _device_label(self, channel: Channel, snapshot) -> str:
         """Where this bus lands. Short, real, and never a routing path."""
@@ -1299,21 +2079,39 @@ class MixerWindow(Gtk.ApplicationWindow):
                 if unit and unit not in units:
                     units.append(unit)
             self.banner_units = tuple(units)
+            restart_name = (
+                "Restart " + ", ".join(self.banner_units)
+                if self.banner_units
+                else "Restart affected audio services"
+            )
+            action_icons.accessible_label(self.banner_button, restart_name)
             self.banner_button.set_visible(bool(units))
-            self.banner_button.set_tooltip_text("Restart " + ", ".join(units) if units else "")
+            self.banner_button.set_tooltip_text(restart_name if units else "")
         else:
             # The banner hides, but the button underneath stayed armed with
-            # the units from the last fault. Disarm it when the graph is well.
+            # the units from the last fault. Disarm it and clear that stale
+            # accessible name when the graph is healthy again.
             self.banner_units = ()
+            action_icons.accessible_label(self.banner_button, "Restart affected audio services")
+            self.banner_button.set_tooltip_text("")
             self.banner_button.set_visible(False)
             self.banner_button.set_sensitive(True)
         self.banner.set_visible(bool(missing))
+        if missing:
+            # The banner starts hidden and GTK can recompute its label role as
+            # PRESENTATION when the container becomes visible. Reassert STATUS
+            # after the visibility transition so the live fault message keeps
+            # its intended announcement semantics.
+            self.banner_text.set_accessible_role(Gtk.AccessibleRole.STATUS)
 
     def _on_restart(self, _button: Gtk.Button) -> None:
         """Restart whichever units own the buses that are missing."""
         if not self.banner_units:
             return
-        services_mod.restart(*self.banner_units)
+        if not services_mod.restart(*self.banner_units):
+            _button.set_tooltip_text("Could not start systemctl; check the user session")
+            return
+        _button.set_tooltip_text(None)
         self.banner_text.set_text(
             "restarting "
             + ", ".join(
@@ -1517,8 +2315,11 @@ class MixerApp(Gtk.Application):
 
     def do_shutdown(self) -> None:
         if self._ipc is not None:
-            self._ipc.stop()
-            self._ipc = None
+            try:
+                self._ipc.stop()
+            finally:
+                self._ipc = None
+                ipc_mod.remove_pid()
         if self.window is not None:
             self.window.shutdown()
         Gtk.Application.do_shutdown(self)
@@ -1532,16 +2333,24 @@ class MixerApp(Gtk.Application):
     # die with the old app.
 
     def _start_control_socket(self) -> None:
-        ipc_mod.write_pid()
         server = ipc_mod.Server(self._on_control)
         try:
             server.start()
         except OSError as exc:
             # A mixer that works is worth more than a mixer with IPC, and
             # a second instance losing the bind must not be fatal.
+            # Do not write the shared PID file until this process owns the
+            # socket; otherwise a failed second startup overwrites the first
+            # instance's PID and breaks the CLI fallback path.
             log.warning("control socket unavailable: %s", exc)
             return
         self._ipc = server
+        try:
+            ipc_mod.write_pid()
+        except OSError as exc:
+            # IPC remains useful even if the optional PID fallback cannot be
+            # written (e.g. a read-only runtime directory).
+            log.warning("control PID file unavailable: %s", exc)
 
     def _on_control(self, request: str) -> str:
         """Answer one socket request. Runs on the IPC thread, never the main one."""
@@ -1569,12 +2378,14 @@ class MixerApp(Gtk.Application):
     def _ctl_unmute(self) -> str:
         def work() -> None:
             for channel in CHANNELS:
-                try:
-                    pactl.set_mute(channel.sink, False)
-                except Exception as exc:  # a missing bus must not stop the rest
-                    log.warning("unmute %s: %s", channel.sink, exc)
+                if not pactl.set_mute(channel.sink, False):
+                    log.warning("unmute %s: pactl could not be started", channel.sink)
 
-        threading.Thread(target=work, daemon=True, name="hearth-unmute").start()
+        try:
+            threading.Thread(target=work, daemon=True, name="hearth-unmute").start()
+        except RuntimeError as exc:
+            log.warning("could not queue unmute operation: %s", exc)
+            return f"could not start unmute operation: {exc}"
         return "ok"
 
     def _ctl_sinks(self) -> str:
@@ -1613,12 +2424,41 @@ class MixerApp(Gtk.Application):
             from hearth import status
 
             try:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(status.text() + "\n")
+                paths.ensure_private_dir(target.parent)
+                try:
+                    existing = target.lstat()
+                except FileNotFoundError:
+                    existing = None
+                if existing is not None:
+                    if not stat.S_ISREG(existing.st_mode) or existing.st_uid != os.getuid():
+                        raise OSError(f"refusing to replace non-regular or foreign dump: {target}")
+
+                # Publish one complete, private snapshot rather than a
+                # world-readable partial write under the default umask.
+                fd, tmp_name = tempfile.mkstemp(prefix=f"{target.name}.tmp.", dir=target.parent)
+                tmp = Path(tmp_name)
+                try:
+                    os.fchmod(fd, 0o600)
+                    stream = os.fdopen(fd, "w", encoding="utf-8")
+                    fd = -1
+                    with stream:
+                        stream.write(status.text() + "\n")
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    tmp.replace(target)
+                except BaseException:
+                    if fd >= 0:
+                        os.close(fd)
+                    tmp.unlink(missing_ok=True)
+                    raise
             except Exception as exc:  # pragma: no cover - diagnostic only
                 log.warning("dump failed: %s", exc)
 
-        threading.Thread(target=work, daemon=True, name="hearth-dump").start()
+        try:
+            threading.Thread(target=work, daemon=True, name="hearth-dump").start()
+        except RuntimeError as exc:
+            log.warning("could not queue diagnostic dump: %s", exc)
+            return f"dump failed to start: {exc}"
         return f"dumping -> {target}"
 
 

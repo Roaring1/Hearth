@@ -4,9 +4,12 @@
 # Finds the repo, verifies, backs up, installs, and rolls back if the
 # result does not parse. Safe to run twice.
 #
-#   ./install_plasma_theme.sh              install
-#   ./install_plasma_theme.sh --dry-run    verify only, write nothing
-#   ./install_plasma_theme.sh --uninstall  put the original back
+# The active GTK4 UI already reads the desktop palette dynamically.
+# These commands only manage the retired GTK3 stylesheet and require explicit opt-in:
+#   ./install_plasma_theme.sh --check --legacy-gtk3
+#   ./install_plasma_theme.sh --dry-run --legacy-gtk3
+#   ./install_plasma_theme.sh --legacy-gtk3
+#   ./install_plasma_theme.sh --uninstall --legacy-gtk3
 
 set -euo pipefail
 

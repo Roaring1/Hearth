@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import os
+import stat
 import sys
 
 from hearth import paths
@@ -62,15 +63,31 @@ def configure(level: str | None = None, *, to_file: bool = True) -> None:
     if not to_file:
         return
 
+    file_handler = None
     try:
-        paths.state_dir().mkdir(parents=True, exist_ok=True)
+        paths.ensure_private_dir(paths.state_dir())
+        log_path = paths.log_file()
+        try:
+            existing = log_path.lstat()
+        except FileNotFoundError:
+            existing = None
+        if existing is not None:
+            if not stat.S_ISREG(existing.st_mode):
+                raise OSError(f"refusing to open non-regular log path: {log_path}")
+            if existing.st_uid != os.getuid():
+                raise PermissionError(f"log file is not owned by this user: {log_path}")
+            if existing.st_nlink != 1:
+                raise OSError(f"refusing to open hard-linked log path: {log_path}")
         file_handler = logging.handlers.RotatingFileHandler(
-            paths.log_file(),
+            log_path,
             maxBytes=_MAX_BYTES,
             backupCount=_BACKUPS,
             encoding="utf-8",
         )
+        log_path.chmod(0o600)
     except OSError as exc:
+        if file_handler is not None:
+            file_handler.close()
         # A read-only or missing home is not a reason to refuse to start.
         root.warning("file logging disabled: %s", exc)
         return

@@ -2,7 +2,7 @@
 
 from hearth.ipc.client import clear_stale_socket, is_running, send
 from hearth.ipc.protocol import COMMANDS, MAX_MSG, OK, encode, is_known, read_line
-from hearth.ipc.server import Server, pid_alive, read_pid, write_pid
+from hearth.ipc.server import Server, pid_alive, read_pid, remove_pid, write_pid
 
 __all__ = [
     "COMMANDS",
@@ -16,6 +16,7 @@ __all__ = [
     "pid_alive",
     "read_line",
     "read_pid",
+    "remove_pid",
     "send",
     "write_pid",
 ]

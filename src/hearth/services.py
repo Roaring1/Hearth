@@ -64,24 +64,40 @@ def timer_summary(unit: str) -> str:
     return parse_timer_summary(_run(["list-timers", unit, "--no-pager"]))
 
 
-def start(unit: str) -> None:
-    proc.spawn(["systemctl", "--user", "start", unit])
+def _spawn_action(*args: str) -> bool:
+    """Launch a systemctl action; False means it could not be started.
+
+    systemd handles the action asynchronously. This return value only confirms
+    launch, not that the requested unit transition has completed.
+    """
+    try:
+        proc.spawn(["systemctl", "--user", *args])
+    except CommandError as exc:
+        log.warning("systemctl %s could not start: %s", " ".join(args), exc)
+        return False
+    return True
 
 
-def stop(unit: str) -> None:
-    proc.spawn(["systemctl", "--user", "stop", unit])
+def start(unit: str) -> bool:
+    return _spawn_action("start", unit)
 
 
-def restart(*units: str) -> None:
-    proc.spawn(["systemctl", "--user", "restart", *units])
+def stop(unit: str) -> bool:
+    return _spawn_action("stop", unit)
 
 
-def reset_failed(*units: str) -> None:
-    proc.spawn(["systemctl", "--user", "reset-failed", *units])
+def restart(*units: str) -> bool:
+    if not units:
+        return False
+    return _spawn_action("restart", *units)
 
 
-def daemon_reload() -> None:
-    proc.spawn(["systemctl", "--user", "daemon-reload"])
+def reset_failed(*units: str) -> bool:
+    return _spawn_action("reset-failed", *units)
+
+
+def daemon_reload() -> bool:
+    return _spawn_action("daemon-reload")
 
 
 def memory_bytes(unit: str) -> int:

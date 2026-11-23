@@ -39,6 +39,10 @@ Kind = Literal["daemon", "oneshot", "ondemand", "timer", "socket", "unknown"]
 #: Unit-name patterns belonging to this project.
 PATTERNS: tuple[str, ...] = ("roaring-*", "lpd8-*", "hearth*")
 
+#: The mixer itself is a control panel, not part of the audio path. It is
+#: allowed to be stopped when the user closes the window.
+NON_AUDIO_UNITS = frozenset({"hearth-ui.service"})
+
 #: systemd ``Type=`` values that mean a long-running process.
 DAEMON_TYPES = frozenset({"simple", "exec", "notify", "dbus", "forking", "idle"})
 
@@ -237,7 +241,7 @@ def problems(units: list[Unit] | None = None) -> list[Unit]:
     construction. That is the entire point of the module.
     """
     units = state() if units is None else units
-    return [unit for unit in units if unit.healthy is False]
+    return [unit for unit in units if unit.healthy is False and unit.name not in NON_AUDIO_UNITS]
 
 
 def summary(units: list[Unit] | None = None) -> str:
@@ -250,13 +254,18 @@ def summary(units: list[Unit] | None = None) -> str:
     judged = [
         unit
         for unit in units
-        if unit.healthy is not None and unit.kind not in ("oneshot", "ondemand")
+        if unit.healthy is not None
+        and unit.kind not in ("oneshot", "ondemand")
+        and unit.name not in NON_AUDIO_UNITS
     ]
     bad = [unit for unit in judged if unit.healthy is False]
     if not judged:
-        return "No audio services found"
+        return "No monitored services found"
     if not bad:
-        return f"All {len(judged)} audio services are running"
+        # The inventory intentionally includes healthy timers, sockets and
+        # support/control units, not just long-running audio daemons. "Healthy"
+        # describes all those unit kinds without claiming each one is running.
+        return f"All {len(judged)} monitored services are healthy"
     if len(bad) == 1:
         return bad[0].status_text
     return f"{bad[0].status_text} (+{len(bad) - 1} more)"

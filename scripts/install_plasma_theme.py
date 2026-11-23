@@ -11,15 +11,17 @@ What this does, and why it is shaped like this:
 * It refuses to install a stylesheet that does not parse, or that has lost a
   class the Python code actually applies. Both are checked against the real
   sources, not against a list I typed out.
-* GTK3 is the target. GTK3 CSS has no ``var()`` and no ``:root`` -- ``:root``
-  is a hard parse error -- so colour tokens are emitted as ``@define-color``,
-  which is the native GTK3 mechanism.
+* This is a **legacy GTK3 stylesheet installer**. The current GTK4 UI builds
+  its CSS in ``src/hearth/ui/gtk4/style.py`` and reads the desktop palette
+  dynamically through ``hearth.theme``; editing ``tokens.css`` does not change
+  the running GTK4 UI. The script refuses to operate on a GTK4 checkout unless
+  you explicitly opt into maintaining that legacy stylesheet.
 
-Usage:
-    install_plasma_theme.py --check      inspect only, change nothing
-    install_plasma_theme.py --dry-run    render and verify, but do not write
-    install_plasma_theme.py              install (backs up, rolls back on failure)
-    install_plasma_theme.py --uninstall  restore the pristine stylesheet
+Usage (legacy stylesheet only):
+    install_plasma_theme.py --check --legacy-gtk3
+    install_plasma_theme.py --dry-run --legacy-gtk3
+    install_plasma_theme.py --legacy-gtk3              install legacy CSS
+    install_plasma_theme.py --uninstall --legacy-gtk3   restore legacy CSS
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-DEFAULT_REPO = Path("/home/roaring/Documents/GitHub/Hearth")
+DEFAULT_REPO = Path(__file__).resolve().parents[1]
 REL_TOKENS = Path("src/hearth/ui/style/tokens.css")
 
 
@@ -355,9 +357,24 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="inspect only")
     parser.add_argument("--dry-run", action="store_true", help="verify without writing")
     parser.add_argument("--uninstall", action="store_true", help="restore the original")
+    parser.add_argument(
+        "--legacy-gtk3",
+        action="store_true",
+        help="explicitly operate on the inactive GTK3 tokens.css instead of the current GTK4 UI",
+    )
     args = parser.parse_args()
 
-    repo: Path = args.repo.expanduser()
+    repo: Path = args.repo.expanduser().resolve()
+    if (repo / "src/hearth/ui/gtk4/style.py").is_file() and not args.legacy_gtk3:
+        print(
+            "This checkout uses GTK4. The live UI reads Plasma colors dynamically; "
+            "src/hearth/ui/style/tokens.css is legacy GTK3 CSS and does not affect it. "
+            "No files changed. Pass --legacy-gtk3 only if you intentionally want "
+            "to maintain that unused stylesheet.",
+            file=sys.stderr,
+        )
+        return 2
+
     target = repo / REL_TOKENS
     pristine = target.with_suffix(".css.orig")
 

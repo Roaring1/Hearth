@@ -6,15 +6,16 @@ from hearth import chain, health, mic, midi, share, status, units
 
 
 def test_only_genuinely_broken_units_reach_the_report() -> None:
-    """A finished oneshot, an idle socket-activated service and a waiting
-    timer are all healthy; only the stopped daemon is a fault."""
+    """Finished/idle units and the optional Hearth GUI are not audio faults."""
     found = [
         units.Unit("roaring-vm-share.service", "oneshot", "inactive", "dead"),
         units.Unit("roaring-presenced.service", "ondemand", "inactive", "dead"),
+        units.Unit("hearth-ui.service", "daemon", "inactive", "dead"),
         units.Unit("roaring-carla-backup.timer", "timer", "active", "waiting"),
         units.Unit("roaring-mic-busses.service", "daemon", "inactive", "dead"),
     ]
     assert status.broken_units(found) == ["roaring-mic-busses.service"]
+    assert units.summary(found) == "mic busses is stopped"
 
 
 def test_the_expensive_probe_is_only_asked_once_per_window(monkeypatch) -> None:  # type: ignore[no-untyped-def]

@@ -81,6 +81,13 @@ def _coerce(key: str, value: Any, want: type) -> Any | None:
     if want is str and isinstance(value, str):
         return value
     if want is int and isinstance(value, int) and not isinstance(value, bool):
+        if key == "laptop_rtp_port" and not 1 <= value <= 65535:
+            log.warning(
+                "config: ignoring %r for %r; port must be between 1 and 65535",
+                value,
+                key,
+            )
+            return None
         return value
     log.warning(
         "config: ignoring %r for %r; expected %s, got %s",

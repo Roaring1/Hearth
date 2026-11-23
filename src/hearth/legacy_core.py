@@ -40,8 +40,15 @@ Phase 3 is progressively replacing it with the typed modules alongside it
 #   - 29/04/2026: SIGUSR1/--dump -> tracemalloc snapshot in last_debug/
 #   - 29/04/2026: _drain used remove() not destroy() -> 11 GB RAM leak
 
-import os, re, time, threading, subprocess
+import fcntl
 import logging
+import os
+import re
+import stat
+import subprocess
+import tempfile
+import threading
+import time
 from pathlib import Path
 
 from hearth import config, ipc, paths, settings
@@ -239,7 +246,7 @@ def save_settings(s):
 
 
 def sh_bg_argv(argv):
-    """Fire-and-forget an argv list. No shell, so no quoting hazards."""
+    """Start an argv command without a shell; report whether spawn succeeded."""
     try:
         subprocess.Popen(
             [str(a) for a in argv],
@@ -249,12 +256,13 @@ def sh_bg_argv(argv):
             start_new_session=True,
         )
     except Exception:
-        pass
+        return False
+    return True
 
 
 def pactl_bg(*args):
-    """Fire-and-forget pactl call."""
-    sh_bg_argv(["pactl", *args])
+    """Start a fire-and-forget pactl call and report whether it could launch."""
+    return sh_bg_argv(["pactl", *args])
 
 
 def systemctl_bg(*args):
@@ -262,7 +270,7 @@ def systemctl_bg(*args):
     sh_bg_argv(["systemctl", "--user", *args])
 
 
-def run_steps(steps, timeout=20):
+def run_steps(steps, timeout=20) -> bool:
     """Run argv lists in order on a worker thread; floats are sleeps.
 
     Replaces the `a; b; c` and `a && b` shell strings that used to be handed
@@ -282,7 +290,12 @@ def run_steps(steps, timeout=20):
             except Exception:
                 pass
 
-    threading.Thread(target=_worker, daemon=True).start()
+    try:
+        threading.Thread(target=_worker, daemon=True).start()
+    except RuntimeError as exc:
+        logging.getLogger(__name__).warning("could not queue command sequence: %s", exc)
+        return False
+    return True
 
 
 def run_bin(script, *args):
@@ -493,32 +506,115 @@ def read_conf(path):
     return out
 
 
-def write_conf_key(path, key, value):
+def write_conf_keys(path, updates):
+    """Atomically update several assignments in the shared mixer shell config.
+
+    A private advisory lock protects the full read/merge/write transaction;
+    unique same-directory temporary files protect readers from partial writes
+    and avoid the old PID-only temp-name race. Missing, malformed, or
+    unreadable config files fail closed so Setup cannot report a false save.
+    """
     p = Path(path)
-    if not p.exists():
-        return
-    text = p.read_text()
-    nl = f'{key}="{value}"'
-    if re.search(rf"^{re.escape(key)}=", text, re.MULTILINE):
-        # literal replacement (lambda) so values containing backslashes or
-        # regex group refs like \1 / \g<0> are written verbatim, not
-        # interpreted as re.sub replacement escapes (fuzz-found bug).
-        text = re.sub(rf"^{re.escape(key)}=.*", lambda _m: nl, text, flags=re.MULTILINE)
-    else:
-        text += f"\n{nl}\n"
-    # Atomic replace: a partial write here used to leave the mixer or
-    # mic-router config truncated, which the shell daemons then read as
-    # "no settings at all".
-    tmp = p.with_name(p.name + f".tmp.{os.getpid()}")
+    if not updates:
+        return True
+
+    normalized = {}
+    for key, value in updates.items():
+        if not re.fullmatch(r"[A-Z0-9_]+", key) or "\n" in str(value) or "\r" in str(value):
+            log.warning("refusing invalid mixer config assignment %r", key)
+            return False
+        # Keep values literal inside the shell's double-quoted assignment.
+        literal = str(value)
+        literal = (
+            literal.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("$", "\\$")
+            .replace("`", "\\`")
+        )
+        normalized[key] = f'{key}="{literal}"'
+
     try:
-        tmp.write_text(text)
-        os.replace(tmp, p)
-    except Exception:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = p.with_name(f".{p.name}.lock")
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        lock_fd = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        log.warning("could not lock mixer config %s: %s", p, exc)
+        return False
+
+    try:
+        lock_metadata = os.fstat(lock_fd)
+        if not stat.S_ISREG(lock_metadata.st_mode):
+            raise OSError(f"mixer config lock is not a regular file: {lock_path}")
+        if lock_metadata.st_uid != os.getuid():
+            raise PermissionError(f"mixer config lock is not owned by this user: {lock_path}")
+        if lock_metadata.st_nlink != 1:
+            raise OSError(f"refusing hard-linked mixer config lock: {lock_path}")
+        os.fchmod(lock_fd, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
         try:
-            tmp.unlink()
-        except Exception:
-            pass
-        raise
+            try:
+                metadata = p.lstat()
+                if not stat.S_ISREG(metadata.st_mode):
+                    log.warning("refusing to edit non-regular mixer config %s", p)
+                    return False
+                if metadata.st_uid != os.getuid():
+                    log.warning("refusing to edit mixer config not owned by this user: %s", p)
+                    return False
+                original = p.read_text(encoding="utf-8")
+                original_mode = stat.S_IMODE(metadata.st_mode)
+            except (OSError, UnicodeError) as exc:
+                log.warning("could not read mixer config %s: %s", p, exc)
+                return False
+
+            text = original
+            for key, assignment in normalized.items():
+                if re.search(rf"^{re.escape(key)}=", text, re.MULTILINE):
+                    # Use a lambda so replacement text is literal rather than
+                    # interpreting backslashes as regex replacement escapes.
+                    text = re.sub(
+                        rf"^{re.escape(key)}=.*",
+                        lambda _match, line=assignment: line,
+                        text,
+                        flags=re.MULTILINE,
+                    )
+                else:
+                    if text and not text.endswith("\n"):
+                        text += "\n"
+                    text += f"{assignment}\n"
+
+            fd, tmp_name = tempfile.mkstemp(prefix=f"{p.name}.tmp.", dir=p.parent)
+            tmp = Path(tmp_name)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                    stream.write(text)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                tmp.chmod(original_mode)
+                tmp.replace(p)
+            except BaseException:
+                tmp.unlink(missing_ok=True)
+                raise
+        except (OSError, UnicodeError) as exc:
+            log.warning("could not update mixer config %s: %s", p, exc)
+            return False
+        return True
+    except OSError as exc:
+        log.warning("could not lock or update mixer config %s: %s", p, exc)
+        return False
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except OSError as exc:
+            log.debug("could not unlock mixer config %s: %s", p, exc)
+        finally:
+            os.close(lock_fd)
+
+
+def write_conf_key(path, key, value):
+    """Compatibility wrapper for one assignment."""
+    return write_conf_keys(path, {key: value})
 
 
 MOONLIGHT_SVC = Path.home() / ".config/systemd/user/roaring-moonlight-mic.service"
@@ -535,19 +631,81 @@ def moonlight_mic_source():
     return "b2_mic"
 
 
-def set_moonlight_mic(src):
+def set_moonlight_mic(src: str) -> tuple[bool, bool]:
+    """Persist the selected Moonlight mic before requesting a service restart."""
+    if src not in MOONLIGHT_MIC_OPTS:
+        log.warning("refusing unknown Moonlight microphone source %r", src)
+        return False, False
+
+    lock_fd: int | None = None
     try:
-        t = MOONLIGHT_SVC.read_text()
-        t = re.sub(r"^(Environment=MIC_SOURCE=).*", rf"\g<1>{src}", t, flags=re.MULTILINE)
-        MOONLIGHT_SVC.write_text(t)
-    except Exception as e:
-        log.warning("could not update %s: %s", MOONLIGHT_SVC, e)
-    run_steps(
+        lock_path = MOONLIGHT_SVC.with_name(f".{MOONLIGHT_SVC.name}.lock")
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        lock_fd = os.open(lock_path, flags, 0o600)
+        lock_metadata = os.fstat(lock_fd)
+        if not stat.S_ISREG(lock_metadata.st_mode):
+            raise OSError(f"Moonlight unit lock is not a regular file: {lock_path}")
+        if lock_metadata.st_uid != os.getuid():
+            raise PermissionError(f"Moonlight unit lock is not owned by this user: {lock_path}")
+        if lock_metadata.st_nlink != 1:
+            raise OSError(f"refusing hard-linked Moonlight unit lock: {lock_path}")
+        os.fchmod(lock_fd, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+        metadata = MOONLIGHT_SVC.lstat()
+        if not stat.S_ISREG(metadata.st_mode):
+            log.warning("refusing to edit non-regular unit file %s", MOONLIGHT_SVC)
+            return False, False
+        if metadata.st_uid != os.getuid():
+            log.warning(
+                "refusing to edit Moonlight unit file not owned by this user: %s", MOONLIGHT_SVC
+            )
+            return False, False
+        text = MOONLIGHT_SVC.read_text(encoding="utf-8")
+        pattern = r"^(Environment=MIC_SOURCE=).*"
+        if not re.search(pattern, text, re.MULTILINE):
+            log.warning("unit file %s has no Environment=MIC_SOURCE assignment", MOONLIGHT_SVC)
+            return False, False
+        updated = re.sub(pattern, lambda match: f"{match.group(1)}{src}", text, flags=re.MULTILINE)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f"{MOONLIGHT_SVC.name}.tmp.", dir=MOONLIGHT_SVC.parent
+        )
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(updated)
+                stream.flush()
+                os.fsync(stream.fileno())
+            tmp.chmod(stat.S_IMODE(metadata.st_mode))
+            tmp.replace(MOONLIGHT_SVC)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+    except (OSError, UnicodeError) as exc:
+        log.warning("could not persist Moonlight mic source in %s: %s", MOONLIGHT_SVC, exc)
+        return False, False
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except OSError as exc:
+                log.debug("could not unlock %s: %s", MOONLIGHT_SVC, exc)
+            finally:
+                try:
+                    os.close(lock_fd)
+                except OSError as exc:
+                    log.debug("could not close lock for %s: %s", MOONLIGHT_SVC, exc)
+
+    restart_queued = run_steps(
         [
             ["systemctl", "--user", "daemon-reload"],
             ["systemctl", "--user", "restart", "roaring-moonlight-mic.service"],
         ]
     )
+    if not restart_queued:
+        log.warning("saved Moonlight mic source, but could not queue the service restart")
+    return True, restart_queued
 
 
 def scarlett_on():
@@ -581,19 +739,27 @@ def monitor_sink():
     return SCARLETT
 
 
-def unmute_all():
+def unmute_all() -> bool:
+    """Launch unmute requests; return False if any requested command cannot start.
+
+    This is deliberately not a claim that PipeWire has applied the changes:
+    the commands are fire-and-forget, and the next status refresh is the source
+    of truth for actual mute and volume state.
+    """
     monitor_sink()  # refresh if PipeWire came up after we did
+    started = True
     for s in UNMUTE_SINKS:
-        pactl_bg("set-sink-mute", s, "0")
+        started = pactl_bg("set-sink-mute", s, "0") and started
     # Don't stomp on deliberate volume settings. Only rescue the headset if
     # it is sitting at (near) zero, which is the case this shortcut exists
     # for -- "I hear nothing, fix it".
     for s in (ASTRO_CHAT, ASTRO_GAME):
         try:
             if pactl_vol(s) < UNMUTE_RESCUE_BELOW_PCT:
-                pactl_bg("set-sink-volume", s, "100%")
+                started = pactl_bg("set-sink-volume", s, "100%") and started
         except Exception:
             pass
+    return started
 
 
 def force_default_sink(sink="vm_game"):

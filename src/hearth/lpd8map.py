@@ -23,8 +23,13 @@ pad would move only in whichever mode the hardware preset happens to be in.
 
 from __future__ import annotations
 
+import fcntl
 import logging
+import os
 import re
+import stat
+import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -107,17 +112,58 @@ def read_map(script: Path | None = None) -> dict[str, int]:
     return found
 
 
-def _write(path: Path, text: str) -> None:
-    """Replace *path* atomically, keeping its mode.
+def _edit(path: Path, transform: Callable[[str], str | None]) -> bool:
+    """Lock, read, transform and atomically replace one LPD8 script edit.
 
-    Through a temporary file in the same directory, so an interrupted write
-    cannot leave a half-edited script that the service would then fail to
-    start with.
+    The lock covers the entire read/modify/write transaction so concurrent
+    changes to different constants cannot erase each other. The unique temp
+    file avoids the fixed ``.hearth-tmp`` symlink and collision hazards.
     """
-    tmp = path.with_name(path.name + ".hearth-tmp")
-    tmp.write_text(text)
-    tmp.chmod(path.stat().st_mode & 0o7777)
-    tmp.replace(path)
+    lock_path = path.with_name(f".{path.name}.lock")
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    lock_fd = os.open(lock_path, flags, 0o600)
+    try:
+        lock_metadata = os.fstat(lock_fd)
+        if not stat.S_ISREG(lock_metadata.st_mode):
+            raise OSError(f"refusing non-regular LPD8 lock file: {lock_path}")
+        if lock_metadata.st_uid != os.getuid():
+            raise PermissionError(f"LPD8 lock file is not owned by this user: {lock_path}")
+        if lock_metadata.st_nlink != 1:
+            raise OSError(f"refusing hard-linked LPD8 lock file: {lock_path}")
+        os.fchmod(lock_fd, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode):
+            raise OSError(f"refusing to edit non-regular LPD8 script: {path}")
+        if metadata.st_uid != os.getuid():
+            raise PermissionError(f"LPD8 script is not owned by this user: {path}")
+        text = path.read_text(encoding="utf-8")
+        updated = transform(text)
+        if updated is None or updated == text:
+            return False
+
+        fd, tmp_name = tempfile.mkstemp(prefix=f"{path.name}.tmp.", dir=path.parent)
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(updated)
+                stream.flush()
+                os.fsync(stream.fileno())
+            tmp.chmod(stat.S_IMODE(metadata.st_mode))
+            tmp.replace(path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+        return True
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except OSError as exc:
+            # Closing the descriptor releases the lock as a fallback.
+            log.debug("could not unlock LPD8 map %s: %s", path, exc)
+        finally:
+            os.close(lock_fd)
 
 
 def _set_const(text: str, const: str, value: int, *, required: bool) -> str | None:
@@ -144,13 +190,10 @@ def set_knob(const: str, knob: int, script: Path | None = None) -> bool:
         raise ValueError(f"unknown LPD8 binding {const!r}")
     cc = knob_to_cc(knob)
     path = script or SCRIPT
-    text = path.read_text()
-    new_text = _set_const(text, const, cc, required=True)
-    if new_text is None:
-        return False
-    _write(path, new_text)
-    log.info("bound %s to knob %s (CC %s)", const, knob, cc)
-    return True
+    changed = _edit(path, lambda text: _set_const(text, const, cc, required=True))
+    if changed:
+        log.info("bound %s to knob %s (CC %s)", const, knob, cc)
+    return changed
 
 
 def conflicts(mapping: dict[str, int]) -> dict[int, list[str]]:
@@ -279,22 +322,24 @@ def set_pad(slot: int, pad: int, script: Path | None = None) -> bool:
         raise ValueError(f"unknown LPD8 pad slot {slot!r}")
     pad_slot = slots[slot]
     path = script or SCRIPT
-    text = path.read_text()
-    changed = False
-    for const, value, required in (
-        (pad_slot.note_const, pad_to_note(pad), True),
-        (pad_slot.cc_const, pad_to_cc(pad), False),
-        (pad_slot.prog_const, pad_to_prog(pad), False),
-    ):
-        new_text = _set_const(text, const, value, required=required)
-        if new_text is not None:
-            text = new_text
-            changed = True
-    if not changed:
-        return False
-    _write(path, text)
-    log.info("bound pad slot %s to pad %s", slot, pad)
-    return True
+
+    def update(text: str) -> str | None:
+        changed = False
+        for const, value, required in (
+            (pad_slot.note_const, pad_to_note(pad), True),
+            (pad_slot.cc_const, pad_to_cc(pad), False),
+            (pad_slot.prog_const, pad_to_prog(pad), False),
+        ):
+            new_text = _set_const(text, const, value, required=required)
+            if new_text is not None:
+                text = new_text
+                changed = True
+        return text if changed else None
+
+    changed = _edit(path, update)
+    if changed:
+        log.info("bound pad slot %s to pad %s", slot, pad)
+    return changed
 
 
 def pad_conflicts(mapping: dict[int, int]) -> dict[int, list[int]]:
