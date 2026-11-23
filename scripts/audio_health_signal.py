@@ -304,6 +304,82 @@ def _low_energy_metrics(samples: np.ndarray, sample_rate: int) -> dict[str, Any]
     }
 
 
+class StereoChannelAccumulator:
+    """Streaming stereo integrity metrics; retains sums and peaks, never PCM."""
+
+    def __init__(self) -> None:
+        self.frames = 0
+        self.nonfinite_samples = 0
+        self._sum = np.zeros(2, dtype=np.float64)
+        self._sum_squares = np.zeros(2, dtype=np.float64)
+        self._sum_cross = 0.0
+        self._sum_mono_squares = 0.0
+        self._peaks = np.zeros(2, dtype=np.float64)
+
+    def observe(self, frames: Sequence[Sequence[float]] | np.ndarray) -> None:
+        values = np.asarray(frames, dtype=np.float64)
+        if values.ndim != 2 or values.shape[1] != 2:
+            raise ValueError("stereo channel metrics require Nx2 frames")
+        finite = np.isfinite(values)
+        self.nonfinite_samples += int(values.size - np.count_nonzero(finite))
+        values = np.where(finite, values, 0.0)
+        if not values.shape[0]:
+            return
+        left = values[:, 0]
+        right = values[:, 1]
+        self.frames += int(values.shape[0])
+        self._sum += np.sum(values, axis=0)
+        self._sum_squares += np.sum(values * values, axis=0)
+        self._sum_cross += float(np.sum(left * right))
+        mono = (left + right) * 0.5
+        self._sum_mono_squares += float(np.sum(mono * mono))
+        self._peaks = np.maximum(self._peaks, np.max(np.abs(values), axis=0))
+
+    def summary(self) -> dict[str, Any]:
+        if not self.frames:
+            return {
+                "frames": 0,
+                "nonfinite_samples": self.nonfinite_samples,
+                "automatic_action": "none",
+            }
+        means = self._sum / self.frames
+        mean_squares = self._sum_squares / self.frames
+        variances = np.maximum(mean_squares - means * means, 0.0)
+        rms = np.sqrt(mean_squares)
+        rms_db = [round(20.0 * math.log10(max(float(value), _EPS)), 3) for value in rms]
+        peaks_db = [round(20.0 * math.log10(max(float(value), _EPS)), 3) for value in self._peaks]
+        covariance = self._sum_cross / self.frames - means[0] * means[1]
+        denominator = math.sqrt(float(variances[0] * variances[1]))
+        correlation = covariance / denominator if denominator > _EPS else None
+        if correlation is not None:
+            correlation = round(float(np.clip(correlation, -1.0, 1.0)), 5)
+        reference_rms = math.sqrt(float(np.mean(mean_squares)))
+        mono_rms = math.sqrt(self._sum_mono_squares / self.frames)
+        cancellation_db = round(
+            20.0 * math.log10(max(mono_rms, _EPS) / max(reference_rms, _EPS)),
+            3,
+        )
+        balance_db = round(rms_db[0] - rms_db[1], 3)
+        both_active = min(rms) >= 1e-4
+        return {
+            "frames": self.frames,
+            "nonfinite_samples": self.nonfinite_samples,
+            "rms_dbfs": {"left": rms_db[0], "right": rms_db[1]},
+            "sample_peak_dbfs": {"left": peaks_db[0], "right": peaks_db[1]},
+            "dc_offset": {"left": round(float(means[0]), 6), "right": round(float(means[1]), 6)},
+            "correlation": correlation,
+            "channel_balance_delta_db": balance_db,
+            "mono_mix_cancellation_db": cancellation_db,
+            "phase_opposition_candidate": bool(
+                correlation is not None and correlation <= -0.8 and both_active
+            ),
+            "mono_mix_cancellation_candidate": bool(cancellation_db <= -12.0 and both_active),
+            "channel_imbalance_candidate": bool(abs(balance_db) >= 12.0 and both_active),
+            "channel_silence_candidate": bool(min(rms) < 1e-5 and max(rms) > 1e-3),
+            "automatic_action": "none",
+        }
+
+
 def _true_peak_metrics(
     samples: Sequence[float] | np.ndarray,
     sample_rate: int,

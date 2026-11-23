@@ -26,7 +26,7 @@ from collections.abc import Callable, Sequence
 from contextlib import suppress
 
 import numpy as np
-from audio_health_signal import analyze_signal_features
+from audio_health_signal import StereoChannelAccumulator, analyze_signal_features
 from audio_health_stream import StreamReadDiagnostics
 from audio_health_transport import (
     compare_snapshots,
@@ -732,19 +732,32 @@ def handle_confirmed_fault(config: dict[str, bool], state: dict) -> tuple[bool, 
     return restart_carla_safely()
 
 
-def _start_capture(device: str, stream_name: str) -> subprocess.Popen[bytes]:
+def _start_capture(device: str, stream_name: str, *, channels: int = 1) -> subprocess.Popen[bytes]:
+    if channels not in (1, 2):
+        raise ValueError("health capture only supports mono or stereo")
     command = [
         "parec",
         "--raw",
         "--format=float32le",
         f"--rate={RATE}",
-        "--channels=1",
+        f"--channels={channels}",
         f"--device={device}",
         "--client-name=Roaring-Carla-Health",
         f"--stream-name={stream_name}",
         "--latency-msec=10",
     ]
     return subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+
+
+def _drain_stereo_blocks(buffer: bytearray, frames: int) -> list[np.ndarray]:
+    frame_bytes = SAMPLE_BYTES * 2
+    count = frames * frame_bytes
+    blocks: list[np.ndarray] = []
+    while len(buffer) >= count:
+        raw = bytes(buffer[:count])
+        del buffer[:count]
+        blocks.append(np.frombuffer(raw, dtype=np.float32).reshape(frames, 2))
+    return blocks
 
 
 def _array_from_bytes(data: bytearray, frames: int) -> list[float]:
@@ -906,6 +919,9 @@ def run_daemon(stop: Callable[[], bool] | None = None) -> int:
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
+            with suppress(Exception):
+                if proc.stdout is not None:
+                    proc.stdout.close()
         selector.close()
     LOG.info("stopped")
     return 0
@@ -1003,7 +1019,7 @@ def _muted_summary() -> dict:
 
 
 def capture_sample(seconds: float = 8.0) -> dict:
-    """Open two short PCM taps only while B1 is unmuted; close them on mute."""
+    """Open short mono verdict taps and an optional stereo B1 diagnostic tap."""
     if not 3.0 <= seconds <= 20.0:
         raise ValueError("sample duration must be between 3 and 20 seconds")
     if not _b1_expected_active():
@@ -1011,6 +1027,10 @@ def capture_sample(seconds: float = 8.0) -> dict:
 
     processes: dict[str, subprocess.Popen[bytes]] = {}
     buffers = {RAW_SOURCE: bytearray(), PROCESSED_SOURCE: bytearray()}
+    stereo_buffer = bytearray()
+    stereo_accumulator = StereoChannelAccumulator()
+    stereo_capture_error: str | None = None
+    stereo_tap = "processed_stereo"
     selector = selectors.DefaultSelector()
     raw_levels: list[float] = []
     post_levels: list[float] = []
@@ -1020,7 +1040,7 @@ def capture_sample(seconds: float = 8.0) -> dict:
     # sub-second blocks can be combined for low-frequency spectral resolution.
     feature_raw_chunks: list[np.ndarray] = []
     feature_post_chunks: list[np.ndarray] = []
-    stream_diagnostics = StreamReadDiagnostics(("raw", "processed"))
+    stream_diagnostics = StreamReadDiagnostics(("raw", "processed", "processed_stereo"))
     active_windows = valid_windows = candidate_windows = dropout_windows = 0
     tracker = QualityTracker()
     fault_confirmed = False
@@ -1028,16 +1048,58 @@ def capture_sample(seconds: float = 8.0) -> dict:
     start = time.monotonic()
     capture_error: str | None = None
 
-    def start_one(device: str) -> None:
-        proc = _start_capture(device, f"scheduled-{int(time.time())}-{device}")
+    def stop_one(tap: str) -> None:
+        proc = processes.pop(tap, None)
+        if proc is None:
+            return
+        with suppress(Exception):
+            if proc.stdout is not None:
+                selector.unregister(proc.stdout)
+        with suppress(OSError):
+            proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            with suppress(OSError):
+                proc.kill()
+            with suppress(Exception):
+                proc.wait()
+        with suppress(Exception):
+            if proc.stdout is not None:
+                proc.stdout.close()
+
+    def start_one(tap: str, device: str, channels: int = 1) -> None:
+        proc = _start_capture(
+            device,
+            f"scheduled-{int(time.time())}-{tap}",
+            channels=channels,
+        )
         if proc.stdout is None:
-            raise RuntimeError(f"parec did not provide stdout for {device}")
-        processes[device] = proc
-        selector.register(proc.stdout, selectors.EVENT_READ, device)
+            with suppress(OSError):
+                proc.terminate()
+            with suppress(Exception):
+                proc.wait(timeout=2)
+            raise RuntimeError(f"parec did not provide stdout for {tap}")
+        try:
+            selector.register(proc.stdout, selectors.EVENT_READ, tap)
+        except Exception:
+            with suppress(OSError):
+                proc.terminate()
+            with suppress(Exception):
+                proc.wait(timeout=2)
+            with suppress(Exception):
+                proc.stdout.close()
+            raise
+        processes[tap] = proc
 
     try:
-        start_one(RAW_SOURCE)
-        start_one(PROCESSED_SOURCE)
+        start_one(RAW_SOURCE, RAW_SOURCE)
+        start_one(PROCESSED_SOURCE, PROCESSED_SOURCE)
+        try:
+            start_one(stereo_tap, PROCESSED_SOURCE, channels=2)
+        except Exception as exc:
+            stereo_capture_error = str(exc)
+            LOG.warning("optional B1 stereo tap unavailable: %s", exc)
         deadline = start + seconds
         while time.monotonic() < deadline:
             # Re-check at sub-second intervals. If the user mutes mid-sample,
@@ -1047,34 +1109,48 @@ def capture_sample(seconds: float = 8.0) -> dict:
                 break
             ready = selector.select(timeout=min(0.1, max(0.0, deadline - time.monotonic())))
             for key, _ in ready:
-                device = key.data
+                tap = key.data
                 try:
                     chunk = os.read(key.fileobj.fileno(), 65536)
                 except OSError:
                     chunk = b""
                 if chunk:
-                    stream_diagnostics.observe_read(
-                        "raw" if device == RAW_SOURCE else "processed",
-                        len(chunk),
-                        time.monotonic(),
+                    diagnostic_tap = (
+                        "raw"
+                        if tap == RAW_SOURCE
+                        else "processed"
+                        if tap == PROCESSED_SOURCE
+                        else stereo_tap
                     )
-                    buffers[device].extend(chunk)
-                    max_bytes = BLOCK_FRAMES * SAMPLE_BYTES * MAX_CAPTURE_BUFFER_BLOCKS
-                    if len(buffers[device]) > max_bytes:
-                        excess = len(buffers[device]) - max_bytes
-                        excess -= excess % SAMPLE_BYTES
-                        stream_diagnostics.record_buffer_overflow(
-                            "raw" if device == RAW_SOURCE else "processed",
-                            excess,
-                        )
-                        del buffers[device][:excess]
+                    stream_diagnostics.observe_read(diagnostic_tap, len(chunk), time.monotonic())
+                    target_buffer = stereo_buffer if tap == stereo_tap else buffers[tap]
+                    target_buffer.extend(chunk)
+                    frame_bytes = SAMPLE_BYTES * 2 if tap == stereo_tap else SAMPLE_BYTES
+                    max_bytes = BLOCK_FRAMES * frame_bytes * MAX_CAPTURE_BUFFER_BLOCKS
+                    if len(target_buffer) > max_bytes:
+                        excess = len(target_buffer) - max_bytes
+                        excess -= excess % frame_bytes
+                        stream_diagnostics.record_buffer_overflow(diagnostic_tap, excess)
+                        del target_buffer[:excess]
                 else:
-                    capture_error = f"{device} capture stream ended"
-                    break
+                    if tap == stereo_tap:
+                        stereo_capture_error = f"{tap} capture stream ended"
+                        stop_one(tap)
+                    else:
+                        capture_error = f"{tap} capture stream ended"
+                        break
             if capture_error:
                 break
-            if any(proc.poll() is not None for proc in processes.values()):
-                capture_error = "a microphone capture process exited"
+            for tap, proc in list(processes.items()):
+                if proc.poll() is None:
+                    continue
+                if tap == stereo_tap:
+                    stereo_capture_error = f"{tap} capture process exited"
+                    stop_one(tap)
+                else:
+                    capture_error = f"{tap} capture process exited"
+                    break
+            if capture_error:
                 break
             for raw, processed in _drain_aligned_blocks(buffers, BLOCK_FRAMES):
                 raw_array = np.asarray(raw, dtype=np.float32)
@@ -1106,25 +1182,21 @@ def capture_sample(seconds: float = 8.0) -> dict:
                     dropout_windows += 1
                 if tracker.observe(result, time.monotonic()):
                     fault_confirmed = True
-    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            for stereo_frames in _drain_stereo_blocks(stereo_buffer, BLOCK_FRAMES):
+                stereo_accumulator.observe(stereo_frames)
+    except Exception as exc:
         capture_error = str(exc)
     finally:
-        for proc in processes.values():
-            with suppress(Exception):
-                if proc.stdout is not None:
-                    selector.unregister(proc.stdout)
-            with suppress(OSError):
-                proc.terminate()
-        for proc in processes.values():
-            try:
-                proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
+        for tap in list(processes):
+            stop_one(tap)
         selector.close()
 
     stream_diagnostics.record_unpaired_tail("raw", len(buffers[RAW_SOURCE]))
     stream_diagnostics.record_unpaired_tail("processed", len(buffers[PROCESSED_SOURCE]))
+    stream_diagnostics.record_unpaired_tail(stereo_tap, len(stereo_buffer))
+    stereo_metrics = stereo_accumulator.summary()
+    if not stereo_metrics.get("frames") and not muted_during_capture and not stereo_capture_error:
+        stereo_capture_error = "stereo tap produced no complete frames"
 
     lag_p50, lag_mad, lag_count = _alignment_lag_summary(alignment_lags)
     signal_features: dict | None = None
@@ -1145,11 +1217,15 @@ def capture_sample(seconds: float = 8.0) -> dict:
     summary = {
         "sample_seconds": round(time.monotonic() - start, 2),
         "capture_coverage": capture_coverage,
-        "stream_diagnostics": stream_diagnostics.summary(RATE, SAMPLE_BYTES),
+        "stream_diagnostics": stream_diagnostics.summary(
+            RATE, SAMPLE_BYTES, frame_bytes_by_device={stereo_tap: SAMPLE_BYTES * 2}
+        ),
         "diagnostic_scope": (
             "raw_vs_b1; transient_dropout_plus_measurement_only_spectral_and_stream_diagnostics"
         ),
         "signal_features": signal_features,
+        "stereo_channel_metrics": stereo_metrics if stereo_metrics.get("frames") else None,
+        "stereo_capture_error": stereo_capture_error,
         "windows": len(raw_levels),
         "active_windows": active_windows,
         "valid_windows": valid_windows,
@@ -1283,6 +1359,39 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
             processed_stream.get("unpaired_tail_bytes", 0),
             repeats,
         )
+    stereo_capture_error = first.get("stereo_capture_error")
+    if stereo_capture_error:
+        LOG.info("optional B1 stereo tap unavailable: %s", stereo_capture_error)
+    stereo_quality = first.get("stereo_channel_metrics")
+    if isinstance(stereo_quality, dict):
+        LOG.info(
+            "B1 stereo channel metrics (measurement only): frames=%s "
+            "rms=%s peak=%s dc=%s correlation=%s balance_db=%s "
+            "mono_mix_cancel_db=%s candidates=%s",
+            stereo_quality.get("frames"),
+            stereo_quality.get("rms_dbfs"),
+            stereo_quality.get("sample_peak_dbfs"),
+            stereo_quality.get("dc_offset"),
+            stereo_quality.get("correlation"),
+            stereo_quality.get("channel_balance_delta_db"),
+            stereo_quality.get("mono_mix_cancellation_db"),
+            {
+                "phase_opposition": stereo_quality.get("phase_opposition_candidate"),
+                "mono_mix_cancel": stereo_quality.get("mono_mix_cancellation_candidate"),
+                "imbalance": stereo_quality.get("channel_imbalance_candidate"),
+                "channel_silence": stereo_quality.get("channel_silence_candidate"),
+            },
+        )
+        if any(
+            stereo_quality.get(name)
+            for name in (
+                "phase_opposition_candidate",
+                "mono_mix_cancellation_candidate",
+                "channel_imbalance_candidate",
+                "channel_silence_candidate",
+            )
+        ):
+            LOG.warning("B1 stereo channel integrity candidate; no action is taken")
     signal_features = first.get("signal_features")
     if isinstance(signal_features, dict):
         tone_scope = signal_features.get("tone_localization")

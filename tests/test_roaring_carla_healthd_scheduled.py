@@ -286,3 +286,211 @@ def test_monitoring_streaks_sanitize_corrupt_or_unexpected_persisted_values() ->
         "no_activity": 1,
         "inconclusive": 0,
     }
+
+
+def test_capture_command_requests_stereo_when_explicit(monkeypatch) -> None:
+    captured: dict = {}
+
+    class FakeProcess:
+        stdout = object()
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(healthd.subprocess, "Popen", fake_popen)
+    healthd._start_capture("b1_mic", "stereo-diagnostic", channels=2)
+    assert "--channels=2" in captured["command"]
+    assert "--device=b1_mic" in captured["command"]
+    assert captured["kwargs"]["stderr"] is healthd.subprocess.DEVNULL
+
+
+def test_capture_command_rejects_invalid_channel_count() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="mono or stereo"):
+        healthd._start_capture("b1_mic", "invalid", channels=3)
+
+
+def test_stereo_capture_buffer_drain_preserves_partial_frame_tail() -> None:
+    raw = healthd.np.asarray(
+        [[0.25, -0.25], [0.5, -0.5], [0.75, -0.75]], dtype=healthd.np.float32
+    ).tobytes()
+    buffer = bytearray(raw + b"\x00\x00\x00\x00")
+    blocks = healthd._drain_stereo_blocks(buffer, 3)
+    assert len(blocks) == 1
+    assert blocks[0].shape == (3, 2)
+    assert blocks[0][2, 0] == 0.75
+    assert len(buffer) == 4
+
+
+def _run_capture_sample_with_fake_selector(monkeypatch, fail_stereo: bool = False):
+    clock = [0.0]
+    calls: list[tuple[str, int]] = []
+    processes = []
+
+    class FakeStream:
+        pass
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdout = FakeStream()
+            self.terminated = False
+            self.waited = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            self.waited = True
+
+    class FakeSelector:
+        def register(self, fileobj, events, data=None):
+            return None
+
+        def unregister(self, fileobj):
+            return None
+
+        def select(self, timeout=None):
+            clock[0] += max(float(timeout or 0.0), 0.01)
+            return []
+
+        def close(self):
+            return None
+
+    def fake_start_capture(device, stream_name, *, channels=1):
+        calls.append((device, channels))
+        if fail_stereo and channels == 2:
+            raise OSError("mock stereo stream unavailable")
+        process = FakeProcess()
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(healthd, "_b1_expected_active", lambda: True)
+    monkeypatch.setattr(healthd, "_start_capture", fake_start_capture)
+    monkeypatch.setattr(healthd.selectors, "DefaultSelector", FakeSelector)
+    monkeypatch.setattr(
+        healthd.time, "monotonic", lambda: clock.__setitem__(0, clock[0] + 0.01) or clock[0]
+    )
+    monkeypatch.setattr(healthd.time, "time", lambda: 1000.0)
+    summary = healthd.capture_sample(3.0)
+    return summary, calls, processes
+
+
+def test_capture_sample_optional_stereo_tap_is_separate_and_bounded(monkeypatch) -> None:
+    summary, calls, processes = _run_capture_sample_with_fake_selector(monkeypatch)
+    assert calls == [("sm7b_mono", 1), ("b1_mic", 1), ("b1_mic", 2)]
+    assert summary["capture_error"] is None
+    assert summary["stereo_channel_metrics"] is None
+    assert summary["stereo_capture_error"] == "stereo tap produced no complete frames"
+    assert all(process.terminated and process.waited for process in processes)
+
+
+def test_capture_sample_stereo_tap_failure_does_not_fail_mono_path(monkeypatch) -> None:
+    summary, calls, processes = _run_capture_sample_with_fake_selector(
+        monkeypatch, fail_stereo=True
+    )
+    assert calls == [("sm7b_mono", 1), ("b1_mic", 1), ("b1_mic", 2)]
+    assert summary["capture_error"] is None
+    assert summary["stereo_channel_metrics"] is None
+    assert "mock stereo stream unavailable" in summary["stereo_capture_error"]
+    assert len(processes) == 2
+    assert all(process.terminated and process.waited for process in processes)
+
+
+def test_capture_sample_accumulates_stereo_channels_without_pcm_persistence(monkeypatch) -> None:
+    import os
+
+    import pytest
+
+    np = pytest.importorskip("numpy")
+
+    rate = 48_000
+    frames = healthd.BLOCK_FRAMES
+    index = np.arange(frames, dtype=np.float32)
+    tone = 0.2 * np.sin(2 * np.pi * 440 * index / rate).astype(np.float32)
+    stereo_pcm = np.column_stack((tone, tone)).astype(np.float32).tobytes()
+    mono_pcm = tone.tobytes()
+    clock = [0.0]
+    processes = []
+
+    class FakeKey:
+        def __init__(self, fileobj, data):
+            self.fileobj = fileobj
+            self.data = data
+
+    class FakeProcess:
+        def __init__(self, device, channels):
+            read_fd, write_fd = os.pipe()
+            self.stdout = os.fdopen(read_fd, "rb", closefd=True)
+            self._write_fd = write_fd
+            self._closed = False
+            self._data = stereo_pcm if channels == 2 else mono_pcm
+            os.write(self._write_fd, self._data)
+            os.close(self._write_fd)
+            self._write_fd = -1
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            if self._write_fd >= 0:
+                os.close(self._write_fd)
+                self._write_fd = -1
+
+        def wait(self, timeout=None):
+            return 0
+
+    class FakeSelector:
+        def __init__(self):
+            self.keys = []
+            self.first = True
+
+        def register(self, fileobj, events, data=None):
+            self.keys.append(FakeKey(fileobj, data))
+
+        def unregister(self, fileobj):
+            self.keys = [key for key in self.keys if key.fileobj is not fileobj]
+
+        def select(self, timeout=None):
+            clock[0] += 0.1
+            if self.first:
+                self.first = False
+                return [(key, 1) for key in self.keys]
+            return []
+
+        def close(self):
+            pass
+
+    def fake_start_capture(device, stream_name, *, channels=1):
+        process = FakeProcess(device, channels)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(healthd, "_b1_expected_active", lambda: True)
+    monkeypatch.setattr(healthd, "_start_capture", fake_start_capture)
+    monkeypatch.setattr(healthd.selectors, "DefaultSelector", FakeSelector)
+    monkeypatch.setattr(
+        healthd.time, "monotonic", lambda: clock.__setitem__(0, clock[0] + 0.01) or clock[0]
+    )
+    monkeypatch.setattr(healthd.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(healthd, "analyze_signal_features", lambda *args, **kwargs: {})
+    summary = healthd.capture_sample(3.0)
+
+    stereo = summary["stereo_channel_metrics"]
+    assert stereo is not None
+    assert stereo["frames"] == frames
+    assert stereo["correlation"] == 1.0
+    assert stereo["phase_opposition_candidate"] is False
+    assert summary["stereo_capture_error"] is None
+    assert summary["capture_coverage"]["fraction"] < 0.9
+    stereo_stream = summary["stream_diagnostics"]["processed_stereo"]
+    assert stereo_stream["frames_received"] == frames
+    assert stereo_stream["frame_bytes"] == 8
+    assert summary["stream_diagnostics"]["raw"]["frames_received"] == frames
+    assert summary["stream_diagnostics"]["processed"]["frames_received"] == frames
+    assert all(process.stdout.closed for process in processes)

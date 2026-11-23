@@ -537,3 +537,70 @@ def test_event_time_localization_matches_shared_clicks_and_finds_post_only_event
     assert matched["raw_unmatched_count"] == 0
     assert matched["processed_unmatched_count"] == 2
     assert matched["automatic_action"] == "none"
+
+
+def test_stereo_channel_accumulator_reports_in_phase_channels_as_normal() -> None:
+    from audio_health_signal import StereoChannelAccumulator
+
+    index = np.arange(4800, dtype=np.float64)
+    tone = 0.25 * np.sin(2.0 * np.pi * 440 * index / 48_000)
+    accumulator = StereoChannelAccumulator()
+    accumulator.observe(np.column_stack((tone, tone)))
+    result = accumulator.summary()
+    assert result["frames"] == 4800
+    assert result["correlation"] == 1.0
+    assert result["channel_balance_delta_db"] == 0.0
+    assert result["mono_mix_cancellation_db"] == 0.0
+    assert result["phase_opposition_candidate"] is False
+    assert result["channel_silence_candidate"] is False
+
+
+def test_stereo_channel_accumulator_detects_phase_opposition_without_action() -> None:
+    from audio_health_signal import StereoChannelAccumulator
+
+    index = np.arange(4800, dtype=np.float64)
+    tone = 0.25 * np.sin(2.0 * np.pi * 440 * index / 48_000)
+    accumulator = StereoChannelAccumulator()
+    accumulator.observe(np.column_stack((tone, -tone)))
+    result = accumulator.summary()
+    assert result["correlation"] == -1.0
+    assert result["mono_mix_cancellation_db"] < -100.0
+    assert result["phase_opposition_candidate"] is True
+    assert result["mono_mix_cancellation_candidate"] is True
+    assert result["automatic_action"] == "none"
+
+
+def test_stereo_channel_accumulator_flags_one_channel_silence() -> None:
+    from audio_health_signal import StereoChannelAccumulator
+
+    index = np.arange(4800, dtype=np.float64)
+    left = 0.2 * np.sin(2.0 * np.pi * 440 * index / 48_000)
+    accumulator = StereoChannelAccumulator()
+    accumulator.observe(np.column_stack((left, np.zeros_like(left))))
+    result = accumulator.summary()
+    assert result["channel_silence_candidate"] is True
+    assert result["channel_imbalance_candidate"] is False
+
+
+def test_stereo_channel_accumulator_preserves_timing_and_counts_nonfinite() -> None:
+    from audio_health_signal import StereoChannelAccumulator
+
+    values = np.zeros((1024, 2), dtype=np.float64)
+    values[:, 0] = 0.1
+    values[100, 1] = np.nan
+    accumulator = StereoChannelAccumulator()
+    accumulator.observe(values[:256])
+    accumulator.observe(values[256:])
+    result = accumulator.summary()
+    assert result["frames"] == 1024
+    assert result["nonfinite_samples"] == 1
+    assert result["dc_offset"]["left"] == 0.1
+    assert result["automatic_action"] == "none"
+
+
+def test_empty_stereo_channel_accumulator_returns_no_metrics() -> None:
+    from audio_health_signal import StereoChannelAccumulator
+
+    result = StereoChannelAccumulator().summary()
+    assert result["frames"] == 0
+    assert result["automatic_action"] == "none"
