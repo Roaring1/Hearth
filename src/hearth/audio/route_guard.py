@@ -9,17 +9,19 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import fcntl
+import importlib
 import json
 import logging
 import math
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import cast
 
 from hearth import paths
 from hearth.audio.pactl import Module, parse_modules, parse_short_list, select_loopbacks
@@ -41,6 +43,45 @@ DEFAULT_COOLDOWN_SEC = 15.0
 
 class InventoryError(RuntimeError):
     """A required PipeWire or Pulse inventory query failed."""
+
+
+def _is_linux_runtime() -> bool:
+    """Return the runtime platform without Win32 mypy narrowing module code."""
+    return sys.platform.startswith("linux")
+
+
+def _current_uid() -> int | None:
+    """Return the POSIX UID, or None where the platform has no UID concept."""
+    getter = getattr(os, "getuid", None)
+    return int(getter()) if callable(getter) else None
+
+
+def _require_current_uid() -> int:
+    """Require an owner identity before accepting or changing private state."""
+    uid = _current_uid()
+    if uid is None:
+        raise OSError("POSIX user ownership cannot be verified on this platform")
+    return uid
+
+
+def _fchmod(fd: int, mode: int) -> None:
+    """Change an open file's mode, or fail closed where fchmod is unavailable."""
+    operation = getattr(os, "fchmod", None)
+    if not callable(operation):
+        raise OSError("private file descriptor permissions are unavailable")
+    cast(Callable[[int, int], None], operation)(fd, mode)
+
+
+def _flock(fd: int, operation_name: str) -> None:
+    """Apply a POSIX advisory lock without importing fcntl on non-Linux hosts."""
+    if not _is_linux_runtime():
+        raise OSError("route guardian file locking is supported only on Linux")
+    module = importlib.import_module("fcntl")
+    operation = getattr(module, operation_name, None)
+    lock = getattr(module, "flock", None)
+    if not isinstance(operation, int) or not callable(lock):
+        raise OSError("POSIX advisory file locking is unavailable")
+    cast(Callable[[int, int], None], lock)(fd, operation)
 
 
 def _capture(argv: Sequence[str], *, timeout: float = 2.0) -> str:
@@ -81,7 +122,7 @@ def _validate_private_regular_file(path: Path, *, missing_ok: bool = True) -> No
         raise
     if not stat.S_ISREG(metadata.st_mode):
         raise OSError(f"refusing non-regular route recovery state file: {path}")
-    if metadata.st_uid != os.getuid():
+    if metadata.st_uid != _require_current_uid():
         raise PermissionError(f"route recovery state file is not owned by this user: {path}")
     if metadata.st_nlink != 1:
         raise OSError(f"refusing hard-linked route recovery state file: {path}")
@@ -96,12 +137,12 @@ def _open_state_lock(path: Path) -> int:
         metadata = os.fstat(fd)
         if not stat.S_ISREG(metadata.st_mode):
             raise OSError(f"route recovery lock is not a regular file: {path}")
-        if metadata.st_uid != os.getuid():
+        if metadata.st_uid != _require_current_uid():
             raise PermissionError(f"route recovery lock is not owned by this user: {path}")
         if metadata.st_nlink != 1:
             raise OSError(f"refusing hard-linked route recovery lock: {path}")
-        os.fchmod(fd, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        _fchmod(fd, 0o600)
+        _flock(fd, "LOCK_EX")
         return fd
     except BaseException:
         os.close(fd)
@@ -114,7 +155,7 @@ def _atomic_write(path: Path, payload: dict[str, float]) -> None:
     _validate_private_regular_file(path)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
-        os.fchmod(fd, 0o600)
+        _fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
             json.dump(payload, stream, sort_keys=True)
             stream.write("\n")
@@ -144,7 +185,7 @@ def _load_attempts(path: Path) -> dict[str, float]:
         metadata = os.fstat(fd)
         if not stat.S_ISREG(metadata.st_mode):
             raise OSError(f"route recovery state is not a regular file: {path}")
-        if metadata.st_uid != os.getuid():
+        if metadata.st_uid != _require_current_uid():
             raise PermissionError(f"route recovery state is not owned by this user: {path}")
         if metadata.st_nlink != 1:
             raise OSError(f"refusing hard-linked route recovery state: {path}")
@@ -249,6 +290,8 @@ def check_and_recover(
         raise ValueError("cooldown must not be negative")
     if any(bus not in BUSES for bus in buses):
         raise ValueError("unsupported bus name")
+    if not _is_linux_runtime():
+        return [f"{bus}: unavailable (route guardian requires Linux/PipeWire)" for bus in buses]
 
     state_file = state_file or (Path.home() / ".cache" / "hearth" / "route-recovery-attempts.json")
     state_file = state_file.expanduser()
@@ -345,7 +388,7 @@ def check_and_recover(
 
         return reports
     finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        _flock(lock_fd, "LOCK_UN")
         os.close(lock_fd)
 
 

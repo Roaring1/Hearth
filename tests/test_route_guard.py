@@ -299,6 +299,33 @@ def test_guard_refuses_symlinked_lock_before_collect_or_mutation(
     assert target.read_text(encoding="utf-8") == "do not alter"
 
 
+def test_guard_refuses_non_linux_before_state_or_graph_access(monkeypatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+    state = tmp_path / "not-created" / "attempts.json"
+    monkeypatch.setattr("hearth.audio.route_guard._is_linux_runtime", lambda: False)
+    monkeypatch.setattr(
+        "hearth.audio.route_guard._collect",
+        lambda sink: calls.append(sink),
+    )
+    monkeypatch.setattr(
+        "hearth.audio.route_guard._create_loopback",
+        lambda *args: calls.append("create-loopback"),
+    )
+    monkeypatch.setattr(
+        "hearth.audio.route_guard._run_recovery_command",
+        lambda argv: calls.append("route-mutation"),
+    )
+
+    result = check_and_recover(SINK, state_file=state, buses=("vm_game", "vm_chat"))
+
+    assert result == [
+        "vm_game: unavailable (route guardian requires Linux/PipeWire)",
+        "vm_chat: unavailable (route guardian requires Linux/PipeWire)",
+    ]
+    assert calls == []
+    assert not state.parent.exists()
+
+
 def test_guard_refuses_hard_linked_lock_before_collect_or_mutation(
     monkeypatch, tmp_path: Path
 ) -> None:
