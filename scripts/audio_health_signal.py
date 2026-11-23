@@ -308,6 +308,87 @@ def _highpass_transient_metrics(samples: np.ndarray, sample_rate: int) -> dict[s
     }
 
 
+def _lpc_prediction_residual(
+    samples: np.ndarray,
+    start_sample: int,
+    end_sample: int,
+    sample_rate: int,
+    *,
+    order: int = 12,
+    context_ms: float = 25.0,
+) -> dict[str, float | bool | None]:
+    """Measure how unpredictable a short event is from its preceding context."""
+    context_length = max(order * 4, round(sample_rate * context_ms / 1000.0))
+    context_start = max(0, start_sample - context_length)
+    if start_sample - context_start < order * 4 or end_sample <= start_sample:
+        return {
+            "prediction_error_ratio": None,
+            "prediction_peak_ratio": None,
+        }
+
+    context = np.asarray(samples[context_start:start_sample], dtype=np.float64)
+    event = np.asarray(samples[start_sample:end_sample], dtype=np.float64)
+    if context.size < order * 4 or event.size == 0:
+        return {
+            "prediction_error_ratio": None,
+            "prediction_peak_ratio": None,
+        }
+
+    mean = float(np.mean(context))
+    context = context - mean
+    event = event - mean
+    count = context.size
+    autocorrelation = np.asarray(
+        [float(np.dot(context[lag:], context[: count - lag]) / count) for lag in range(order + 1)],
+        dtype=np.float64,
+    )
+    if not np.isfinite(autocorrelation).all() or autocorrelation[0] <= 1e-18:
+        return {
+            "prediction_error_ratio": None,
+            "prediction_peak_ratio": None,
+        }
+
+    indices = np.abs(np.subtract.outer(np.arange(order), np.arange(order)))
+    covariance = autocorrelation[indices]
+    ridge = max(float(autocorrelation[0]) * 1e-4, 1e-18)
+    covariance = covariance + np.eye(order, dtype=np.float64) * ridge
+    try:
+        coefficients = np.linalg.solve(covariance, autocorrelation[1 : order + 1])
+    except np.linalg.LinAlgError:
+        return {
+            "prediction_error_ratio": None,
+            "prediction_peak_ratio": None,
+        }
+
+    def prediction_errors(values: np.ndarray) -> np.ndarray:
+        if values.size <= order:
+            return np.empty(0, dtype=np.float64)
+        windows = np.lib.stride_tricks.sliding_window_view(values, order + 1)
+        predicted = windows[:, :order][:, ::-1] @ coefficients
+        return windows[:, order] - predicted
+
+    baseline_errors = prediction_errors(context)
+    event_history = np.concatenate((context[-order:], event))
+    event_errors = prediction_errors(event_history)
+    if baseline_errors.size == 0 or event_errors.size == 0:
+        return {
+            "prediction_error_ratio": None,
+            "prediction_peak_ratio": None,
+        }
+
+    baseline_rms = float(np.sqrt(np.mean(baseline_errors * baseline_errors)))
+    event_rms = float(np.sqrt(np.mean(event_errors * event_errors)))
+    event_peak = float(np.max(np.abs(event_errors)))
+    floor = max(float(np.sqrt(autocorrelation[0])) * 1e-4, 1e-9)
+    denominator = max(baseline_rms, floor)
+    rms_ratio = event_rms / denominator
+    peak_ratio = event_peak / denominator
+    return {
+        "prediction_error_ratio": round(rms_ratio, 3),
+        "prediction_peak_ratio": round(peak_ratio, 3),
+    }
+
+
 def _broadband_impulse_metrics(
     samples: np.ndarray,
     sample_rate: int,
@@ -401,24 +482,53 @@ def _broadband_impulse_metrics(
         if duration_ms > 15.0:
             continue
         ratios = band_powers[first:end] / np.maximum(thresholds[first:end], 1e-12)
+        start_seconds = float(first * hop / sample_rate)
         events.append(
             {
-                "start_seconds": round(float(first * hop / sample_rate), 4),
+                "start_seconds": round(start_seconds, 4),
                 "duration_ms": round(duration_ms, 3),
                 "max_band_threshold_ratio": round(float(np.max(ratios)), 2),
                 "bands_elevated": int(np.max(np.count_nonzero(elevated[first:end], axis=1))),
+                "lpc_prediction_error_ratio": None,
+                "lpc_prediction_peak_ratio": None,
             }
         )
 
+    # The LPC stage is more expensive than the band-energy candidate pass.
+    # Evaluate only the 24 strongest events and retain their timestamps.
+    strongest_indices = sorted(
+        range(len(events)),
+        key=lambda index: float(events[index]["max_band_threshold_ratio"]),
+        reverse=True,
+    )[:24]
+    for index in strongest_indices:
+        event = events[index]
+        start_sample = round(float(event["start_seconds"]) * sample_rate)
+        event_samples = round(float(event["duration_ms"]) * sample_rate / 1000.0)
+        prediction = _lpc_prediction_residual(
+            samples,
+            start_sample,
+            min(samples.size, start_sample + event_samples),
+            sample_rate,
+        )
+        event["lpc_prediction_error_ratio"] = prediction["prediction_error_ratio"]
+        event["lpc_prediction_peak_ratio"] = prediction["prediction_peak_ratio"]
+
+    evaluated = [events[index] for index in strongest_indices]
+    evaluated.sort(key=lambda item: float(item["start_seconds"]))
     return {
         "frame_ms": round(1000.0 * frame_size / sample_rate, 3),
         "hop_ms": round(1000.0 * hop / sample_rate, 3),
         "candidate_count": len(events),
         "candidate_rate_per_second": round(len(events) / (samples.size / sample_rate), 3),
-        "candidate_events": events[:24],
+        "candidate_events": evaluated,
         "analysis_frames": int(frame_count),
         "candidate_truncated": len(events) > 24,
-        "threshold_description": "local median/MAD; >=2 of 3 high-frequency bands; <=15ms",
+        "lpc_checked_events": len(evaluated),
+        "threshold_description": (
+            "local median/MAD; >=2 of 3 high-frequency bands; <=15ms; "
+            "LPC prediction residual ratios are descriptive only"
+        ),
     }
 
 
