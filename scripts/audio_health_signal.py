@@ -269,40 +269,87 @@ def _low_energy_metrics(samples: np.ndarray, sample_rate: int) -> dict[str, Any]
             "rms_dbfs": None,
             "5k_12k_dbfs": None,
             "5k_12k_flatness": None,
+            "digital_silence_frames": 0,
+            "digital_silence_fraction": None,
+            "noise_floor_valid": False,
+            "noise_floor_status": "insufficient_frames",
         }
 
     frames = samples[: frame_count * frame_size].reshape(frame_count, frame_size)
     frame_rms = np.sqrt(np.mean(frames * frames, axis=1))
+    frame_peak = np.max(np.abs(frames), axis=1)
+    digital_silence = frame_peak <= 1e-8
     low_cut = float(np.percentile(frame_rms, 25.0))
-    selected = frames[frame_rms <= low_cut]
-    if selected.shape[0] < 3:
-        selected = frames[np.argsort(frame_rms)[: min(3, frame_count)]]
+    selected_indices = np.flatnonzero((frame_rms <= low_cut) & ~digital_silence)
+    selection_status = "estimated_from_non_silent_low_energy_frames"
+    if selected_indices.size < 3:
+        non_silent_indices = np.flatnonzero(~digital_silence)
+        selected_indices = non_silent_indices[
+            np.argsort(frame_rms[non_silent_indices])[
+                : min(_NOISE_FLOOR_MIN_FRAMES, non_silent_indices.size)
+            ]
+        ]
+        selection_status = "fallback_lowest_non_silent_frames"
+    selected = frames[selected_indices]
 
-    nfft = 1 << (frame_size - 1).bit_length()
-    window = np.hanning(frame_size).astype(np.float64)
-    scale = sample_rate * float(np.sum(window * window))
-    spectra = np.fft.rfft(selected * window[None, :], n=nfft, axis=1)
-    powers = (np.abs(spectra) ** 2) / max(scale, _EPS)
-    if powers.shape[1] > 2:
-        powers[:, 1:-1] *= 2.0
-    mean_power = np.mean(powers, axis=0)
-    frequencies = np.fft.rfftfreq(nfft, 1.0 / sample_rate)
-    high_mask = (frequencies >= 5000.0) & (frequencies < min(12000.0, sample_rate / 2))
-    high_values = mean_power[high_mask]
-    if high_values.size:
-        flatness = float(
-            np.exp(np.mean(np.log(high_values + _EPS))) / (np.mean(high_values) + _EPS)
-        )
-        high_power = _band_power(mean_power, frequencies, 5000.0, 12000.0)
+    noise_floor_valid = (
+        selection_status == "estimated_from_non_silent_low_energy_frames"
+        and selected.shape[0] >= _NOISE_FLOOR_MIN_FRAMES
+    )
+    if selected.size:
+        nfft = 1 << (frame_size - 1).bit_length()
+        window = np.hanning(frame_size).astype(np.float64)
+        scale = sample_rate * float(np.sum(window * window))
+        spectra = np.fft.rfft(selected * window[None, :], n=nfft, axis=1)
+        powers = (np.abs(spectra) ** 2) / max(scale, _EPS)
+        if powers.shape[1] > 2:
+            powers[:, 1:-1] *= 2.0
+        mean_power = np.mean(powers, axis=0)
+        frequencies = np.fft.rfftfreq(nfft, 1.0 / sample_rate)
+        high_mask = (frequencies >= 5000.0) & (frequencies < min(12000.0, sample_rate / 2))
+        high_values = mean_power[high_mask]
+        if high_values.size:
+            flatness = float(
+                np.exp(np.mean(np.log(high_values + _EPS))) / (np.mean(high_values) + _EPS)
+            )
+            high_power = _band_power(mean_power, frequencies, 5000.0, 12000.0)
+        else:
+            flatness = None
+            high_power = None
+        rms_value = float(np.median(frame_rms[selected_indices]))
+        unverified_rms_dbfs = _db_power(rms_value * rms_value)
+        unverified_high_dbfs = _db_power(high_power) if high_power is not None else None
+        unverified_flatness = round(flatness, 4) if flatness is not None else None
     else:
-        flatness = None
-        high_power = None
+        unverified_rms_dbfs = None
+        unverified_high_dbfs = None
+        unverified_flatness = None
 
+    noise_floor_status = (
+        selection_status
+        if noise_floor_valid
+        else "digital_silence_only"
+        if selected.shape[0] == 0
+        else "fallback_low_energy_not_vad"
+        if selection_status == "fallback_lowest_non_silent_frames"
+        else "insufficient_non_silent_frames"
+    )
+    rms_dbfs = unverified_rms_dbfs if noise_floor_valid else None
+    high_dbfs = unverified_high_dbfs if noise_floor_valid else None
+    reported_flatness = unverified_flatness if noise_floor_valid else None
     return {
         "frames": int(selected.shape[0]),
-        "rms_dbfs": _db_power(float(np.median(frame_rms[frame_rms <= low_cut]))),
-        "5k_12k_dbfs": _db_power(high_power) if high_power is not None else None,
-        "5k_12k_flatness": round(flatness, 4) if flatness is not None else None,
+        "rms_dbfs": rms_dbfs,
+        "5k_12k_dbfs": high_dbfs,
+        "5k_12k_flatness": reported_flatness,
+        "unverified_rms_dbfs": unverified_rms_dbfs,
+        "unverified_5k_12k_dbfs": unverified_high_dbfs,
+        "unverified_5k_12k_flatness": unverified_flatness,
+        "minimum_noise_floor_frames": _NOISE_FLOOR_MIN_FRAMES,
+        "digital_silence_frames": int(np.count_nonzero(digital_silence)),
+        "digital_silence_fraction": round(float(np.mean(digital_silence)), 3),
+        "noise_floor_valid": noise_floor_valid,
+        "noise_floor_status": noise_floor_status,
     }
 
 
