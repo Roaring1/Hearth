@@ -431,3 +431,16 @@ def test_signal_summary_includes_raw_and_processed_true_peak_delta() -> None:
     assert result["processed"]["true_peak"]["true_peak_dbtp"] > 0.0
     assert result["raw_to_processed"]["true_peak_delta_dbtp"] > 5.0
     assert result["automatic_action"] == "none"
+
+
+def test_true_peak_is_not_estimated_with_48khz_coefficients_at_other_rates() -> None:
+    from audio_health_signal import _true_peak_metrics
+
+    samples = 0.75 * np.sin(2.0 * np.pi * 1000 * np.arange(4096) / 44_100)
+    metrics = _true_peak_metrics(samples, 44_100)
+    assert metrics["sample_peak_dbfs"] is not None
+    assert metrics["true_peak_dbtp"] is None
+    assert metrics["intersample_increase_db"] is None
+    assert metrics["over_full_scale"] is None
+    assert metrics["supported_sample_rate_hz"] == 48_000
+    assert "only implemented for 48 kHz" in metrics["unsupported_reason"]

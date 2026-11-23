@@ -323,6 +323,21 @@ def _true_peak_metrics(
             "oversample_factor": oversample_factor,
             "over_full_scale": None,
             "nonfinite_samples_excluded": int(values.size - np.count_nonzero(finite)),
+            "supported_sample_rate_hz": 48000,
+            "unsupported_reason": "empty sample or sample rate below feature minimum",
+        }
+    if sample_rate != 48000:
+        sample_peak = float(np.max(np.abs(values)))
+        sample_dbfs = 20.0 * math.log10(max(sample_peak, _EPS))
+        return {
+            "sample_peak_dbfs": round(sample_dbfs, 3),
+            "true_peak_dbtp": None,
+            "intersample_increase_db": None,
+            "oversample_factor": oversample_factor,
+            "over_full_scale": None,
+            "nonfinite_samples_excluded": int(values.size - np.count_nonzero(finite)),
+            "supported_sample_rate_hz": 48000,
+            "unsupported_reason": "Annex 2 coefficient set is only implemented for 48 kHz",
         }
     if oversample_factor != 4:
         raise ValueError("true-peak measurement currently requires 4x oversampling")
@@ -357,6 +372,7 @@ def _true_peak_metrics(
         "over_full_scale": bool(true_peak >= 1.0),
         "nonfinite_samples_excluded": int(values.size - np.count_nonzero(finite)),
         "method": "ITU-R_BS.1770-5_Annex2_48-tap_4-phase_FIR",
+        "supported_sample_rate_hz": 48000,
     }
 
 
