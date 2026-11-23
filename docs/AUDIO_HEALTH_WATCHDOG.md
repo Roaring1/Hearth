@@ -48,7 +48,10 @@ pw-top ERR is cumulative for a node. An increase is meaningful only when the nod
 
 The parser records WAIT, BUSY, W/Q and B/Q as text tokens. This deliberately avoids guessing units or treating placeholder strings such as --- and ??? as numeric values.
 
-## Recovery safety
+## Recovery safety and desktop notifications
+
+The monitor is non-intrusive by default: `NOTIFY` defaults to false, so no KDE `notify-send` notifications are emitted unless the user explicitly sets `NOTIFY=1` in `~/.config/roaring/carla-health.env`. `AUTO_RECOVER` is a separate opt-in and also defaults to false. Enabling notifications does not enable Carla restart behavior.
+
 
 The original guarded Carla recovery remains the owner of Carla restarts. The added rule is:
 

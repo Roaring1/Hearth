@@ -317,7 +317,7 @@ class QualityTracker:
 
 def load_config(path: pathlib.Path = CONFIG_PATH) -> dict[str, bool]:
     """Read a tiny allow-listed KEY=VALUE file; never execute it as shell."""
-    config = {"AUTO_RECOVER": False, "NOTIFY": True}
+    config = {"AUTO_RECOVER": False, "NOTIFY": False}
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
             stripped = line.strip()
@@ -880,7 +880,7 @@ def run_daemon(stop: Callable[[], bool] | None = None) -> int:
                     last_runtime_notification = _report_runtime_deltas(
                         runtime,
                         state,
-                        notify_enabled=config.get("NOTIFY", True),
+                        notify_enabled=config.get("NOTIFY", False),
                         now=time.time(),
                         last_notification=last_runtime_notification,
                     )
@@ -896,7 +896,7 @@ def run_daemon(stop: Callable[[], bool] | None = None) -> int:
                         float(result.get("residual_hf_kurtosis", 0.0)),
                     )
                     success, detail = handle_confirmed_fault(config, state)
-                    if config.get("NOTIFY", True) and now_mono - last_fault_notification >= 30:
+                    if config.get("NOTIFY", False) and now_mono - last_fault_notification >= 30:
                         title = "B1 microphone crackling suspected"
                         body = detail if success else f"{detail}. Check the audio health log."
                         notify(title, body, urgency="critical")
@@ -1551,7 +1551,7 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
                 "withheld because the cause may be transport/scheduling."
             )
             LOG.error(message)
-            if config.get("NOTIFY", True):
+            if config.get("NOTIFY", False):
                 notify(
                     "Microphone fault and transport errors",
                     message,
@@ -1579,7 +1579,7 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
                             "PipeWire ERR counters increased during verification."
                         )
                         LOG.error("B1 signal recovered but transport remains degraded: %s", message)
-                        if config.get("NOTIFY", True):
+                        if config.get("NOTIFY", False):
                             notify(
                                 "B1 signal restored; transport errors remain",
                                 message,
@@ -1589,7 +1589,7 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
                         state["last_verdict"] = "RECOVERED"
                         message = f"{detail}. Verification sample is correct."
                         LOG.warning("B1 recovery verified: %s", message)
-                        if config.get("NOTIFY", True):
+                        if config.get("NOTIFY", False):
                             notify("B1 microphone recovered", message, urgency="normal")
                 else:
                     state["last_verdict"] = (
@@ -1601,18 +1601,18 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
                         f"{detail}. Verification result: {second['verdict']} - {second['reason']}"
                     )
                     LOG.error("B1 recovery verification: %s", message)
-                    if config.get("NOTIFY", True):
+                    if config.get("NOTIFY", False):
                         notify("B1 microphone needs attention", message, urgency="critical")
             else:
                 state["last_verdict"] = "INCORRECT_RECOVERY_REFUSED"
                 message = f"Fault confirmed, but recovery was refused: {detail}"
                 LOG.error(message)
-                if config.get("NOTIFY", True):
+                if config.get("NOTIFY", False):
                     notify("B1 microphone fault detected", message, urgency="critical")
         else:
             state["last_verdict"] = "INCORRECT_RECOVERY_DISABLED"
             LOG.error("B1 fault confirmed, but AUTO_RECOVER=0: %s", first["reason"])
-            if config.get("NOTIFY", True):
+            if config.get("NOTIFY", False):
                 notify(
                     "B1 microphone fault detected",
                     "Fault confirmed. Automatic Carla recovery is disabled.",
@@ -1620,7 +1620,7 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
                 )
     else:
         state["last_verdict"] = first["verdict"]
-        if first["verdict"] in {"SUSPECT", "INCONCLUSIVE"} and config.get("NOTIFY", True):
+        if first["verdict"] in {"SUSPECT", "INCONCLUSIVE"} and config.get("NOTIFY", False):
             LOG.info("No Carla restart: sample did not meet the confirmed-fault threshold")
 
     state["last_sample"] = first

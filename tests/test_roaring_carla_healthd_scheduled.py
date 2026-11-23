@@ -25,6 +25,14 @@ except ImportError:
 healthd = importlib.import_module("roaring_carla_healthd")
 
 
+def test_config_defaults_to_silent_and_allows_explicit_notification_opt_in(tmp_path) -> None:
+    config_path = tmp_path / "carla-health.env"
+    assert healthd.load_config(config_path) == {"AUTO_RECOVER": False, "NOTIFY": False}
+
+    config_path.write_text("NOTIFY=1\nAUTO_RECOVER=0\n", encoding="utf-8")
+    assert healthd.load_config(config_path) == {"AUTO_RECOVER": False, "NOTIFY": True}
+
+
 def _transport(errors: int, at: float) -> dict:
     return {
         "nodes": {
