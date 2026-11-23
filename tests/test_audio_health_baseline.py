@@ -124,7 +124,8 @@ def test_baseline_file_save_load_and_invalid_file(tmp_path: Path) -> None:
     path = tmp_path / "noise-baseline.json"
     save_noise_baseline(path, profile)
     assert load_noise_baseline(path) == profile
-    assert path.stat().st_mode & 0o777 == 0o600
+    if sys.platform == "linux":
+        assert path.stat().st_mode & 0o777 == 0o600
     path.write_text("{broken", encoding="utf-8")
     assert load_noise_baseline(path) == {"status": "baseline_invalid"}
     invalid = {"schema_version": 1, "profile_id": "wrong"}

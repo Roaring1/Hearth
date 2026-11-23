@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
+import pytest
 
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux systemd/CARLA installer")
 def test_healthd_installer_stages_helpers_and_backs_up_existing_files(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     home = tmp_path / "home"
