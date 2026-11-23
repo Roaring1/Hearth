@@ -604,3 +604,78 @@ def test_empty_stereo_channel_accumulator_returns_no_metrics() -> None:
     result = StereoChannelAccumulator().summary()
     assert result["frames"] == 0
     assert result["automatic_action"] == "none"
+
+
+def test_low_energy_estimator_does_not_report_digital_silence_as_noise_floor() -> None:
+    from audio_health_signal import _low_energy_metrics
+
+    samples = np.zeros(8 * 48_000, dtype=np.float32)
+    result = _low_energy_metrics(samples, 48_000)
+    assert result["noise_floor_valid"] is False
+    assert result["noise_floor_status"] == "digital_silence_only"
+    assert result["rms_dbfs"] is None
+    assert result["5k_12k_dbfs"] is None
+    assert result["digital_silence_frames"] == 80
+    assert result["digital_silence_fraction"] == 1.0
+
+
+def test_low_energy_estimator_falls_back_to_non_silent_frames_when_quartile_is_gated() -> None:
+    from audio_health_signal import _low_energy_metrics
+
+    rate = 48_000
+    samples = np.zeros(8 * rate, dtype=np.float32)
+    rng = np.random.default_rng(701)
+    samples[6 * rate :] = rng.normal(0.0, 0.0002, 2 * rate).astype(np.float32)
+    result = _low_energy_metrics(samples, rate)
+    assert result["noise_floor_valid"] is False
+    assert result["noise_floor_status"] == "fallback_low_energy_not_vad"
+    assert result["digital_silence_fraction"] == 0.75
+    assert result["rms_dbfs"] is None
+    assert -90.0 < result["unverified_rms_dbfs"] < -60.0
+
+
+def test_low_energy_estimator_marks_short_non_silent_fallback_unverified() -> None:
+    from audio_health_signal import _low_energy_metrics
+
+    rate = 48_000
+    samples = np.zeros(10 * rate, dtype=np.float32)
+    rng = np.random.default_rng(702)
+    samples[9 * rate :] = rng.normal(0.0, 0.0002, rate).astype(np.float32)
+    result = _low_energy_metrics(samples, rate)
+    assert result["frames"] == 10
+    assert result["noise_floor_valid"] is False
+    assert result["noise_floor_status"] == "fallback_low_energy_not_vad"
+    assert result["rms_dbfs"] is None
+    assert result["unverified_rms_dbfs"] is not None
+
+
+def test_low_energy_rms_dbfs_uses_rms_conversion_not_power_conversion() -> None:
+    from audio_health_signal import _low_energy_metrics
+
+    samples = np.full(10 * 48_000, 0.01, dtype=np.float32)
+    result = _low_energy_metrics(samples, 48_000)
+    assert result["noise_floor_valid"] is True
+    assert abs(result["rms_dbfs"] - (-40.0)) < 0.2
+
+
+def test_sample_integrity_reports_and_flags_dc_offset_measurement_only() -> None:
+    from audio_health_signal import _integrity_metrics
+
+    rate = 48_000
+    index = np.arange(rate, dtype=np.float64)
+    samples = 0.1 * np.sin(2.0 * np.pi * 440 * index / rate) + 0.02
+    result = _integrity_metrics(samples, rate)
+    assert abs(result["dc_offset"] - 0.02) < 1e-4
+    assert abs(result["dc_offset_dbfs"] - (-33.98)) < 0.1
+    assert result["dc_offset_candidate"] is True
+
+
+def test_sample_integrity_does_not_flag_centered_sine_for_dc_offset() -> None:
+    from audio_health_signal import _integrity_metrics
+
+    rate = 48_000
+    index = np.arange(rate, dtype=np.float64)
+    samples = 0.1 * np.sin(2.0 * np.pi * 440 * index / rate)
+    result = _integrity_metrics(samples, rate)
+    assert abs(result["dc_offset"]) < 1e-10
+    assert result["dc_offset_candidate"] is False

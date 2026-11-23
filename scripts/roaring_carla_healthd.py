@@ -1406,7 +1406,8 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
         LOG.info(
             "signal metrics (measurement only): tones=%s raw_impulses=%s/%.2fHz "
             "processed_impulses=%s/%.2fHz true_peak=%.2f/%.2fdBTP "
-            "hf_kurtosis=%.2f/%.2f nonfinite=%s/%s",
+            "hf_kurtosis=%.2f/%.2f nonfinite=%s/%s "
+            "dc_offset=%s/%s dBFS=%s/%s",
             tone_scope,
             raw_impulses.get("candidate_count", 0),
             raw_impulses.get("candidate_rate_per_second", 0.0),
@@ -1420,7 +1421,19 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
             .get("hf_excess_kurtosis", 0.0),
             raw_integrity.get("nonfinite_samples", 0),
             processed_integrity.get("nonfinite_samples", 0),
+            raw_integrity.get("dc_offset"),
+            processed_integrity.get("dc_offset"),
+            raw_integrity.get("dc_offset_dbfs"),
+            processed_integrity.get("dc_offset_dbfs"),
         )
+        if raw_integrity.get("dc_offset_candidate") or processed_integrity.get(
+            "dc_offset_candidate"
+        ):
+            LOG.warning(
+                "mono DC-offset candidate (measurement only, no action): raw=%s processed=%s",
+                raw_integrity.get("dc_offset_dbfs"),
+                processed_integrity.get("dc_offset_dbfs"),
+            )
         if raw_tones or processed_tones:
             LOG.warning(
                 "persistent spectral-line candidates (measurement only): "
