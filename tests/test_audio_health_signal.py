@@ -444,3 +444,53 @@ def test_true_peak_is_not_estimated_with_48khz_coefficients_at_other_rates() -> 
     assert metrics["over_full_scale"] is None
     assert metrics["supported_sample_rate_hz"] == 48_000
     assert "only implemented for 48 kHz" in metrics["unsupported_reason"]
+
+
+def test_impulse_event_matching_corrects_stable_stream_lag_and_is_one_to_one() -> None:
+    from audio_health_signal import _match_impulse_event_times
+
+    raw = [
+        {"start_seconds": 0.10},
+        {"start_seconds": 0.50},
+        {"start_seconds": 1.00},
+        {"start_seconds": 1.50},
+    ]
+    processed = [
+        {"start_seconds": 0.1125},
+        {"start_seconds": 0.5124},
+        {"start_seconds": 1.0126},
+        {"start_seconds": 2.00},
+    ]
+    result = _match_impulse_event_times(
+        raw,
+        processed,
+        alignment_lag_samples=600,
+        alignment_lag_mad_samples=2.0,
+        alignment_lag_observations=8,
+        sample_rate=48_000,
+    )
+    assert result["status"] == "matched_with_stable_lag"
+    assert result["matched_count"] == 3
+    assert result["raw_unmatched_count"] == 1
+    assert result["processed_unmatched_count"] == 1
+    assert all(abs(item["residual_offset_ms"]) <= 5.0 for item in result["matched_events"])
+    assert result["automatic_action"] == "none"
+
+
+def test_impulse_event_matching_refuses_unstable_or_sparse_lag() -> None:
+    from audio_health_signal import _match_impulse_event_times
+
+    events = [{"start_seconds": 0.25}, {"start_seconds": 0.75}]
+    result = _match_impulse_event_times(
+        events,
+        events,
+        alignment_lag_samples=10,
+        alignment_lag_mad_samples=300,
+        alignment_lag_observations=4,
+        sample_rate=48_000,
+    )
+    assert result["status"] == "unmatched_lag_unstable_or_insufficient"
+    assert result["matched_events"] == []
+    assert result["matched_count"] is None
+    assert result["raw_unmatched_count"] is None
+    assert result["processed_unmatched_count"] is None

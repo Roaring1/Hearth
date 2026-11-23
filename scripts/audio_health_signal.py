@@ -863,10 +863,106 @@ def _impulse_localization(raw_candidate: bool, processed_candidate: bool) -> str
     return "no_candidate"
 
 
+def _match_impulse_event_times(
+    raw_events: Sequence[dict[str, Any]],
+    processed_events: Sequence[dict[str, Any]],
+    *,
+    alignment_lag_samples: int | None,
+    alignment_lag_mad_samples: float | None,
+    alignment_lag_observations: int,
+    sample_rate: int,
+    tolerance_ms: float = 5.0,
+) -> dict[str, Any]:
+    """Match only retained transient candidates after a stable measured stream lag.
+
+    The raw and processed candidate lists are capped at 24 strongest events per
+    stream. These matches are localization evidence, not a classifier.
+    """
+    raw_times = sorted(float(event["start_seconds"]) for event in raw_events)
+    processed_times = sorted(float(event["start_seconds"]) for event in processed_events)
+    base = {
+        "scope": "top_24_candidates_per_tap_only",
+        "raw_candidate_events_retained": len(raw_times),
+        "processed_candidate_events_retained": len(processed_times),
+        "alignment_lag_observations": int(alignment_lag_observations),
+        "alignment_lag_samples": alignment_lag_samples,
+        "alignment_lag_mad_samples": (
+            round(float(alignment_lag_mad_samples), 2)
+            if alignment_lag_mad_samples is not None
+            else None
+        ),
+        "tolerance_ms": tolerance_ms,
+        "automatic_action": "none",
+    }
+    stable = (
+        alignment_lag_samples is not None
+        and alignment_lag_mad_samples is not None
+        and alignment_lag_observations >= 5
+        and alignment_lag_mad_samples <= sample_rate * 0.005
+    )
+    if not stable:
+        return {
+            **base,
+            "status": "unmatched_lag_unstable_or_insufficient",
+            "matched_events": [],
+            "matched_count": None,
+            "raw_unmatched_count": None,
+            "processed_unmatched_count": None,
+        }
+
+    # Pair alignment reports positive lag when the processed stream is shifted
+    # forward relative to raw. Convert processed event times to raw-time space.
+    lag_seconds = float(alignment_lag_samples) / sample_rate
+    corrected_processed = [time_value - lag_seconds for time_value in processed_times]
+    tolerance_seconds = tolerance_ms / 1000.0
+    unmatched_processed = set(range(len(corrected_processed)))
+    matches: list[dict[str, float]] = []
+    unmatched_raw: list[float] = []
+    for raw_time in raw_times:
+        nearest = min(
+            unmatched_processed,
+            key=lambda index: abs(corrected_processed[index] - raw_time),
+            default=None,
+        )
+        if (
+            nearest is not None
+            and abs(corrected_processed[nearest] - raw_time) <= tolerance_seconds
+        ):
+            unmatched_processed.remove(nearest)
+            matches.append(
+                {
+                    "raw_start_seconds": round(raw_time, 4),
+                    "processed_start_seconds": round(processed_times[nearest], 4),
+                    "residual_offset_ms": round(
+                        (corrected_processed[nearest] - raw_time) * 1000.0,
+                        3,
+                    ),
+                }
+            )
+        else:
+            unmatched_raw.append(raw_time)
+    return {
+        **base,
+        "status": "matched_with_stable_lag",
+        "matched_events": matches[:24],
+        "matched_count": len(matches),
+        "raw_unmatched_count": len(unmatched_raw),
+        "processed_unmatched_count": len(unmatched_processed),
+        "raw_unmatched_times_seconds": [round(value, 4) for value in unmatched_raw[:24]],
+        "processed_unmatched_times_seconds": [
+            round(corrected_processed[index], 4) for index in sorted(unmatched_processed)[:24]
+        ],
+    }
+
+
 def analyze_signal_features(
     raw_samples: Sequence[float] | np.ndarray,
     processed_samples: Sequence[float] | np.ndarray,
     sample_rate: int = 48_000,
+    *,
+    alignment_lag_samples: int | None = None,
+    alignment_lag_mad_samples: float | None = None,
+    alignment_lag_observations: int = 0,
 ) -> dict[str, Any]:
     """Return compact numeric features and raw/post line localization.
 
@@ -906,6 +1002,14 @@ def analyze_signal_features(
         "impulse_localization": _impulse_localization(
             raw["impulsive_event_candidate"]["candidate"],
             processed["impulsive_event_candidate"]["candidate"],
+        ),
+        "impulse_event_time_matching": _match_impulse_event_times(
+            raw["broadband_impulses"]["candidate_events"],
+            processed["broadband_impulses"]["candidate_events"],
+            alignment_lag_samples=alignment_lag_samples,
+            alignment_lag_mad_samples=alignment_lag_mad_samples,
+            alignment_lag_observations=alignment_lag_observations,
+            sample_rate=sample_rate,
         ),
         "raw_to_processed": {
             "band_level_delta_db": {
