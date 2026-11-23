@@ -26,6 +26,12 @@ from collections.abc import Callable, Sequence
 from contextlib import suppress
 
 import numpy as np
+from audio_health_baseline import (
+    build_noise_baseline,
+    compare_noise_baseline,
+    load_noise_baseline,
+    save_noise_baseline,
+)
 from audio_health_signal import StereoChannelAccumulator, analyze_signal_features
 from audio_health_stream import StreamReadDiagnostics
 from audio_health_transport import (
@@ -50,6 +56,7 @@ CANONICAL_SERVICE = "roaring-carla-session.service"
 TRANSIENT_SERVICE = "carla-b1-restart.service"
 STATE_PATH = pathlib.Path.home() / ".cache/roaring/carla-healthd-state.json"
 SAMPLE_HISTORY_PATH = pathlib.Path.home() / ".cache/roaring/carla-health-history.jsonl"
+NOISE_BASELINE_PATH = pathlib.Path.home() / ".cache/roaring/carla-healthd-noise-baseline.json"
 CONFIG_PATH = pathlib.Path.home() / ".config/roaring/carla-health.env"
 ROUTER_CONFIG_PATH = pathlib.Path.home() / ".config/hearth/roaring_mic_router.conf"
 LOG = logging.getLogger("roaring.carla.health")
@@ -1329,6 +1336,19 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
         seconds, state.get("scheduled_transport_snapshot")
     )
     state["scheduled_transport_snapshot"] = transport_baseline
+    noise_baseline = load_noise_baseline(NOISE_BASELINE_PATH)
+    noise_comparison = compare_noise_baseline(first, noise_baseline)
+    first["noise_baseline_comparison"] = noise_comparison
+    state["noise_baseline_comparison"] = noise_comparison
+    if noise_comparison.get("candidate"):
+        LOG.warning(
+            "B1 noise baseline candidate (measurement only, no recovery): status=%s "
+            "deltas=%s noise_rises=%s new_tones=%s",
+            noise_comparison.get("status"),
+            noise_comparison.get("deltas_db"),
+            noise_comparison.get("noise_rise_candidates"),
+            noise_comparison.get("new_persistent_tone_candidates"),
+        )
     transport = first.get("transport", {})
     coverage = first.get("capture_coverage", {})
     if isinstance(coverage, dict) and isinstance(coverage.get("fraction"), (int, float)):
@@ -1606,6 +1626,41 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
     return 0
 
 
+def enroll_noise_baseline() -> int:
+    """Enroll a numeric low-energy profile from three manually confirmed quiet samples."""
+    samples: list[dict] = []
+    for index in range(1, 4):
+        print(f"Quiet baseline sample {index}/3: keep the microphone quiet and B1 active/unmuted.")
+        sample = capture_sample(8.0)
+        samples.append(sample)
+        if sample.get("capture_error"):
+            print(f"Baseline enrollment failed: capture error in sample {index}.")
+            return 2
+        coverage = (sample.get("capture_coverage") or {}).get("fraction")
+        if not isinstance(coverage, (int, float)) or coverage < MIN_CAPTURE_COVERAGE:
+            print(f"Baseline enrollment failed: sample {index} coverage is insufficient.")
+            return 2
+        features = sample.get("signal_features") or {}
+        for tap in ("raw", "processed"):
+            low = (features.get(tap) or {}).get("low_energy") or {}
+            if low.get("noise_floor_valid") is not True:
+                message = (
+                    f"Baseline enrollment failed: {tap} low-energy floor is "
+                    f"unverified in sample {index}."
+                )
+                print(message)
+                return 2
+    try:
+        profile = build_noise_baseline(samples, created_at=time.time(), confirmed_quiet=True)
+    except ValueError as exc:
+        print(f"Baseline enrollment failed: {exc}")
+        return 2
+    save_noise_baseline(NOISE_BASELINE_PATH, profile)
+    print(json.dumps(profile, indent=2))
+    print("Numeric noise profile saved. No PCM was saved; automatic updates are disabled.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -1622,8 +1677,44 @@ def main() -> int:
         action="store_true",
         help="run the legacy continuous observer for manual diagnostics only",
     )
+    parser.add_argument(
+        "--noise-baseline-enroll",
+        action="store_true",
+        help="enroll a numeric noise baseline from three 8-second samples",
+    )
+    parser.add_argument(
+        "--confirm-quiet",
+        action="store_true",
+        help="confirm the mic is quiet/clean during noise baseline enrollment",
+    )
+    parser.add_argument(
+        "--noise-baseline-show",
+        action="store_true",
+        help="show the numeric noise baseline profile, if enrolled",
+    )
     args = parser.parse_args()
+    baseline_mode = args.noise_baseline_enroll or args.noise_baseline_show
+    if args.noise_baseline_enroll and args.noise_baseline_show:
+        parser.error("baseline enrollment and baseline display are separate commands")
+    if baseline_mode and (
+        args.check or args.status or args.sample_seconds is not None or args.continuous
+    ):
+        parser.error("noise baseline commands cannot be combined with other healthd modes")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if args.noise_baseline_enroll:
+        if not args.confirm_quiet:
+            parser.error("--noise-baseline-enroll requires --confirm-quiet")
+        return enroll_noise_baseline()
+    if args.confirm_quiet:
+        parser.error("--confirm-quiet is only valid with --noise-baseline-enroll")
+    if args.noise_baseline_show:
+        baseline = load_noise_baseline(NOISE_BASELINE_PATH)
+        print(
+            json.dumps(
+                baseline if baseline is not None else {"status": "baseline_missing"}, indent=2
+            )
+        )
+        return 0
     if args.check:
         print(
             json.dumps(
