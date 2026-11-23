@@ -1,0 +1,155 @@
+"""One-shot, read-only V4L2 discovery using Hearth's argv-only process seam.
+
+This provider is called only when the user asks to open Capture Controls. It
+runs bounded inventory/capability commands, never opens a device itself, and
+has no watcher, timer or background lifecycle. Hardware-dependent behavior is
+covered with an injected `hearth.proc` runner in tests.
+"""
+
+from __future__ import annotations
+
+import math
+import time
+from dataclasses import dataclass
+
+from hearth import proc
+from hearth.capture_devices import (
+    CaptureDevice,
+    CaptureNode,
+    group_capture_devices,
+    make_capture_node,
+    parse_udev_video_properties,
+    parse_v4l2_capabilities,
+    parse_video_device_listing,
+)
+from hearth.capture_session import UsbIdentity
+from hearth.errors import CommandError, HearthError
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureProbeIssue:
+    """A visible per-node discovery problem; other nodes can still be inspected."""
+
+    device_path: str
+    stage: str
+    message: str
+    identity: UsbIdentity | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureInventory:
+    """One bounded discovery snapshot with explicit per-node failures."""
+
+    devices: tuple[CaptureDevice, ...] = ()
+    issues: tuple[CaptureProbeIssue, ...] = ()
+
+    @property
+    def capture_nodes(self) -> tuple[CaptureNode, ...]:
+        return tuple(node for device in self.devices for node in device.capture_nodes)
+
+
+class CaptureDiscoveryError(HearthError):
+    """The top-level V4L2 inventory command could not run or be parsed."""
+
+
+class V4L2InventoryProvider:
+    """Run a single, read-only probe when requested; no periodic work is started."""
+
+    def __init__(self, *, timeout_s: float = 3.0) -> None:
+        if not math.isfinite(timeout_s) or timeout_s <= 0:
+            raise ValueError("timeout_s must be positive and finite")
+        self._timeout_s = timeout_s
+
+    def _run(self, argv: list[str], *, deadline: float) -> str:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise CommandError(argv, timed_out=True, stderr="V4L2 discovery time budget exhausted")
+        result = proc.run(argv, timeout=remaining)
+        return result.stdout
+
+    def discover(self) -> CaptureInventory:
+        """Enumerate current USB video nodes and their per-node capabilities.
+
+        `v4l2-ctl --list-devices` failure aborts the snapshot because there is
+        no trustworthy inventory. A failure while inspecting one node is
+        returned as a `CaptureProbeIssue`; it does not cause another node to
+        be silently selected in its place.
+        """
+        # One overall budget bounds the entire inventory, not each command.
+        # A machine with many video nodes must not multiply the timeout by N.
+        deadline = time.monotonic() + self._timeout_s
+        try:
+            listing = self._run(["v4l2-ctl", "--list-devices"], deadline=deadline)
+            listed_nodes = parse_video_device_listing(listing)
+        except (CommandError, ValueError) as exc:
+            raise CaptureDiscoveryError(f"Could not list video devices: {exc}") from exc
+
+        nodes: list[CaptureNode] = []
+        issues: list[CaptureProbeIssue] = []
+        for device_path, card_label in listed_nodes.items():
+            try:
+                udev_text = self._run(
+                    ["udevadm", "info", "--query=property", f"--name={device_path}"],
+                    deadline=deadline,
+                )
+                bus = next(
+                    (
+                        line.partition("=")[2].strip().lower()
+                        for line in udev_text.splitlines()
+                        if line.startswith("ID_BUS=")
+                    ),
+                    "",
+                )
+                # Known non-USB devices (for example an integrated PCI
+                # webcam) are not capture-card candidates and do not make the
+                # USB inventory incomplete. Unknown bus/identity remains an issue.
+                if bus and bus != "usb":
+                    continue
+                udev = parse_udev_video_properties(udev_text)
+            except (CommandError, ValueError) as exc:
+                issues.append(CaptureProbeIssue(device_path, "USB identity", str(exc)))
+                continue
+
+            try:
+                caps_text = self._run(
+                    ["v4l2-ctl", f"--device={device_path}", "--all"], deadline=deadline
+                )
+                capabilities = parse_v4l2_capabilities(caps_text)
+            except (CommandError, ValueError) as exc:
+                issues.append(
+                    CaptureProbeIssue(device_path, "Device Caps", str(exc), udev.identity)
+                )
+                continue
+
+            formats_text = ""
+            if capabilities.capture_capable:
+                try:
+                    formats_text = self._run(
+                        ["v4l2-ctl", f"--device={device_path}", "--list-formats-ext"],
+                        deadline=deadline,
+                    )
+                except CommandError as exc:
+                    issues.append(
+                        CaptureProbeIssue(device_path, "Video formats", str(exc), udev.identity)
+                    )
+
+            try:
+                node = make_capture_node(device_path, card_label, udev, capabilities, formats_text)
+            except ValueError as exc:
+                issues.append(
+                    CaptureProbeIssue(device_path, "Video formats", str(exc), udev.identity)
+                )
+                continue
+
+            nodes.append(node)
+            if capabilities.capture_capable and not node.modes:
+                issues.append(
+                    CaptureProbeIssue(
+                        device_path,
+                        "Video formats",
+                        "No discrete capture modes were reported by the driver",
+                        udev.identity,
+                    )
+                )
+
+        return CaptureInventory(group_capture_devices(nodes), tuple(issues))

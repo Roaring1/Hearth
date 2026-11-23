@@ -28,14 +28,14 @@ The three-step user flow is: start capture in Hearth; choose the video-only wind
 
 The eventual active experience has two independent windows:
 
-- **Capture Controls:** ordinary movable controls, kept outside the shared picture. It owns device status, Start/Stop, audio mode, mute, and cleanup feedback.
-- **Hearth - Share Output:** a clean video-only viewer that Vesktop captures. No controls, menus, OSD, branding or status text over the picture; only a plain No signal card is allowed when frames stop.
+- **Capture Controls:** an ordinary movable window, kept outside the shared picture. Its first read-only slice now shows USB video inputs/modes, saved Vesktop audio intent, and explicit Refresh. The eventual active window will add Start/Stop, audio mode, mute, and cleanup feedback only when those operations have real backing adapters.
+- **Hearth - Share Output:** a clean video-only viewer that Vesktop captures. No controls, menus, OSD, branding or status text over the picture. A plain **Video stopped updating** card is reserved for the confirmed timestamp-stall path; mostly-black or unchanged pixel observations are advisory and never prove a lost HDMI signal.
 
 The overview is not a replacement for either active window. It is the novice-friendly starting point and workflow explanation. The main mixer remains available to adjust everyday audio buses.
 
 ## What is intentionally not implemented in this first slice
 
-- No capture device discovery, file descriptor, viewer process, active session, graph watcher, timer or service.
+- The overview itself performs no capture-device discovery, file-descriptor open, viewer start, active session, graph watcher, timer or service. The separate Capture Controls preflight does one bounded read-only V4L2 inventory when explicitly opened or refreshed.
 - No Start Capture or Stop Capture button until the session core can implement those actions transactionally. A disabled-looking button that cannot do anything would mislead users.
 - No source-selection editor or live route migration. Full user-managed VM-SHARE routing remains deferred in [issue #10](https://github.com/Roaring1/Hearth/issues/10).
 - No automatic Vesktop share/Go Live action, Discord microphone selector, webcam controls, OBS dependency or monitor input switching.
@@ -53,9 +53,26 @@ The real Wayland portal/Vesktop, monitor-input, lock/DPMS and remote-share matri
 
 ## Current issue order
 
-- [#16](https://github.com/Roaring1/Hearth/issues/16): overview and discovery UI - current implementation slice.
-- [#13](https://github.com/Roaring1/Hearth/issues/13): design/fixture work can proceed; interactive portal tests deferred until safe.
-- [#11](https://github.com/Roaring1/Hearth/issues/11): fake-device and transactional session core - later.
-- [#12](https://github.com/Roaring1/Hearth/issues/12): active controls and clean viewer - later.
+- [#16](https://github.com/Roaring1/Hearth/issues/16): novice-facing overview and in-mixer discovery entry points - implemented.
+- [#13](https://github.com/Roaring1/Hearth/issues/13): upstream research and fixture/documentation work; interactive portal tests deferred until safe.
+- [#11](https://github.com/Roaring1/Hearth/issues/11): transactional session core and resource ownership; production route adapter remains missing.
+- [#12](https://github.com/Roaring1/Hearth/issues/12): Capture Controls preflight and an optional injected session-snapshot UI consumer are implemented. The production app does not yet construct/inject a session manager; transactional Start/Stop and Share Output integration remain blocked on route ownership.
+- [#10](https://github.com/Roaring1/Hearth/issues/10): full user-managed VM-SHARE routing editor/migration remains deferred.
+- [#14](https://github.com/Roaring1/Hearth/issues/14): post-V1 parking lot.
 - [#10](https://github.com/Roaring1/Hearth/issues/10): configurable source editor and one-path migration - explicitly deferred for now.
 - [#14](https://github.com/Roaring1/Hearth/issues/14): post-V1 parking lot.
+
+## Follow-up status - 2026-11-10
+
+The first UI slice is implemented in draft PR #17 (`a19d163`) and hosted CI passed all six jobs. The main mixer has a persistent **SCREEN SHARE** entry and the Screen Share strip has a clear **SET UP** action; both open the same lazy overview. A separate desktop shortcut adds a third, familiar entry point without requiring a terminal or CLI.
+The separate **Use Capture Card** desktop launcher now opens the independent **Hearth - Capture Controls** window. It uses the existing control socket or the single-instance `Gio.Application` command-line route. Capture Controls runs one bounded V4L2 inventory check when opened and another only when Refresh is selected; there is no watcher, polling, or background service. It shows verified USB video inputs and enumerated modes, plus the saved Vesktop audio selection as saved intent. It does not query PipeWire, open video frames, or change audio routes. Start/Stop are deliberately absent until the production audio-route owner and cleanup path exist. The mixer SCREEN SHARE entry and strip SET UP action still open this same lazy overview.
+The Screen Share strip's **SET UP** action carries a small hand-authored pop-out glyph, and its tooltip/accessibility name explicitly identify that it opens a separate window. The persistent **SCREEN SHARE** entry remains visible when the strip is collapsed.
+
+The no-card session-core work is in draft PR #18. It now has fixture-backed device/route resolution, transactional session ownership, an owned mpv Share Output process with first-frame readiness, timestamp-stall monitoring, private frame-health metadata, a lazy logind inhibitor adapter and structured mpv input-open errors. The mpv child is the V4L2 FD owner; no second Hearth-side device FD is opened. Because mpv IPC may return only `loading failed`, a mode-0600 log lives in the private session runtime directory and is read only on failure; it is removed on Stop. A synthetic `/dev/video999` attempt confirmed real mpv's missing-device error maps to `device_unavailable`. These are testable software contracts, not proof of GUV302G hardware behavior.
+
+The eventual two-window contract remains unchanged:
+
+- **Capture Controls** is a separate movable Hearth window, never part of the shared picture. Its first read-only slice is implemented: one-shot USB video inventory, discrete driver modes, the saved Vesktop audio selection as saved intent, and explicit Refresh. The **Use Capture Card** desktop shortcut opens it through the single-instance path. The in-mixer SCREEN SHARE and SET UP entry points continue to open the novice overview. Session Start/Stop, audio mode, mute and cleanup feedback remain unavailable until their backing adapters and real lifecycle path exist.
+- **Hearth - Share Output** is a clean fullscreen video-only window. It has no controls, menus, OSD, branding or status text. A plain **Video stopped updating** card is reserved for the confirmed timestamp-stall path; mostly-black or unchanged pixel observations are advisory and never prove a lost HDMI signal.
+
+There is still no production Start/Stop path, no real CaptureAudioAdapter or route mutation, and no production CaptureSessionManager injected into Controls. The Controls widget can consume injected snapshots and display typed failures/stall state, but the running app does not yet supply them. No active GUV302G or live Wayland/Vesktop portal test has been performed. The Share Output window itself has the timestamp-stall overlay. Do not add inert controls. Full user-managed VM-SHARE editing/migration remains deferred in #10, and the interactive KDE/Vesktop matrix remains deferred in #13 until a safe test window is explicitly arranged.

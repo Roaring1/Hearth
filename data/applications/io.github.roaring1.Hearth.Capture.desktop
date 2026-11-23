@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.5
+Type=Application
+Name=Use Capture Card
+GenericName=Screen Share Setup
+Comment=Check USB video inputs in Hearth Capture Controls
+TryExec=hearth
+Exec=hearth --capture-controls
+Icon=io.github.roaring1.Hearth
+Terminal=false
+Categories=AudioVideo;Audio;
+Keywords=capture;screen share;Vesktop;video;
+StartupNotify=true
+StartupWMClass=io.github.roaring1.Hearth
+SingleMainWindow=true
