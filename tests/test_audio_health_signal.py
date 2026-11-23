@@ -494,3 +494,46 @@ def test_impulse_event_matching_refuses_unstable_or_sparse_lag() -> None:
     assert result["matched_count"] is None
     assert result["raw_unmatched_count"] is None
     assert result["processed_unmatched_count"] is None
+
+
+def test_event_time_localization_matches_shared_clicks_and_finds_post_only_events() -> None:
+    from audio_health_signal import (
+        _broadband_impulse_metrics,
+        _match_impulse_event_times,
+    )
+
+    rate = 48_000
+    rng = np.random.default_rng(91)
+    raw = rng.normal(0.0, 0.00002, 8 * rate)
+    impulse_samples = int(rate * 0.0008)
+    envelope = np.exp(-np.arange(impulse_samples) / (rate * 0.00025))
+    impulse = 0.15 * envelope * rng.normal(size=impulse_samples)
+    for second in (1, 3, 5, 7):
+        start = second * rate + rate // 3
+        raw[start : start + impulse_samples] += impulse
+
+    known_lag = 600
+    processed = np.zeros_like(raw)
+    processed[known_lag:] = raw[:-known_lag]
+    extra_click_rng = np.random.default_rng(222)
+    extra_click = 0.12 * extra_click_rng.normal(size=int(rate * 0.001))
+    for second in (2, 6):
+        start = second * rate + rate // 2
+        processed[start : start + extra_click.size] += extra_click
+
+    raw_metrics = _broadband_impulse_metrics(raw, rate)
+    processed_metrics = _broadband_impulse_metrics(processed, rate)
+    matched = _match_impulse_event_times(
+        raw_metrics["candidate_events"],
+        processed_metrics["candidate_events"],
+        alignment_lag_samples=known_lag,
+        alignment_lag_mad_samples=1.0,
+        alignment_lag_observations=8,
+        sample_rate=rate,
+    )
+    assert raw_metrics["candidate_count"] == 4
+    assert processed_metrics["candidate_count"] == 6
+    assert matched["matched_count"] == 4
+    assert matched["raw_unmatched_count"] == 0
+    assert matched["processed_unmatched_count"] == 2
+    assert matched["automatic_action"] == "none"
