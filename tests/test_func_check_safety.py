@@ -672,6 +672,9 @@ def test_output_popover_uses_cached_routes_without_pactl_io(
                 }
             },
             _routes_known=True,
+            _route_health={},
+            _route_health_known=True,
+            _route_health_stale=False,
         ),
         channel=SimpleNamespace(sink="vm_game", name="Game", group="headset"),
         out_popover=FakePopover(),
@@ -734,6 +737,9 @@ def test_opening_output_popover_during_route_job_defers_refresh_until_completion
         win=SimpleNamespace(
             _routes={"vm_game.monitor": {"vm_chat"}},
             _routes_known=True,
+            _route_health={},
+            _route_health_known=True,
+            _route_health_stale=False,
         ),
         channel=SimpleNamespace(sink="vm_game", name="Game", group="headset"),
         out_popover=FakePopover(),
@@ -771,6 +777,12 @@ def test_output_popover_disables_controls_until_route_state_is_verified(
         def set_wrap(self, *_args) -> None:
             pass
 
+        def set_max_width_chars(self, *_args) -> None:
+            pass
+
+        def set_tooltip_text(self, *_args) -> None:
+            pass
+
     class FakeCheck:
         def __init__(self, *, label: str) -> None:
             self.label = label
@@ -803,7 +815,13 @@ def test_output_popover_disables_controls_until_route_state_is_verified(
     monkeypatch.setattr(mixer.Gtk, "Label", FakeLabel)
     monkeypatch.setattr(mixer.Gtk, "CheckButton", FakeCheck)
     strip = SimpleNamespace(
-        win=SimpleNamespace(_routes={}, _routes_known=False),
+        win=SimpleNamespace(
+            _routes={},
+            _routes_known=False,
+            _route_health={},
+            _route_health_known=False,
+            _route_health_stale=False,
+        ),
         channel=SimpleNamespace(sink="vm_game", name="Game", group="headset"),
         out_popover=FakePopover(),
         _route_busy=False,
@@ -922,6 +940,12 @@ def test_input_popover_disables_carla_and_present_sources_during_route_job(
             pass
 
         def set_wrap(self, *_args) -> None:
+            pass
+
+        def set_max_width_chars(self, *_args) -> None:
+            pass
+
+        def set_tooltip_text(self, *_args) -> None:
             pass
 
     class FakeCheck:

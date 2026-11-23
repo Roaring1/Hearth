@@ -20,8 +20,14 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
-from hearth import services
+from hearth import proc, services
 from hearth.audio import pactl
+from hearth.audio.route_health import (
+    BusRouteHealth,
+    RouteState,
+    parse_link_inventory,
+    plan_route_recovery,
+)
 from hearth.errors import CommandError
 
 log = logging.getLogger(__name__)
@@ -73,6 +79,9 @@ class Snapshot:
     taken_at: float = 0.0
     #: None means the route query failed; an empty dict is a verified empty graph.
     routes: dict[str, set[str]] | None = None
+    #: Actual four-link PipeWire health for managed VM output routes.
+    #: None means the link inventory could not be verified this tick.
+    route_health: dict[str, dict[str, BusRouteHealth]] | None = None
 
     def volume(self, sink: str, default: int = 0) -> int:
         entry = self.sinks.get(sink)
@@ -211,6 +220,73 @@ def parse_source_states(text: str) -> dict[str, str]:
     return {entry.name: entry.state for entry in pactl.parse_short_list(text)}
 
 
+MANAGED_VM_SOURCES = frozenset({"vm_game.monitor", "vm_chat.monitor", "vm_music.monitor"})
+
+
+def build_route_health(
+    modules: Sequence[pactl.Module],
+    link_listing: str,
+    available_sinks: set[str] | frozenset[str],
+) -> dict[str, dict[str, BusRouteHealth]]:
+    """Verify each active managed VM output route from real PipeWire links.
+
+    Multiple module instances, missing endpoint ports, and unidentifiable
+    ownership stay UNKNOWN. The health display is advisory and never repairs
+    routes; the separate route guardian owns bounded recovery.
+    """
+    health: dict[str, dict[str, BusRouteHealth]] = {}
+    managed = [
+        loop for loop in pactl.select_loopbacks(modules) if loop.source in MANAGED_VM_SOURCES
+    ]
+    if not link_listing.strip():
+        for source, sink in sorted({(loop.source, loop.sink) for loop in managed}):
+            bus = source.removesuffix(".monitor")
+            if sink not in available_sinks:
+                result = BusRouteHealth(
+                    bus,
+                    RouteState.UNAVAILABLE,
+                    0,
+                    detail="configured sink is absent",
+                )
+            else:
+                result = BusRouteHealth(
+                    bus,
+                    RouteState.UNKNOWN,
+                    0,
+                    detail="PipeWire returned an empty port/link inventory",
+                )
+            health.setdefault(source, {})[sink] = result
+        return health
+
+    inventory = parse_link_inventory(link_listing)
+    pairs = sorted({(loop.source, loop.sink) for loop in managed})
+    for source, sink in pairs:
+        bus = source.removesuffix(".monitor")
+        owned = pactl.select_loopbacks(
+            modules,
+            source=source,
+            sinks=[sink],
+            exact_source=True,
+        )
+        if len(owned) > 1:
+            result = BusRouteHealth(
+                bus,
+                RouteState.UNKNOWN,
+                0,
+                detail=f"{len(owned)} matching loopback modules; ownership is ambiguous",
+            )
+        else:
+            result = plan_route_recovery(
+                bus,
+                sink,
+                inventory,
+                sink_present=sink in available_sinks,
+                module_exists=bool(owned),
+            ).health
+        health.setdefault(source, {})[sink] = result
+    return health
+
+
 def collect(units: Sequence[str]) -> Snapshot:
     """Take one snapshot of the audio graph and the service stack.
 
@@ -231,18 +307,26 @@ def collect(units: Sequence[str]) -> Snapshot:
     )
     sources = parse_source_states(pactl.raw_checked("list", "short", "sources"))
     routes: dict[str, set[str]] | None
+    route_health: dict[str, dict[str, BusRouteHealth]] | None
     try:
-        # The module list is optional route metadata, so don't let a
-        # degraded Pulse compatibility server hold up otherwise valid mixer
-        # snapshots for the full interactive route-operation timeout.
+        # Optional route metadata is bounded so a slow compatibility server
+        # does not hold up otherwise valid mixer snapshots.
         modules = pactl.modules(strict=True, timeout=0.75)
     except CommandError as exc:
         log.warning("collector route query failed; retaining last known routes: %s", exc)
         routes = None
+        route_health = None
     else:
         routes = {}
         for loop in pactl.select_loopbacks(modules):
             routes.setdefault(loop.source, set()).add(loop.sink)
+        try:
+            link_listing = proc.run(["pw-link", "-iol"], timeout=0.75).stdout
+        except CommandError as exc:
+            log.warning("collector PipeWire link query failed; route health unknown: %s", exc)
+            route_health = None
+        else:
+            route_health = build_route_health(modules, link_listing, set(sinks))
 
     return Snapshot(
         sinks=sinks,
@@ -250,6 +334,7 @@ def collect(units: Sequence[str]) -> Snapshot:
         units=services.states(units),
         sources=sources,
         routes=routes,
+        route_health=route_health,
         server_version=pactl.server_version(),
         default_sink=pactl.default_sink(),
         taken_at=time.time(),

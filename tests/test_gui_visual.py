@@ -26,6 +26,7 @@ def test_production_windows_render_and_capture(
     from gi.repository import Gio, GLib, Gtk
 
     from hearth import legacy_core
+    from hearth.audio.route_health import BusRouteHealth, RouteState
     from hearth.ui.gtk4 import app as app_mod
     from hearth.ui.gtk4 import capture_controls as capture_controls_mod
     from hearth.ui.gtk4 import remap as remap_mod
@@ -591,6 +592,53 @@ def test_production_windows_render_and_capture(
         "vm_game.monitor": {"alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game"},
         "vm_chat.monitor": {"alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"},
     }
+    window._route_health_known = True
+    window._route_health_stale = False
+    window._route_health = {
+        "vm_game.monitor": {
+            app_mod.ASTRO_CHAT_SINK: BusRouteHealth("vm_game", RouteState.HEALTHY, 4)
+        }
+    }
+    game_strip = window.strips["vm_game"]
+    game_strip._fill_outputs()
+    popover = game_strip.out_popover.get_child()
+    popover_texts = []
+    child = popover.get_first_child()
+    while child is not None:
+        if isinstance(child, Gtk.Label):
+            popover_texts.append(child.get_text())
+        child = child.get_next_sibling()
+    assert "Astro Chat: healthy (4/4 expected links)" in popover_texts
+    assert game_strip._out_checks[app_mod.ASTRO_CHAT_SINK].get_active() is False
+
+    # A query failure changes only the health hint, not the module-backed
+    # checkbox state or its ability to represent the last verified route.
+    window._route_health_stale = True
+    game_strip._fill_outputs()
+    popover = game_strip.out_popover.get_child()
+    popover_texts = []
+    child = popover.get_first_child()
+    while child is not None:
+        if isinstance(child, Gtk.Label):
+            popover_texts.append(child.get_text())
+        child = child.get_next_sibling()
+    assert "Astro Chat link verification unavailable" in popover_texts
+    assert game_strip._out_checks[app_mod.ASTRO_CHAT_SINK].get_active() is False
+
+    window._route_health_stale = False
+    window._route_health["vm_game.monitor"][app_mod.ASTRO_CHAT_SINK] = BusRouteHealth(
+        "vm_game", RouteState.DEGRADED, 3, detail="one link missing"
+    )
+    game_strip._fill_outputs()
+    popover = game_strip.out_popover.get_child()
+    popover_texts = []
+    child = popover.get_first_child()
+    while child is not None:
+        if isinstance(child, Gtk.Label):
+            popover_texts.append(child.get_text())
+        child = child.get_next_sibling()
+    assert "Astro Chat: stereo route degraded (3/4 expected links)" in popover_texts
+
     window._sources_known = True
     window._sources_present = {"sm7b_mono", "astro_mic_48k"}
     window.apply_states()

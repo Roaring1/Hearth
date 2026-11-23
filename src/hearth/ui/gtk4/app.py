@@ -48,6 +48,7 @@ from hearth import services as services_mod  # noqa: E402
 from hearth import settings as settings_mod  # noqa: E402
 from hearth import share as share_mod  # noqa: E402
 from hearth import theme as theme_mod  # noqa: E402
+from hearth.audio.route_health import RouteState  # noqa: E402
 from hearth.audio import pactl  # noqa: E402
 
 from hearth.ui.gtk4 import action_icons, icons as icons_mod  # noqa: E402
@@ -148,9 +149,12 @@ MIC_SOURCES: tuple[tuple[str, str], ...] = (
     ("LifeCam", "alsa_input.usb-Microsoft_Microsoft___LifeCam_Studio_TM_-02.mono-fallback"),
 )
 
+ASTRO_CHAT_SINK = "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"
+MANAGED_VM_ROUTE_SOURCES = frozenset({"vm_game.monitor", "vm_chat.monitor", "vm_music.monitor"})
+
 OUTPUTS: tuple[tuple[str, str], ...] = (
     ("A50 game", "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-game"),
-    ("A50 chat", "alsa_output.usb-Astro_Gaming_Astro_A50-00.stereo-chat"),
+    ("A50 chat", ASTRO_CHAT_SINK),
     (
         "Scarlett",
         "alsa_output.usb-Focusrite_Scarlett_Solo_USB_Y7XZGYX15C77AB-00.Direct__Direct__sink",
@@ -879,6 +883,46 @@ class Strip(Gtk.Box):
             hint.add_css_class("outhint")
             hint.set_wrap(True)
             box.append(hint)
+        if source in MANAGED_VM_ROUTE_SOURCES:
+            route_health_known = self.win._route_health_known
+            route_health_stale = self.win._route_health_stale
+            route_health = self.win._route_health.get(source, {}).get(ASTRO_CHAT_SINK)
+            if route_health_stale:
+                route_text = "Astro Chat link verification unavailable"
+                route_detail = (
+                    "The PipeWire link inventory failed; the last verified result is retained."
+                )
+            elif not route_health_known:
+                route_text = "Waiting for Astro Chat link verification…"
+                route_detail = "Waiting for the first complete PipeWire port and link inventory."
+            elif route_health is None:
+                route_text = (
+                    "Astro Chat: not routed"
+                    if ASTRO_CHAT_SINK not in live
+                    else "Astro Chat: awaiting link verification"
+                )
+                route_detail = "No active managed VM-to-Chat loopback was found in this snapshot."
+            elif route_health.state is RouteState.HEALTHY:
+                route_text = f"Astro Chat: healthy ({route_health.verified_links}/4 expected links)"
+                route_detail = route_health.detail
+            elif route_health.state is RouteState.DEGRADED:
+                route_text = (
+                    f"Astro Chat: stereo route degraded "
+                    f"({route_health.verified_links}/4 expected links)"
+                )
+                route_detail = route_health.detail
+            elif route_health.state is RouteState.UNAVAILABLE:
+                route_text = "Astro Chat endpoint unavailable"
+                route_detail = route_health.detail
+            else:
+                route_text = "Astro Chat: route health unknown"
+                route_detail = route_health.detail
+            hint = Gtk.Label(label=route_text, xalign=0.0)
+            hint.add_css_class("outhint")
+            hint.set_wrap(True)
+            hint.set_max_width_chars(34)
+            hint.set_tooltip_text(route_detail)
+            box.append(hint)
         if self.channel.group == "mic":
             hint = Gtk.Label(
                 label="2i2 \u2192 Carla \u2192 this bus. Tick a device to hear it.",
@@ -1235,18 +1279,28 @@ class Strip(Gtk.Box):
         return False
 
     def _refresh_visible_route_popovers(
-        self, *, routes_changed: bool = False, sources_changed: bool = False
+        self,
+        *,
+        routes_changed: bool = False,
+        sources_changed: bool = False,
+        route_health_changed: bool = False,
     ) -> None:
         """Refresh only visible popovers, deferring replacement while busy."""
         dirty = getattr(self, "_route_popover_dirty", False)
         routes_changed = routes_changed or dirty
         sources_changed = sources_changed or dirty
-        if not routes_changed and not sources_changed:
+        if not routes_changed and not sources_changed and not route_health_changed:
             return
         if self._route_busy:
-            self._route_popover_dirty = dirty or routes_changed or sources_changed
+            self._route_popover_dirty = (
+                dirty or routes_changed or sources_changed or route_health_changed
+            )
             return
-        if routes_changed and self.out_popover is not None and self.out_popover.get_visible():
+        if (
+            (routes_changed or route_health_changed)
+            and self.out_popover is not None
+            and self.out_popover.get_visible()
+        ):
             self._fill_outputs()
         if (
             (routes_changed or sources_changed)
@@ -1593,6 +1647,10 @@ class MixerWindow(Gtk.ApplicationWindow):
         #: source -> sinks, refreshed with every background snapshot.
         self._routes: dict[str, set[str]] = {}
         self._routes_known = False
+        #: Actual PipeWire stereo link verification, independent of module state.
+        self._route_health = {}
+        self._route_health_known = False
+        self._route_health_stale = False
         #: Source inventory from the same checked background snapshot.
         self._sources_present: set[str] = set()
         self._sources_known = False
@@ -2013,6 +2071,18 @@ class MixerWindow(Gtk.ApplicationWindow):
         if routes is not None:
             self._routes = routes
             self._routes_known = True
+
+        route_health = getattr(snapshot, "route_health", None)
+        route_health_stale = route_health is None
+        route_health_changed = route_health_stale != self._route_health_stale
+        if route_health is not None:
+            route_health_changed = route_health_changed or (
+                not self._route_health_known or route_health != self._route_health
+            )
+            self._route_health = route_health
+            self._route_health_known = True
+        self._route_health_stale = route_health_stale
+
         sources_present = set(snapshot.sources)
         sources_changed = not self._sources_known or sources_present != self._sources_present
         self._sources_present = sources_present
@@ -2021,11 +2091,12 @@ class MixerWindow(Gtk.ApplicationWindow):
         # Rebuild open routing popovers only when their backing inventory
         # changed. Rebuilding on every poll disrupts clicks; while a mutation
         # is busy the strip defers the redraw until its worker completes.
-        if routes_changed or sources_changed:
+        if routes_changed or sources_changed or route_health_changed:
             for strip in self.strips.values():
                 strip._refresh_visible_route_popovers(
                     routes_changed=routes_changed,
                     sources_changed=sources_changed,
+                    route_health_changed=route_health_changed,
                 )
 
         # The verbose sink snapshot already includes each sink's mute state.
