@@ -1108,6 +1108,9 @@ def capture_sample(seconds: float = 8.0) -> dict:
                 proc.wait()
         selector.close()
 
+    stream_diagnostics.record_unpaired_tail("raw", len(buffers[RAW_SOURCE]))
+    stream_diagnostics.record_unpaired_tail("processed", len(buffers[PROCESSED_SOURCE]))
+
     signal_features: dict | None = None
     if not muted_during_capture and feature_raw_chunks and feature_post_chunks:
         try:
@@ -1198,12 +1201,12 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
     state["scheduled_transport_snapshot"] = transport_baseline
     transport = first.get("transport", {})
     coverage = first.get("capture_coverage", {})
-    if isinstance(coverage, dict):
+    if isinstance(coverage, dict) and isinstance(coverage.get("fraction"), (int, float)):
         LOG.info(
             "PCM capture coverage paired=%s/%s frames fraction=%.3f",
             coverage.get("paired_frames", 0),
             coverage.get("expected_frames", 0),
-            float(coverage.get("fraction", 0.0)),
+            float(coverage["fraction"]),
         )
     stream = first.get("stream_diagnostics", {})
     if isinstance(stream, dict):
@@ -1211,14 +1214,19 @@ def run_sample_cycle(seconds: float, config: dict[str, bool]) -> int:
         processed_stream = stream.get("processed", {})
         repeats = stream.get("identical_adjacent_windows", {})
         LOG.info(
-            "PCM stream diagnostics raw_reads=%s raw_gap_max=%.1fms raw_overflow=%sB "
-            "post_reads=%s post_gap_max=%.1fms post_overflow=%sB repeats=%s",
+            "PCM stream diagnostics raw_reads=%s raw_gap_max=%.1fms raw_gaps=%s "
+            "raw_overflow=%sB raw_tail=%sB post_reads=%s post_gap_max=%.1fms "
+            "post_gaps=%s post_overflow=%sB post_tail=%sB repeats=%s",
             raw_stream.get("read_calls", 0),
             float(raw_stream.get("max_inter_read_gap_ms", 0.0)),
+            raw_stream.get("read_gaps_over_250ms", 0),
             raw_stream.get("buffer_overflow_bytes", 0),
+            raw_stream.get("unpaired_tail_bytes", 0),
             processed_stream.get("read_calls", 0),
             float(processed_stream.get("max_inter_read_gap_ms", 0.0)),
+            processed_stream.get("read_gaps_over_250ms", 0),
             processed_stream.get("buffer_overflow_bytes", 0),
+            processed_stream.get("unpaired_tail_bytes", 0),
             repeats,
         )
     signal_features = first.get("signal_features")

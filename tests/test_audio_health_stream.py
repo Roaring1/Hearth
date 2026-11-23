@@ -85,3 +85,17 @@ def test_summary_reports_pcm_format_and_rejects_invalid_sample_width() -> None:
     assert result["sample_bytes"] == 4
     with pytest.raises(ValueError, match="sample_bytes"):
         monitor.summary(48_000, 0)
+
+
+def test_unpaired_tail_bytes_are_reported_per_tap_without_audio_content() -> None:
+    monitor = StreamReadDiagnostics(("raw", "processed"))
+    monitor.record_unpaired_tail("raw", 4097)
+    monitor.record_unpaired_tail("processed", 2048)
+    result = monitor.summary(48_000, 4)
+    assert result["raw"]["unpaired_tail_bytes"] == 4097
+    assert result["raw"]["unpaired_tail_frames"] == 1024
+    assert result["raw"]["unpaired_tail_partial_sample_bytes"] == 1
+    assert result["processed"]["unpaired_tail_bytes"] == 2048
+    assert result["processed"]["unpaired_tail_frames"] == 512
+    assert result["processed"]["unpaired_tail_partial_sample_bytes"] == 0
+    assert "audio" not in result

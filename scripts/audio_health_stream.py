@@ -22,7 +22,7 @@ class StreamReadDiagnostics:
                 "max_inter_read_gap_ms": 0.0,
                 "read_gaps_over_250ms": 0,
                 "buffer_overflow_bytes": 0,
-                "partial_float_bytes": 0,
+                "unpaired_tail_bytes": 0,
                 "last_read_at": None,
                 "previous_digest": None,
                 "repeat_windows": 0,
@@ -54,6 +54,12 @@ class StreamReadDiagnostics:
         state = self._devices.get(device)
         if state is not None and byte_count > 0:
             state["buffer_overflow_bytes"] += byte_count
+
+    def record_unpaired_tail(self, device: str, byte_count: int) -> None:
+        """Record bytes still unmatched in one tap when a sample ends."""
+        state = self._devices.get(device)
+        if state is not None and byte_count > 0:
+            state["unpaired_tail_bytes"] += byte_count
 
     def record_aligned_window(self, raw_bytes: bytes, processed_bytes: bytes) -> None:
         self._paired_windows += 1
@@ -121,6 +127,9 @@ class StreamReadDiagnostics:
                 "read_gaps_over_250ms": state["read_gaps_over_250ms"],
                 "buffer_overflow_bytes": state["buffer_overflow_bytes"],
                 "buffer_overflow_frames": state["buffer_overflow_bytes"] // sample_bytes,
+                "unpaired_tail_bytes": state["unpaired_tail_bytes"],
+                "unpaired_tail_frames": state["unpaired_tail_bytes"] // sample_bytes,
+                "unpaired_tail_partial_sample_bytes": state["unpaired_tail_bytes"] % sample_bytes,
             }
         result["automatic_action"] = "none"
         return result
