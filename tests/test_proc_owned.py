@@ -31,6 +31,14 @@ def _proc_state(pid: int) -> str | None:
     return raw[end + 2 : end + 3] if end >= 0 else "?"
 
 
+def test_spawn_owned_refuses_non_linux_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(proc, "_is_linux_runtime", lambda: False)
+    with pytest.raises(CommandError, match="owned child processes require Linux"):
+        proc.spawn_owned([sys.executable, "-c", "pass"])
+
+
 def test_spawn_owned_runs_and_stops_synthetic_child() -> None:
     child = proc.spawn_owned([sys.executable, "-c", "import time; time.sleep(30)"])
     assert child.pid > 1
@@ -127,6 +135,16 @@ def test_creator_thread_exit_terminates_child_while_parent_process_stays_alive()
         assert child.wait(timeout=3.0) == -signal.SIGTERM
     finally:
         proc.terminate(child, timeout=0.3)
+
+
+def test_parent_death_signal_refuses_non_linux_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hearth import _capture_exec
+
+    monkeypatch.setattr(_capture_exec, "_is_linux_runtime", lambda: False)
+    with pytest.raises(OSError, match="supported only on Linux"):
+        _capture_exec.install_parent_death_signal(123)
 
 
 def test_exec_wrapper_refuses_to_exec_when_parent_died_before_signal_install(

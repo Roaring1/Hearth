@@ -18,6 +18,11 @@ import sys
 _PR_SET_PDEATHSIG = 1
 
 
+def _is_linux_runtime() -> bool:
+    """Runtime platform guard kept opaque to cross-platform static analysis."""
+    return sys.platform.startswith("linux")
+
+
 def _notify(fd: int, message: bytes) -> None:
     with contextlib.suppress(OSError):
         os.write(fd, message)
@@ -25,7 +30,7 @@ def _notify(fd: int, message: bytes) -> None:
 
 def install_parent_death_signal(expected_parent_pid: int) -> bool:
     """Set SIGTERM on parent-thread death, then detect the pre-prctl race."""
-    if not sys.platform.startswith("linux"):
+    if not _is_linux_runtime():
         raise OSError("parent-death signaling is supported only on Linux")
     libc = ctypes.CDLL(None, use_errno=True)
     prctl = libc.prctl

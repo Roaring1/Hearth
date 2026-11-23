@@ -69,6 +69,11 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 _runner: Runner = subprocess.run
 
 
+def _is_linux_runtime() -> bool:
+    """Return the runtime platform without mypy narrowing this module body."""
+    return sys.platform.startswith("linux")
+
+
 def set_runner(runner: Runner | None) -> None:
     """Replace the process runner (tests only). ``None`` restores the default."""
     global _runner
@@ -380,7 +385,7 @@ def spawn_owned(
     the child's entire lifetime. Its death therefore sends SIGTERM to the
     child, even while the Hearth process remains alive.
     """
-    if not sys.platform.startswith("linux"):
+    if not _is_linux_runtime():
         raise CommandError(argv, stderr="owned child processes require Linux")
     parts = _argv(argv)
     if startup_timeout <= 0:

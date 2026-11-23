@@ -45,6 +45,26 @@ class ViewerReadinessTimeout(HearthError):
     """mpv did not produce a decoded video frame before the deadline."""
 
 
+def _current_uid() -> int | None:
+    """Return the POSIX UID, or None where the platform has no UID concept."""
+    getter = getattr(os, "getuid", None)
+    return int(getter()) if callable(getter) else None
+
+
+def _unix_socket_family() -> int | None:
+    """Return AF_UNIX where available, without assuming it exists on Windows."""
+    family = getattr(socket, "AF_UNIX", None)
+    return family if isinstance(family, int) else None
+
+
+def _require_unix_socket_family() -> int:
+    """Return AF_UNIX or fail closed on platforms without Unix sockets."""
+    family = _unix_socket_family()
+    if family is None:
+        raise ViewerIPCError("Unix-domain sockets are not supported on this platform")
+    return family
+
+
 class ViewerExitedBeforeFirstFrame(HearthError):
     """The owned mpv process exited before a decoded frame was available."""
 
@@ -129,9 +149,11 @@ def create_private_mpv_log_file(runtime_directory: Path) -> Path:
         metadata = directory.stat()
     except OSError as exc:
         raise ViewerIPCError(f"Viewer runtime directory cannot be inspected: {exc}") from exc
+    owner_uid = _current_uid()
     if (
-        not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.getuid()
+        owner_uid is None
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != owner_uid
         or metadata.st_mode & 0o077
     ):
         raise ViewerIPCError("Viewer runtime directory is not private and owner-controlled")
@@ -174,13 +196,17 @@ def cleanup_stale_capture_ipc_directories(
     if now is not None and not math.isfinite(now):
         raise ValueError("now must be a finite timestamp")
     root = Path(runtime_root)
+    owner_uid = _current_uid()
+    socket_family = _unix_socket_family()
+    if owner_uid is None or socket_family is None:
+        return ()
     try:
         root_info = root.lstat()
     except OSError:
         return ()
     if (
         not stat.S_ISDIR(root_info.st_mode)
-        or root_info.st_uid != os.getuid()
+        or root_info.st_uid != owner_uid
         or root_info.st_mode & 0o077
     ):
         return ()
@@ -207,7 +233,7 @@ def cleanup_stale_capture_ipc_directories(
             continue
         if (
             not stat.S_ISDIR(info.st_mode)
-            or info.st_uid != os.getuid()
+            or info.st_uid != owner_uid
             or info.st_mode & 0o077
             or current_time - info.st_mtime < min_age_s
         ):
@@ -231,7 +257,7 @@ def cleanup_stale_capture_ipc_directories(
             except OSError:
                 entries_are_private = False
                 break
-            if entry_info.st_uid != os.getuid():
+            if entry_info.st_uid != owner_uid:
                 entries_are_private = False
                 break
             if entry.name == "mpv.sock":
@@ -255,7 +281,7 @@ def cleanup_stale_capture_ipc_directories(
             continue
 
         if socket_info is not None:
-            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            probe = socket.socket(socket_family, socket.SOCK_STREAM)
             probe.settimeout(0.1)
             try:
                 probe.connect(str(ipc_socket))
@@ -277,6 +303,10 @@ def cleanup_stale_capture_ipc_directories(
 
 def create_private_ipc_directory() -> Path:
     """Create a session-private IPC directory under the owner's runtime dir."""
+    _require_unix_socket_family()
+    owner_uid = _current_uid()
+    if owner_uid is None:
+        raise ViewerIPCError("POSIX user ownership cannot be verified on this platform")
     runtime = os.environ.get("XDG_RUNTIME_DIR", "").strip()
     if not runtime:
         raise ViewerIPCError("XDG_RUNTIME_DIR is unavailable; refusing an insecure IPC fallback")
@@ -287,7 +317,7 @@ def create_private_ipc_directory() -> Path:
         raise ViewerIPCError(f"XDG_RUNTIME_DIR cannot be inspected: {exc}") from exc
     if not stat.S_ISDIR(metadata.st_mode):
         raise ViewerIPCError("XDG_RUNTIME_DIR is not a directory")
-    if metadata.st_uid != os.getuid():
+    if metadata.st_uid != owner_uid:
         raise ViewerIPCError("XDG_RUNTIME_DIR is not owned by the current user")
     if metadata.st_mode & 0o077:
         raise ViewerIPCError("XDG_RUNTIME_DIR permissions are not private")
@@ -377,7 +407,7 @@ class MpvViewerProcess:
         if len(socket_path) >= 100:
             raise ViewerIPCError("mpv IPC socket path is too long for a Unix-domain socket")
 
-        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection = socket.socket(_require_unix_socket_family(), socket.SOCK_STREAM)
         try:
             connection.connect(str(self.ipc_socket))
         except OSError as exc:
@@ -542,7 +572,7 @@ class MpvViewerProcess:
                     "Timed out waiting for mpv's first decoded video frame"
                 )
 
-            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection = socket.socket(_require_unix_socket_family(), socket.SOCK_STREAM)
             connection.settimeout(min(0.2, remaining))
             try:
                 connection.connect(str(self.ipc_socket))
@@ -559,7 +589,7 @@ class MpvViewerProcess:
                     picture = self._get_property(
                         connection, channel, "video-frame-info/picture-type", 1, deadline
                     )
-                    if picture not in {"I", "P", "B"}:
+                    if not isinstance(picture, str) or picture not in {"I", "P", "B"}:
                         continue
                     parameters = self._get_property(
                         connection, channel, "video-params", 2, deadline

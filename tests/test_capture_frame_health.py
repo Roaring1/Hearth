@@ -82,6 +82,21 @@ def test_frame_health_parser_rejects_invalid_or_out_of_range_payloads(payload: o
     assert parse_frame_health_payload(payload) is None
 
 
+def test_script_refuses_runtime_directory_when_posix_uid_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from hearth import capture_frame_health
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    runtime.chmod(0o700)
+    monkeypatch.setattr(capture_frame_health.os, "getuid", None, raising=False)
+
+    with pytest.raises(FrameHealthError, match="private and owner-controlled"):
+        write_frame_health_script(runtime)
+    assert not (runtime / "frame-health.lua").exists()
+
+
 def test_script_is_created_private_and_contains_only_the_probe(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime"
     runtime.mkdir(mode=0o700)

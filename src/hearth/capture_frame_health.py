@@ -18,6 +18,13 @@ from pathlib import Path
 
 from hearth.errors import HearthError
 
+
+def _current_uid() -> int | None:
+    """Return the POSIX UID, or None where the platform has no UID concept."""
+    getter = getattr(os, "getuid", None)
+    return int(getter()) if callable(getter) else None
+
+
 FRAME_HEALTH_LUA = """-- Hearth's session-scoped, event-driven frame-content probe.
 local SAMPLE_INTERVAL = 2.0
 local BLACK_AFTER = 6.0
@@ -268,9 +275,11 @@ def write_frame_health_script(runtime_directory: Path) -> Path:
         metadata = directory.stat()
     except OSError as exc:
         raise FrameHealthError(f"viewer runtime directory cannot be inspected: {exc}") from exc
+    owner_uid = _current_uid()
     if (
-        not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.getuid()
+        owner_uid is None
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != owner_uid
         or metadata.st_mode & 0o077
     ):
         raise FrameHealthError("viewer runtime directory is not private and owner-controlled")

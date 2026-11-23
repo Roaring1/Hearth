@@ -218,6 +218,31 @@ def test_stale_capture_directory_sweep_fails_closed_for_untrusted_runtime_root(
     assert stale.is_dir()
 
 
+def test_capture_ipc_helpers_fail_closed_without_posix_identity_or_unix_sockets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from hearth import capture_mpv_ipc
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    runtime.chmod(0o700)
+    monkeypatch.setattr(capture_mpv_ipc.os, "getuid", None, raising=False)
+
+    assert capture_mpv_ipc._current_uid() is None
+    assert cleanup_stale_capture_ipc_directories(runtime) == ()
+    with pytest.raises(ViewerIPCError, match="private and owner-controlled"):
+        create_private_mpv_log_file(runtime)
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    monkeypatch.delattr(capture_mpv_ipc.socket, "AF_UNIX", raising=False)
+
+    assert capture_mpv_ipc._unix_socket_family() is None
+    with pytest.raises(ViewerIPCError, match="Unix-domain sockets"):
+        create_private_ipc_directory()
+    with pytest.raises(ViewerIPCError, match="Unix-domain sockets"):
+        capture_mpv_ipc._require_unix_socket_family()
+
+
 def test_private_ipc_directory_requires_current_users_private_runtime_dir(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
