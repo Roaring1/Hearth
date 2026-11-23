@@ -228,3 +228,7 @@ The B1 health capture gate now also requires `B1_ROUTE` to be one of `sm7b`, `as
 
 
 Read-only live check on 2026-11-22 found `B1_ROUTE="none"`, `B2_ROUTE="astro"`, with B1 and Carla-to-B1 flags enabled. Recent deployed timer samples were `NO_SAMPLE` with zero active windows and processed p50/p90 exactly 0, indicating the B1 chain had no signal. A shadow-only `capture_sample(8)` returned `MUTED` after the capture gate refused the route/mute state. `pactl` queries could not connect at that time, so mute state itself was not confirmed. The route-none capture gate fix is not installed live; it is on the isolated feature branch only.
+
+### Raw reference alignment restriction
+
+The preceding route-gate wording is superseded by a stricter rule: this watchdog's raw reference is hard-wired to `sm7b_mono`, so it now only accepts `B1_ROUTE=sm7b`. Astro-only and mixed (`both`) routes fail closed as well. Comparing SM7B raw against an Astro-only or mixed processed B1 output would be invalid and could cause a false diagnosis/recovery. Dynamic raw tap selection and mix-aware reference comparison remain future work.
