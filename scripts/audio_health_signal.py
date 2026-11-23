@@ -13,6 +13,71 @@ from typing import Any
 import numpy as np
 
 _EPS = 1e-30
+
+# Four 12-tap phase filters from ITU-R BS.1770-5 Annex 2, in phase order.
+# The standard's optional 12.04 dB attenuation is omitted because arithmetic
+# is floating-point. The sample peak is also included in the max-hold.
+_BS1770_ANNEX2_PHASES = np.asarray(
+    [
+        [
+            0.0017089843750,
+            0.0109863281250,
+            -0.0196533203125,
+            0.0332031250000,
+            -0.0594482421875,
+            0.1373291015625,
+            0.9721679687500,
+            -0.1022949218750,
+            0.0476074218750,
+            -0.0266113281250,
+            0.0148925781250,
+            -0.0083007812500,
+        ],
+        [
+            -0.0291748046875,
+            0.0292968750000,
+            -0.0517578125000,
+            0.0891113281250,
+            -0.1665039062500,
+            0.4650878906250,
+            0.7797851562500,
+            -0.2003173828125,
+            0.1015625000000,
+            -0.0582275390625,
+            0.0330810546875,
+            -0.0189208984375,
+        ],
+        [
+            -0.0189208984375,
+            0.0330810546875,
+            -0.0582275390625,
+            0.1015625000000,
+            -0.2003173828125,
+            0.7797851562500,
+            0.4650878906250,
+            -0.1665039062500,
+            0.0891113281250,
+            -0.0517578125000,
+            0.0292968750000,
+            -0.0291748046875,
+        ],
+        [
+            -0.0083007812500,
+            0.0148925781250,
+            -0.0266113281250,
+            0.0476074218750,
+            -0.1022949218750,
+            0.9721679687500,
+            0.1373291015625,
+            -0.0594482421875,
+            0.0332031250000,
+            -0.0196533203125,
+            0.0109863281250,
+            0.0017089843750,
+        ],
+    ],
+    dtype=np.float64,
+)
 _TONE_MIN_HZ = 20.0
 _TONE_MAX_HZ = 1000.0
 _TONE_MIN_PROMINENCE_DB = 15.0
@@ -239,6 +304,62 @@ def _low_energy_metrics(samples: np.ndarray, sample_rate: int) -> dict[str, Any]
     }
 
 
+def _true_peak_metrics(
+    samples: Sequence[float] | np.ndarray,
+    sample_rate: int,
+    *,
+    oversample_factor: int = 4,
+    block_frames: int = 8192,
+) -> dict[str, Any]:
+    """Estimate true peak using the Annex 2 48-tap, four-phase FIR."""
+    values = np.asarray(samples, dtype=np.float64).reshape(-1)
+    finite = np.isfinite(values)
+    values = np.where(finite, values, 0.0)
+    if values.size == 0 or sample_rate < 8000:
+        return {
+            "sample_peak_dbfs": None,
+            "true_peak_dbtp": None,
+            "intersample_increase_db": None,
+            "oversample_factor": oversample_factor,
+            "over_full_scale": None,
+            "nonfinite_samples_excluded": int(values.size - np.count_nonzero(finite)),
+        }
+    if oversample_factor != 4:
+        raise ValueError("true-peak measurement currently requires 4x oversampling")
+    if block_frames < 256:
+        raise ValueError("true-peak processing block size is too small")
+
+    sample_peak = float(np.max(np.abs(values)))
+    # The 48-tap linear-phase filter uses 12 original samples per phase.
+    # Six samples of edge extension allow every complete 12-sample window to
+    # be evaluated. Interpolated results at reflected boundaries are excluded;
+    # exact stored sample peaks remain included across the full input.
+    padded = np.pad(values, (6, 6), mode="reflect")
+    windows = np.lib.stride_tricks.sliding_window_view(padded, 12)
+    first_window = 6
+    stop_window = max(first_window, values.size - 5)
+    true_peak = sample_peak
+    for start in range(first_window, stop_window, block_frames):
+        end = min(stop_window, start + block_frames)
+        block = windows[start:end]
+        for phase_coefficients in _BS1770_ANNEX2_PHASES:
+            reconstructed = block @ phase_coefficients
+            if reconstructed.size:
+                true_peak = max(true_peak, float(np.max(np.abs(reconstructed))))
+
+    sample_dbfs = 20.0 * math.log10(max(sample_peak, _EPS))
+    true_peak_dbtp = 20.0 * math.log10(max(true_peak, _EPS))
+    return {
+        "sample_peak_dbfs": round(sample_dbfs, 3),
+        "true_peak_dbtp": round(true_peak_dbtp, 3),
+        "intersample_increase_db": round(true_peak_dbtp - sample_dbfs, 3),
+        "oversample_factor": oversample_factor,
+        "over_full_scale": bool(true_peak >= 1.0),
+        "nonfinite_samples_excluded": int(values.size - np.count_nonzero(finite)),
+        "method": "ITU-R_BS.1770-5_Annex2_48-tap_4-phase_FIR",
+    }
+
+
 def _highpass_transient_metrics(samples: np.ndarray, sample_rate: int) -> dict[str, Any]:
     """Describe 5kHz+ impulsiveness without treating speech peaks as faults."""
     if samples.size < sample_rate // 2:
@@ -409,23 +530,30 @@ def _broadband_impulse_metrics(
         }
 
     frame_count = 1 + (samples.size - frame_size) // hop
-    starts = np.arange(frame_count) * hop
-    frames = np.vstack([samples[start : start + frame_size] for start in starts])
+    frame_view = np.lib.stride_tricks.sliding_window_view(samples, frame_size)[::hop]
     nfft = 1 << (frame_size - 1).bit_length()
     window = np.hanning(frame_size).astype(np.float64)
-    spectra = np.fft.rfft(frames * window[None, :], n=nfft, axis=1)
-    power = np.abs(spectra) ** 2
     frequencies = np.fft.rfftfreq(nfft, 1.0 / sample_rate)
 
     bands = ((2500.0, 5000.0), (5000.0, 10000.0), (10000.0, 20000.0))
-    band_powers = np.vstack(
-        [
-            np.sum(
-                power[:, (frequencies >= low) & (frequencies < min(high, sample_rate / 2))], axis=1
+    masks = [
+        (frequencies >= low) & (frequencies < min(high, sample_rate / 2)) for low, high in bands
+    ]
+    # Work in bounded batches. A whole-sample frames x FFT matrix needlessly
+    # multiplies temporary memory under the healthd service's 96 MiB limit.
+    band_powers = np.empty((frame_count, len(bands)), dtype=np.float64)
+    fft_batch_frames = 256
+    for batch_start in range(0, frame_count, fft_batch_frames):
+        batch_end = min(frame_count, batch_start + fft_batch_frames)
+        frames = frame_view[batch_start:batch_end]
+        spectra = np.fft.rfft(frames * window[None, :], n=nfft, axis=1)
+        power = np.abs(spectra) ** 2
+        for band_index, mask in enumerate(masks):
+            band_powers[batch_start:batch_end, band_index] = np.sum(
+                power[:, mask],
+                axis=1,
             )
-            for low, high in bands
-        ]
-    ).T
+        del spectra, power
     if np.any(~np.isfinite(band_powers)):
         return {
             "frame_ms": round(1000.0 * frame_size / sample_rate, 3),
@@ -605,6 +733,7 @@ def _channel_summary(samples: Sequence[float] | np.ndarray, sample_rate: int) ->
             "spectral_flatness_2k_12k": None,
             "low_energy": _low_energy_metrics(values, sample_rate),
             "transients": _highpass_transient_metrics(values, sample_rate),
+            "true_peak": _true_peak_metrics(values, sample_rate),
             "broadband_impulses": _broadband_impulse_metrics(values, sample_rate),
             "persistent_tones": [],
         }
@@ -648,6 +777,7 @@ def _channel_summary(samples: Sequence[float] | np.ndarray, sample_rate: int) ->
         "spectral_flatness_2k_12k": round(flatness, 4) if flatness is not None else None,
         "low_energy": _low_energy_metrics(values, sample_rate),
         "transients": _highpass_transient_metrics(values, sample_rate),
+        "true_peak": _true_peak_metrics(values, sample_rate),
         "broadband_impulses": _broadband_impulse_metrics(values, sample_rate),
         "persistent_tones": _persistent_tones(values, sample_rate),
     }
@@ -768,6 +898,15 @@ def analyze_signal_features(
             },
             "high_frequency_share_delta": round(
                 processed["high_frequency_share"] - raw["high_frequency_share"], 6
+            ),
+            "true_peak_delta_dbtp": (
+                round(
+                    processed["true_peak"]["true_peak_dbtp"] - raw["true_peak"]["true_peak_dbtp"],
+                    3,
+                )
+                if isinstance(raw["true_peak"].get("true_peak_dbtp"), (int, float))
+                and isinstance(processed["true_peak"].get("true_peak_dbtp"), (int, float))
+                else None
             ),
             "hf_rms_delta_db": delta("hf_rms_dbfs"),
             "hf_peak_delta_db": delta("hf_peak_dbfs"),
