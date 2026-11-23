@@ -18,6 +18,12 @@ _TONE_MAX_HZ = 1000.0
 _TONE_MIN_PROMINENCE_DB = 15.0
 _TONE_FRAME_PERSISTENCE = 0.80
 _TONE_MAX_LINES = 8
+# Exploratory heuristics for 8-second samples; never authorize automatic repair.
+_IMPULSE_MIN_HF_RMS_DBFS = -55.0
+_IMPULSE_MIN_HF_PEAK_DBFS = -35.0
+_IMPULSE_MIN_CREST_DB = 27.0
+_IMPULSE_MIN_EXCESS_KURTOSIS = 80.0
+_IMPULSE_MIN_HF_SHARE = 0.005
 _BANDS = (
     ("20_80_hz", 20.0, 80.0),
     ("80_250_hz", 80.0, 250.0),
@@ -302,6 +308,120 @@ def _highpass_transient_metrics(samples: np.ndarray, sample_rate: int) -> dict[s
     }
 
 
+def _broadband_impulse_metrics(
+    samples: np.ndarray,
+    sample_rate: int,
+) -> dict[str, Any]:
+    """Count short multi-band bursts against a local robust baseline.
+
+    This is a diagnostic candidate feature, not a perceptual click classifier.
+    """
+    frame_size = max(1, round(sample_rate * 0.005))
+    hop = max(1, frame_size // 2)
+    if samples.size < frame_size * 4:
+        return {
+            "frame_ms": round(1000.0 * frame_size / sample_rate, 3),
+            "hop_ms": round(1000.0 * hop / sample_rate, 3),
+            "candidate_count": 0,
+            "candidate_events": [],
+            "analysis_frames": 0,
+        }
+
+    frame_count = 1 + (samples.size - frame_size) // hop
+    starts = np.arange(frame_count) * hop
+    frames = np.vstack([samples[start : start + frame_size] for start in starts])
+    nfft = 1 << (frame_size - 1).bit_length()
+    window = np.hanning(frame_size).astype(np.float64)
+    spectra = np.fft.rfft(frames * window[None, :], n=nfft, axis=1)
+    power = np.abs(spectra) ** 2
+    frequencies = np.fft.rfftfreq(nfft, 1.0 / sample_rate)
+
+    bands = ((2500.0, 5000.0), (5000.0, 10000.0), (10000.0, 20000.0))
+    band_powers = np.vstack(
+        [
+            np.sum(
+                power[:, (frequencies >= low) & (frequencies < min(high, sample_rate / 2))], axis=1
+            )
+            for low, high in bands
+        ]
+    ).T
+    if np.any(~np.isfinite(band_powers)):
+        return {
+            "frame_ms": round(1000.0 * frame_size / sample_rate, 3),
+            "hop_ms": round(1000.0 * hop / sample_rate, 3),
+            "candidate_count": 0,
+            "candidate_events": [],
+            "analysis_frames": int(frame_count),
+        }
+
+    # Exclude the center +/-10ms so the event cannot inflate its own baseline.
+    radius = max(4, round(0.100 * sample_rate / hop))
+    exclusion = max(1, round(0.010 * sample_rate / hop))
+    local_medians = np.zeros_like(band_powers)
+    local_mads = np.zeros_like(band_powers)
+    for index in range(frame_count):
+        left = max(0, index - radius)
+        right = min(frame_count, index + radius + 1)
+        context = np.concatenate(
+            (
+                band_powers[left : max(left, index - exclusion)],
+                band_powers[min(right, index + exclusion + 1) : right],
+            ),
+            axis=0,
+        )
+        if context.shape[0] < 4:
+            context = band_powers[left:right]
+        median = np.median(context, axis=0) if context.size else np.zeros(3)
+        mad = np.median(np.abs(context - median), axis=0) if context.size else np.zeros(3)
+        local_medians[index] = median
+        local_mads[index] = mad
+
+    thresholds = np.maximum.reduce(
+        (
+            local_medians * 6.0,
+            local_medians + 10.0 * 1.4826 * local_mads,
+            np.full_like(local_medians, 1e-9),
+        )
+    )
+    elevated = band_powers > thresholds
+    active = np.count_nonzero(elevated, axis=1) >= 2
+    # Fill one-frame gaps caused by overlapping windows, not wider gaps.
+    if active.size >= 3:
+        active[1:-1] |= active[:-2] & active[2:]
+
+    event_starts = np.flatnonzero(active & ~np.concatenate(([False], active[:-1])))
+    event_ends = np.flatnonzero(active & ~np.concatenate((active[1:], [False]))) + 1
+    events: list[dict[str, Any]] = []
+    for first, end in zip(event_starts, event_ends, strict=True):
+        frame_count_event = int(end - first)
+        duration_ms = (
+            frame_count_event - 1
+        ) * hop * 1000.0 / sample_rate + frame_size * 1000.0 / sample_rate
+        # Long broadband spans are more consistent with fricatives/noise than clicks.
+        if duration_ms > 15.0:
+            continue
+        ratios = band_powers[first:end] / np.maximum(thresholds[first:end], 1e-12)
+        events.append(
+            {
+                "start_seconds": round(float(first * hop / sample_rate), 4),
+                "duration_ms": round(duration_ms, 3),
+                "max_band_threshold_ratio": round(float(np.max(ratios)), 2),
+                "bands_elevated": int(np.max(np.count_nonzero(elevated[first:end], axis=1))),
+            }
+        )
+
+    return {
+        "frame_ms": round(1000.0 * frame_size / sample_rate, 3),
+        "hop_ms": round(1000.0 * hop / sample_rate, 3),
+        "candidate_count": len(events),
+        "candidate_rate_per_second": round(len(events) / (samples.size / sample_rate), 3),
+        "candidate_events": events[:24],
+        "analysis_frames": int(frame_count),
+        "candidate_truncated": len(events) > 24,
+        "threshold_description": "local median/MAD; >=2 of 3 high-frequency bands; <=15ms",
+    }
+
+
 def _run_summary(mask: np.ndarray, minimum_length: int) -> tuple[int, int]:
     """Return (qualifying run count, maximum run length) for a boolean mask."""
     if mask.size == 0:
@@ -375,6 +495,7 @@ def _channel_summary(samples: Sequence[float] | np.ndarray, sample_rate: int) ->
             "spectral_flatness_2k_12k": None,
             "low_energy": _low_energy_metrics(values, sample_rate),
             "transients": _highpass_transient_metrics(values, sample_rate),
+            "broadband_impulses": _broadband_impulse_metrics(values, sample_rate),
             "persistent_tones": [],
         }
 
@@ -417,6 +538,7 @@ def _channel_summary(samples: Sequence[float] | np.ndarray, sample_rate: int) ->
         "spectral_flatness_2k_12k": round(flatness, 4) if flatness is not None else None,
         "low_energy": _low_energy_metrics(values, sample_rate),
         "transients": _highpass_transient_metrics(values, sample_rate),
+        "broadband_impulses": _broadband_impulse_metrics(values, sample_rate),
         "persistent_tones": _persistent_tones(values, sample_rate),
     }
 
@@ -435,6 +557,56 @@ def _match_tones(raw: list[dict[str, Any]], processed: list[dict[str, Any]]) -> 
     return "no_persistent_line_detected"
 
 
+def _impulse_candidate(
+    transients: dict[str, Any],
+    high_frequency_share: float,
+) -> dict[str, Any]:
+    """A descriptive, multi-cue impulse candidate; never an action trigger."""
+    values = {
+        "hf_rms_dbfs": transients.get("hf_rms_dbfs"),
+        "hf_peak_dbfs": transients.get("hf_peak_dbfs"),
+        "hf_crest_db": transients.get("hf_crest_db"),
+        "hf_excess_kurtosis": transients.get("hf_excess_kurtosis"),
+    }
+    valid = all(isinstance(value, (int, float)) for value in values.values())
+    cues = {
+        "high_frequency_activity": bool(
+            valid and float(values["hf_rms_dbfs"]) >= _IMPULSE_MIN_HF_RMS_DBFS
+        ),
+        "high_frequency_peak": bool(
+            valid and float(values["hf_peak_dbfs"]) >= _IMPULSE_MIN_HF_PEAK_DBFS
+        ),
+        "high_crest": bool(valid and float(values["hf_crest_db"]) >= _IMPULSE_MIN_CREST_DB),
+        "high_excess_kurtosis": bool(
+            valid and float(values["hf_excess_kurtosis"]) >= _IMPULSE_MIN_EXCESS_KURTOSIS
+        ),
+        "high_frequency_share": high_frequency_share >= _IMPULSE_MIN_HF_SHARE,
+    }
+    return {
+        "candidate": all(cues.values()),
+        "confidence": "heuristic_only",
+        "cues": cues,
+        "thresholds": {
+            "hf_rms_dbfs_min": _IMPULSE_MIN_HF_RMS_DBFS,
+            "hf_peak_dbfs_min": _IMPULSE_MIN_HF_PEAK_DBFS,
+            "hf_crest_db_min": _IMPULSE_MIN_CREST_DB,
+            "hf_excess_kurtosis_min": _IMPULSE_MIN_EXCESS_KURTOSIS,
+            "high_frequency_share_min": _IMPULSE_MIN_HF_SHARE,
+        },
+        "automatic_action": "none",
+    }
+
+
+def _impulse_localization(raw_candidate: bool, processed_candidate: bool) -> str:
+    if raw_candidate and processed_candidate:
+        return "both_points_candidate"
+    if processed_candidate:
+        return "processed_only_candidate"
+    if raw_candidate:
+        return "raw_only_candidate"
+    return "no_candidate"
+
+
 def analyze_signal_features(
     raw_samples: Sequence[float] | np.ndarray,
     processed_samples: Sequence[float] | np.ndarray,
@@ -446,10 +618,18 @@ def analyze_signal_features(
     deliberately not called a calibrated noise floor or speech-free interval.
     Persistent spectral lines are candidates, not a ground-loop/mains diagnosis.
     """
+    if sample_rate < 8000:
+        raise ValueError("sample_rate must be at least 8000 Hz for microphone signal analysis")
     raw_integrity = _integrity_metrics(raw_samples, sample_rate)
     processed_integrity = _integrity_metrics(processed_samples, sample_rate)
     raw = _channel_summary(raw_samples, sample_rate)
     processed = _channel_summary(processed_samples, sample_rate)
+    raw["impulsive_event_candidate"] = _impulse_candidate(
+        raw["transients"], float(raw["high_frequency_share"] or 0.0)
+    )
+    processed["impulsive_event_candidate"] = _impulse_candidate(
+        processed["transients"], float(processed["high_frequency_share"] or 0.0)
+    )
     raw_transients = raw["transients"]
     processed_transients = processed["transients"]
 
@@ -467,6 +647,10 @@ def analyze_signal_features(
         "processed": processed,
         "integrity": {"raw": raw_integrity, "processed": processed_integrity},
         "tone_localization": _match_tones(raw["persistent_tones"], processed["persistent_tones"]),
+        "impulse_localization": _impulse_localization(
+            raw["impulsive_event_candidate"]["candidate"],
+            processed["impulsive_event_candidate"]["candidate"],
+        ),
         "raw_to_processed": {
             "band_level_delta_db": {
                 name: round(processed["band_rms_dbfs"][name] - raw["band_rms_dbfs"][name], 2)
@@ -481,6 +665,10 @@ def analyze_signal_features(
             "hf_excess_kurtosis_delta": delta("hf_excess_kurtosis"),
             "transient_frame_delta": delta("transient_frames"),
             "near_clip_fraction_delta": delta("near_clip_fraction"),
+            "broadband_impulse_candidate_delta": (
+                processed["broadband_impulses"]["candidate_count"]
+                - raw["broadband_impulses"]["candidate_count"]
+            ),
         },
         "automatic_action": "none",
         "interpretation": "measurement_only; requires profile baseline and source review",
