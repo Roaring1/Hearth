@@ -683,7 +683,7 @@ def test_cli_rejects_baseline_mode_combined_with_check(monkeypatch) -> None:
     assert exc.value.code == 2
 
 
-@pytest.mark.parametrize("route", ["none", "", "invalid"])
+@pytest.mark.parametrize("route", ["none", "", "invalid", "astro", "both"])
 def test_b1_health_capture_gate_refuses_unrouted_mic(monkeypatch, tmp_path, route) -> None:
     config = tmp_path / "router.conf"
     config.write_text(
@@ -700,7 +700,7 @@ def test_b1_health_capture_gate_refuses_unrouted_mic(monkeypatch, tmp_path, rout
     assert healthd._b1_expected_active() is False
 
 
-@pytest.mark.parametrize("route", ["sm7b", "astro", "both"])
+@pytest.mark.parametrize("route", ["sm7b"])
 def test_b1_health_capture_gate_accepts_selected_mic_routes(monkeypatch, tmp_path, route) -> None:
     config = tmp_path / "router.conf"
     config.write_text(

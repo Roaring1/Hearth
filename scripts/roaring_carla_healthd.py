@@ -387,7 +387,9 @@ def _b1_expected_active() -> bool:
     if (
         flags.get("B1_ACTIVE") != "true"
         or flags.get("CARLA_TO_B1") != "true"
-        or flags.get("B1_ROUTE") not in {"sm7b", "astro", "both"}
+        # The raw reference tap is hard-wired to sm7b_mono. Astro-only and
+        # mixed routes cannot be compared against that tap without false results.
+        or flags.get("B1_ROUTE") != "sm7b"
     ):
         _B1_ACTIVE_CACHE = (now + _B1_ACTIVE_CACHE_SECONDS, False)
         return False
