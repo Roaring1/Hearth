@@ -231,3 +231,58 @@ def test_exact_ninety_percent_coverage_is_the_minimum_accepted_boundary() -> Non
 def test_alignment_lag_summary_uses_median_and_mad_not_mean() -> None:
     assert healthd._alignment_lag_summary([10, 11, 10, 9, 3000]) == (10, 1.0, 5)
     assert healthd._alignment_lag_summary([]) == (None, None, 0)
+
+
+def test_no_sample_streak_persists_and_resets_on_activity() -> None:
+    state = {"monitoring_streaks": {"no_activity": 2, "inconclusive": 1}}
+    sample = {"verdict": "NO_SAMPLE", "active_windows": 0}
+    assert healthd._update_monitoring_streaks(state, sample) == {
+        "no_activity": 3,
+        "inconclusive": 0,
+    }
+    assert state["monitoring_streaks"] == sample["monitoring_streaks"]
+
+    sample = {"verdict": "CORRECT", "active_windows": healthd.MIN_ACTIVE_WINDOWS}
+    assert healthd._update_monitoring_streaks(state, sample) == {
+        "no_activity": 0,
+        "inconclusive": 0,
+    }
+
+
+def test_inconclusive_streak_tracks_unverified_samples_and_active_signal_clears_no_activity() -> (
+    None
+):
+    state = {"monitoring_streaks": {"no_activity": 5, "inconclusive": 0}}
+    sample = {"verdict": "INCONCLUSIVE", "active_windows": healthd.MIN_ACTIVE_WINDOWS}
+    assert healthd._update_monitoring_streaks(state, sample) == {
+        "no_activity": 0,
+        "inconclusive": 1,
+    }
+    sample = {"verdict": "INCONCLUSIVE", "active_windows": 0}
+    assert healthd._update_monitoring_streaks(state, sample) == {
+        "no_activity": 0,
+        "inconclusive": 2,
+    }
+
+
+def test_monitoring_streak_counters_are_bounded_and_muted_does_not_count() -> None:
+    state = {"monitoring_streaks": {"no_activity": 255, "inconclusive": 255}}
+    sample = {"verdict": "NO_SAMPLE", "active_windows": 0}
+    assert healthd._update_monitoring_streaks(state, sample) == {
+        "no_activity": 255,
+        "inconclusive": 0,
+    }
+    sample = {"verdict": "MUTED", "active_windows": 0}
+    assert healthd._update_monitoring_streaks(state, sample) == {
+        "no_activity": 0,
+        "inconclusive": 0,
+    }
+
+
+def test_monitoring_streaks_sanitize_corrupt_or_unexpected_persisted_values() -> None:
+    state = {"monitoring_streaks": {"no_activity": "not-a-number", "inconclusive": -4}}
+    sample = {"verdict": "NO_SAMPLE", "active_windows": 0}
+    assert healthd._update_monitoring_streaks(state, sample) == {
+        "no_activity": 1,
+        "inconclusive": 0,
+    }
