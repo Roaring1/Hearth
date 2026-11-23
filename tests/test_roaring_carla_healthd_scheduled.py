@@ -414,7 +414,8 @@ def test_capture_sample_stereo_tap_failure_does_not_fail_mono_path(monkeypatch) 
 
 
 def test_capture_sample_accumulates_stereo_channels_without_pcm_persistence(monkeypatch) -> None:
-    import os
+    import tempfile
+    from contextlib import ExitStack, contextmanager
 
     import pytest
 
@@ -428,30 +429,30 @@ def test_capture_sample_accumulates_stereo_channels_without_pcm_persistence(monk
     mono_pcm = tone.tobytes()
     clock = [0.0]
     processes = []
+    temporary_files = ExitStack()
 
     class FakeKey:
         def __init__(self, fileobj, data):
             self.fileobj = fileobj
             self.data = data
 
+    @contextmanager
+    def capture_file(data):
+        with tempfile.TemporaryFile(mode="w+b") as stream:
+            stream.write(data)
+            stream.seek(0)
+            yield stream
+
     class FakeProcess:
         def __init__(self, device, channels):
-            read_fd, write_fd = os.pipe()
-            self.stdout = os.fdopen(read_fd, "rb", closefd=True)
-            self._write_fd = write_fd
-            self._closed = False
             self._data = stereo_pcm if channels == 2 else mono_pcm
-            os.write(self._write_fd, self._data)
-            os.close(self._write_fd)
-            self._write_fd = -1
+            self.stdout = temporary_files.enter_context(capture_file(self._data))
 
         def poll(self):
             return None
 
         def terminate(self):
-            if self._write_fd >= 0:
-                os.close(self._write_fd)
-                self._write_fd = -1
+            return None
 
         def wait(self, timeout=None):
             return 0
@@ -490,7 +491,10 @@ def test_capture_sample_accumulates_stereo_channels_without_pcm_persistence(monk
     )
     monkeypatch.setattr(healthd.time, "time", lambda: 1000.0)
     monkeypatch.setattr(healthd, "analyze_signal_features", lambda *args, **kwargs: {})
-    summary = healthd.capture_sample(3.0)
+    try:
+        summary = healthd.capture_sample(3.0)
+    finally:
+        temporary_files.close()
 
     stereo = summary["stereo_channel_metrics"]
     assert stereo is not None
