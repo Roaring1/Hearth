@@ -44,6 +44,183 @@ HIDDEN_MIN = 0.5
 
 
 @dataclass(frozen=True, slots=True)
+class GraphSnapshot:
+    """Bounded PipeWire inventory with query provenance and freshness."""
+
+    ports: tuple[str, ...] = ()
+    edges: tuple[tuple[str, str], ...] = ()
+    status: str = "unknown"  # verified, unknown, truncated
+    detail: str = ""
+    taken_at: float = 0.0
+
+
+GRAPH_MAX_PORTS = 512
+GRAPH_MAX_EDGES = 1024
+CAPTURE_MAX_CLIENTS = 128
+
+
+def bounded_graph(listing: str, *, taken_at: float | None = None) -> GraphSnapshot:
+    """Parse and cap one existing PipeWire listing; never probes itself."""
+    inventory = parse_link_inventory(listing)
+    ports = sorted(inventory.ports)
+    edges = sorted(inventory.edges)
+    truncated = len(ports) > GRAPH_MAX_PORTS or len(edges) > GRAPH_MAX_EDGES
+    bounded_ports = tuple(ports[:GRAPH_MAX_PORTS])
+    retained_port_nodes = {port.rpartition(":")[0] for port in bounded_ports}
+    bounded_edges = tuple(
+        edge
+        for edge in edges[:GRAPH_MAX_EDGES]
+        if edge[0].rpartition(":")[0] in retained_port_nodes
+        and edge[1].rpartition(":")[0] in retained_port_nodes
+    )
+    return GraphSnapshot(
+        ports=bounded_ports,
+        edges=bounded_edges,
+        status="truncated" if truncated else "verified",
+        detail=(
+            f"Graph capped at {GRAPH_MAX_PORTS} ports and {GRAPH_MAX_EDGES} edges"
+            if truncated
+            else "PipeWire graph inventory verified"
+        ),
+        taken_at=time.time() if taken_at is None else taken_at,
+    )
+
+
+def graph_unknown(detail: str, *, taken_at: float | None = None) -> GraphSnapshot:
+    """Represent a failed graph query distinctly from a verified empty graph."""
+    return GraphSnapshot(
+        status="unknown",
+        detail=detail[:240],
+        taken_at=time.time() if taken_at is None else taken_at,
+    )
+
+
+def _graph_from_listing(listing: str, *, taken_at: float | None = None) -> GraphSnapshot:
+    if not listing.strip():
+        return GraphSnapshot(
+            status="verified",
+            detail="PipeWire returned a verified empty port/link inventory",
+            taken_at=time.time() if taken_at is None else taken_at,
+        )
+    return bounded_graph(listing, taken_at=taken_at)
+
+
+def _graph_from_failure(error: Exception, *, taken_at: float | None = None) -> GraphSnapshot:
+    return graph_unknown(str(error), taken_at=taken_at)
+
+
+def parse_capture_clients(listing: str, source_names: dict[int, str]) -> tuple[CaptureClient, ...]:
+    """Parse ``pactl list short source-outputs`` into source/client facts."""
+    clients: list[CaptureClient] = []
+    for line in listing.splitlines():
+        if not line.strip():
+            continue
+        columns = line.split("\t") if "\t" in line else line.split()
+        if len(columns) < 4 or not all(column.strip().isdigit() for column in columns[:4]):
+            continue
+        index, _module, client, source_index = (int(column) for column in columns[:4])
+        clients.append(
+            CaptureClient(
+                index=index,
+                client=client,
+                source_index=source_index,
+                source=source_names.get(source_index, ""),
+            )
+        )
+    return tuple(clients)
+
+
+def _route_intent_snapshot(*, taken_at: float | None = None) -> RouteIntentSnapshot:
+    """Read saved intent only; never uses it as proof of a live PipeWire edge."""
+    from hearth import mic_routes, share
+
+    timestamp = time.time() if taken_at is None else taken_at
+    try:
+        text = mic_routes.CONF_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        mic_status = "unavailable"
+        microphone_edges: tuple[tuple[str, str], ...] = ()
+    except (OSError, UnicodeError) as exc:
+        mic_status = "unknown"
+        microphone_edges = ()
+        log.warning("collector microphone route config could not be read: %s", exc)
+    else:
+        values = mic_routes.parse(text)
+        required = {"B1_ACTIVE", "B1_ROUTE", "B2_ACTIVE", "B2_ROUTE"}
+        if not required.issubset(values):
+            mic_status = "unknown"
+            microphone_edges = ()
+        else:
+            mic_status = "verified"
+            edges: set[tuple[str, str]] = set()
+            for bus, prefix in mic_routes.BUS_PREFIX.items():
+                active = values.get(f"{prefix}_ACTIVE", "").strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }
+                if not active:
+                    continue
+                if mic_routes.carla_enabled(values, bus):
+                    edges.add(("Carla", bus))
+                for source in ("sm7b_mono", "astro_mic_48k"):
+                    if mic_routes.raw_enabled(values, bus, source):
+                        edges.add((source, bus))
+            microphone_edges = tuple(sorted(edges))
+
+    try:
+        vesktop_status, vesktop_targets = share.selection_state()
+    except Exception as exc:  # saved selection must never invalidate graph facts
+        log.warning("collector Vesktop selection could not be read: %s", exc)
+        vesktop_status, vesktop_targets = "unknown", ()
+    return RouteIntentSnapshot(
+        microphone_edges=microphone_edges,
+        microphone_status=mic_status,
+        vesktop_targets=tuple(vesktop_targets),
+        vesktop_status=vesktop_status,
+        detail=(
+            "Saved microphone routing intent; not evidence of live links"
+            if mic_status == "verified"
+            else "Microphone routing intent could not be verified"
+        ),
+        taken_at=timestamp,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureClient:
+    """One observed application subscription to a PulseAudio source."""
+
+    index: int
+    client: int
+    source_index: int
+    source: str
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureClientSnapshot:
+    """Optional microphone-consumer inventory, independent of PipeWire graph."""
+
+    clients: tuple[CaptureClient, ...] = ()
+    status: str = "unknown"  # verified, unknown, truncated
+    detail: str = ""
+    taken_at: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class RouteIntentSnapshot:
+    """Saved microphone route intent and Vesktop's separate direct selection."""
+
+    microphone_edges: tuple[tuple[str, str], ...] = ()
+    microphone_status: str = "unknown"  # verified, unknown, unavailable
+    vesktop_targets: tuple[str, ...] = ()
+    vesktop_status: str = "unknown"  # verified, unknown, unavailable
+    detail: str = ""
+    taken_at: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
 class SinkState:
     """Volume, mute and transport state for one sink."""
 
@@ -82,6 +259,12 @@ class Snapshot:
     #: Actual four-link PipeWire health for managed VM output routes.
     #: None means the link inventory could not be verified this tick.
     route_health: dict[str, dict[str, BusRouteHealth]] | None = None
+    #: Bounded raw PipeWire port/edge inventory for read-only views.
+    graph: GraphSnapshot | None = None
+    #: Optional capture clients; failure here must not stale the PipeWire graph.
+    capture_clients: CaptureClientSnapshot | None = None
+    #: Saved mic routes and Vesktop selection, clearly separate from live links.
+    route_intent: RouteIntentSnapshot | None = None
 
     def volume(self, sink: str, default: int = 0) -> int:
         entry = self.sinks.get(sink)
@@ -305,28 +488,68 @@ def collect(units: Sequence[str]) -> Snapshot:
         pactl.raw_checked("list", "sink-inputs"),
         index_map(sinks),
     )
-    sources = parse_source_states(pactl.raw_checked("list", "short", "sources"))
+    raw_sources = pactl.raw_checked("list", "short", "sources")
+    sources = parse_source_states(raw_sources)
+    source_names = {int(entry.index): entry.name for entry in pactl.parse_short_list(raw_sources)}
     routes: dict[str, set[str]] | None
     route_health: dict[str, dict[str, BusRouteHealth]] | None
+    graph: GraphSnapshot | None
     try:
-        # Optional route metadata is bounded so a slow compatibility server
+        # Optional module metadata is bounded so a slow compatibility server
         # does not hold up otherwise valid mixer snapshots.
         modules = pactl.modules(strict=True, timeout=0.75)
     except CommandError as exc:
-        log.warning("collector route query failed; retaining last known routes: %s", exc)
+        log.warning("collector module query failed; retaining last known routes: %s", exc)
+        modules = None
+
+    if modules is None:
         routes = None
         route_health = None
     else:
         routes = {}
         for loop in pactl.select_loopbacks(modules):
             routes.setdefault(loop.source, set()).add(loop.sink)
-        try:
-            link_listing = proc.run(["pw-link", "-iol"], timeout=0.75).stdout
-        except CommandError as exc:
-            log.warning("collector PipeWire link query failed; route health unknown: %s", exc)
-            route_health = None
-        else:
-            route_health = build_route_health(modules, link_listing, set(sinks))
+
+    # Reuse the single graph query used for route health, independently of
+    # module-table availability. No duplicate probe is added for the Grid.
+    try:
+        link_listing = proc.run(["pw-link", "-iol"], timeout=0.75).stdout
+    except CommandError as exc:
+        log.warning("collector PipeWire link query failed; graph unknown: %s", exc)
+        graph = _graph_from_failure(exc)
+        route_health = None
+    else:
+        graph = _graph_from_listing(link_listing)
+        route_health = (
+            build_route_health(modules, link_listing, set(sinks)) if modules is not None else None
+        )
+
+    # This optional inventory describes applications capturing source audio.
+    # Its failure is isolated from the graph and from ordinary sink playback.
+    try:
+        capture_listing = proc.run(
+            ["pactl", "list", "short", "source-outputs"], timeout=0.75
+        ).stdout
+    except CommandError as exc:
+        log.warning("collector source-output query failed; mic consumers unknown: %s", exc)
+        capture_clients = CaptureClientSnapshot(
+            status="unknown", detail=str(exc)[:240], taken_at=time.time()
+        )
+    else:
+        clients = parse_capture_clients(capture_listing, source_names)
+        truncated = len(clients) > CAPTURE_MAX_CLIENTS
+        capture_clients = CaptureClientSnapshot(
+            clients=clients[:CAPTURE_MAX_CLIENTS],
+            status="truncated" if truncated else "verified",
+            detail=(
+                f"Capture-client inventory capped at {CAPTURE_MAX_CLIENTS} entries"
+                if truncated
+                else "Application microphone consumers enumerated"
+            ),
+            taken_at=time.time(),
+        )
+
+    route_intent = _route_intent_snapshot()
 
     return Snapshot(
         sinks=sinks,
@@ -335,6 +558,9 @@ def collect(units: Sequence[str]) -> Snapshot:
         sources=sources,
         routes=routes,
         route_health=route_health,
+        graph=graph,
+        capture_clients=capture_clients,
+        route_intent=route_intent,
         server_version=pactl.server_version(),
         default_sink=pactl.default_sink(),
         taken_at=time.time(),

@@ -165,7 +165,7 @@ Controls        LPD8 pad controller connected - knobs and pads are live
 it can meaningfully judge and excludes oneshot/ondemand and unknown unit kinds.
 The exact number can vary as services and support units are installed or unloaded.
 
-**Keybinds:** `Ctrl+,` opens Setup · `Ctrl+L` opens LPD8 Controls.
+**Keybinds:** `Ctrl+,` opens Setup · `Ctrl+L` opens LPD8 Controls · `Ctrl+Shift+G` opens the read-only MIDI Routing Grid.
 
 ---
 

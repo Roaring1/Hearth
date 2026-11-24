@@ -1778,6 +1778,9 @@ class MixerWindow(Gtk.ApplicationWindow):
         self._remap_window: Gtk.Window | None = None
         self._capture_window: Gtk.Window | None = None
         self._capture_controls_window: Gtk.Window | None = None
+        self._routing_grid_window: Gtk.Window | None = None
+        self._graph_snapshot = None
+        self._latest_snapshot = None
         self._menu: Gtk.Popover | None = None
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._on_key)
@@ -2063,6 +2066,7 @@ class MixerWindow(Gtk.ApplicationWindow):
         GLib.idle_add(self._apply_snapshot, snapshot)
 
     def _apply_snapshot(self, snapshot) -> bool:
+        self._latest_snapshot = snapshot
         # These fields are collected off the GTK thread. None means the
         # optional route query failed; keep the last verified graph rather
         # than painting every route as disconnected during a transient error.
@@ -2071,6 +2075,13 @@ class MixerWindow(Gtk.ApplicationWindow):
         if routes is not None:
             self._routes = routes
             self._routes_known = True
+
+        graph_snapshot = getattr(snapshot, "graph", None)
+        if graph_snapshot is not None:
+            self._graph_snapshot = graph_snapshot
+        grid_window = getattr(self, "_routing_grid_window", None)
+        if grid_window is not None and grid_window.get_mapped():
+            grid_window.apply_snapshot(snapshot, now=time.time())
 
         route_health = getattr(snapshot, "route_health", None)
         route_health_stale = route_health is None
@@ -2559,6 +2570,25 @@ class MixerWindow(Gtk.ApplicationWindow):
             self._capture_window.refresh()
         self._capture_window.present()
 
+    def open_routing_grid(self) -> None:
+        """Show the read-only routing graph lazily from cached collector data."""
+        if self._routing_grid_window is None:
+            from hearth.ui.gtk4.routing_grid import RoutingGridWindow
+
+            self._routing_grid_window = RoutingGridWindow(self)
+        snapshot = getattr(self, "_latest_snapshot", None)
+        self._routing_grid_window.present_with_snapshot(snapshot)
+        graph = getattr(snapshot, "graph", None) if snapshot is not None else None
+        graph_age = (
+            time.time() - graph.taken_at
+            if graph is not None and graph.taken_at > 0
+            else float("inf")
+        )
+        if graph is None or graph.status == "unknown" or graph_age > 5.0:
+            collector = getattr(self, "collector", None)
+            if collector is not None:
+                collector.refresh_now()
+
     def open_capture_controls(self) -> None:
         """Show Capture Controls and perform one explicit device inventory."""
         if self._capture_controls_window is None:
@@ -2583,25 +2613,29 @@ class MixerWindow(Gtk.ApplicationWindow):
             self._setup_window = SetupWindow(self)
         self._setup_window.present()
 
-    def open_remap(self) -> None:
-        """Build the LPD8 window the first time it is wanted, then show it.
-
-        Same deal as Setup: the import is here so a mixer that never opens
-        the controller window never pays for it, and the window is kept
-        rather than rebuilt so reopening it is free.
-        """
+    def open_midi_controls(self) -> None:
+        """Build the general MIDI Controls window lazily, preserving the LPD8 editor."""
         if self._remap_window is None:
             from hearth.ui.gtk4.remap import RemapWindow
 
             self._remap_window = RemapWindow(self)
         self._remap_window.present()
 
+    def open_remap(self) -> None:
+        """Compatibility alias for existing in-app LPD8 control shortcuts."""
+        self.open_midi_controls()
+
     def _on_key(self, _controller, keyval: int, _code: int, state) -> bool:
         if keyval == Gdk.KEY_comma and state & Gdk.ModifierType.CONTROL_MASK:
             self.open_setup()
             return True
         if keyval == Gdk.KEY_l and state & Gdk.ModifierType.CONTROL_MASK:
-            self.open_remap()
+            self.open_midi_controls()
+            return True
+        if keyval == Gdk.KEY_g and state & (
+            Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK
+        ) == (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK):
+            self.open_routing_grid()
             return True
         return False
 
@@ -2610,7 +2644,8 @@ class MixerWindow(Gtk.ApplicationWindow):
             items = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             for label, handler in (
                 ("Setup\u2026", self._on_menu_setup),
-                ("LPD8 controls\u2026", self._on_menu_remap),
+                ("MIDI controls\u2026", self._on_menu_midi_controls),
+                ("Routing grid\u2026", self._on_menu_routing_grid),
             ):
                 item = Gtk.Button(label=label)
                 item.add_css_class("rail-handle")
@@ -2630,10 +2665,15 @@ class MixerWindow(Gtk.ApplicationWindow):
             self._menu.popdown()
         self.open_setup()
 
-    def _on_menu_remap(self, _button: Gtk.Button) -> None:
+    def _on_menu_midi_controls(self, _button: Gtk.Button) -> None:
         if self._menu is not None:
             self._menu.popdown()
-        self.open_remap()
+        self.open_midi_controls()
+
+    def _on_menu_routing_grid(self, _button: Gtk.Button) -> None:
+        if self._menu is not None:
+            self._menu.popdown()
+        self.open_routing_grid()
 
     def _on_map(self, *_args) -> None:
         """Apply native Windows caption colours after GTK creates its HWND."""
@@ -2658,12 +2698,19 @@ class MixerWindow(Gtk.ApplicationWindow):
             self._setup_window = None
         remap_window = getattr(self, "_remap_window", None)
         if remap_window is not None:
+            shutdown = getattr(remap_window, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
             remap_window.destroy()
             self._remap_window = None
         capture_window = getattr(self, "_capture_window", None)
         if capture_window is not None:
             capture_window.destroy()
             self._capture_window = None
+        routing_grid_window = getattr(self, "_routing_grid_window", None)
+        if routing_grid_window is not None:
+            routing_grid_window.destroy()
+            self._routing_grid_window = None
         capture_controls_window = getattr(self, "_capture_controls_window", None)
         if capture_controls_window is not None:
             capture_controls_window.shutdown()

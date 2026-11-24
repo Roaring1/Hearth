@@ -26,6 +26,7 @@ def test_production_windows_render_and_capture(
     from gi.repository import Gio, GLib, Gtk
 
     from hearth import legacy_core
+    from hearth import midi as midi_mod
     from hearth.audio.route_health import BusRouteHealth, RouteState
     from hearth.ui.gtk4 import app as app_mod
     from hearth.ui.gtk4 import capture_controls as capture_controls_mod
@@ -187,6 +188,14 @@ def test_production_windows_render_and_capture(
         lambda: {slot.slot: slot.slot for slot in lpd8map.PAD_SLOTS},
     )
     monkeypatch.setattr(remap_mod.RemapWindow, "_queue_service_state_refresh", lambda _self: None)
+    synthetic_midi_ports = midi_mod.parse_seq_ports(
+        (Path(__file__).parent / "fixtures" / "aseqdump_l.txt").read_text(encoding="utf-8")
+    )
+    monkeypatch.setattr(
+        remap_mod.midi_mod,
+        "list_seq_ports",
+        lambda timeout=2.0: synthetic_midi_ports,
+    )
 
     from PIL import Image, ImageChops, ImageGrab, ImageStat
 
@@ -995,11 +1004,110 @@ def test_production_windows_render_and_capture(
     assert remap_window.get_mapped()
     assert len(remap_window._pads) == 8 and len(remap_window._knobs) == 8
     assert remap_window._map_usable
+    remap_window.apply_surface_states(
+        midi_mod.analyze(
+            synthetic_midi_ports,
+            service_states={midi_mod.LPD8_UNIT: True},
+        )
+    )
+    assert remap_window.get_title() == "MIDI Controls"
+    assert "Connected" in remap_window.lpd8_surface_status.get_text()
+    assert remap_window.lpd8_surface_name.get_text() == "LPD8 - Hearth"
+    assert remap_window.launchpad_surface_status.get_text() == "Connected - Padfire owns it"
     remap_window._fill_choice(remap_window._pads[3])
     assert "Choose assignment for LPD8 pad 3" in accessible_labels[id(remap_window.choice)]
     remap_window._fill_choice(remap_window._knobs[5])
     assert "Choose assignment for LPD8 knob 5" in accessible_labels[id(remap_window.choice)]
-    capture("lpd8-controls")
+    capture("midi-controls")
+
+    from types import SimpleNamespace
+
+    from hearth.collector import (
+        CaptureClient,
+        CaptureClientSnapshot,
+        GraphSnapshot,
+        RouteIntentSnapshot,
+    )
+    from hearth.ui.gtk4 import routing_grid as routing_grid_mod
+
+    assert window._routing_grid_window is None
+    window._on_right_click(None, 1, 4.0, 4.0)
+    pump(0.02)
+    menu_child = window._menu.get_child()
+    menu_items = []
+    menu_item = menu_child.get_first_child()
+    while menu_item is not None:
+        menu_items.append(menu_item.get_label())
+        menu_item = menu_item.get_next_sibling()
+    assert menu_items == ["Setup…", "MIDI controls…", "Routing grid…"]
+    window._menu.popdown()
+
+    graph_time = time.time()
+    synthetic_graph = GraphSnapshot(
+        ports=(
+            "sm7b_mono:output",
+            "Carla:audio-in1",
+            "Carla:audio-out1",
+            "mic_b1:playback_FL",
+            "vm_game:monitor_FL",
+            "vm_share:playback_FL",
+        ),
+        edges=(
+            ("sm7b_mono:output", "Carla:audio-in1"),
+            ("Carla:audio-out1", "mic_b1:playback_FL"),
+            ("vm_game:monitor_FL", "vm_share:playback_FL"),
+        ),
+        status="verified",
+        detail="synthetic visual graph",
+        taken_at=graph_time,
+    )
+    synthetic_snapshot = SimpleNamespace(
+        graph=synthetic_graph,
+        capture_clients=CaptureClientSnapshot(
+            clients=(CaptureClient(8, 23, 4, "mic_b1"),),
+            status="verified",
+            detail="Synthetic capture client",
+            taken_at=graph_time,
+        ),
+        route_intent=RouteIntentSnapshot(
+            microphone_edges=(("sm7b_mono", "mic_b1"),),
+            microphone_status="verified",
+            vesktop_targets=("game", "music"),
+            vesktop_status="verified",
+            taken_at=graph_time,
+        ),
+        route_health={},
+        sinks={},
+        sources={},
+        sink_inputs={},
+    )
+    window._latest_snapshot = synthetic_snapshot
+    window.open_routing_grid()
+    grid_window = window._routing_grid_window
+    assert isinstance(grid_window, routing_grid_mod.RoutingGridWindow)
+    pump()
+    assert grid_window.get_mapped()
+    assert grid_window.status_label.get_text() == "VERIFIED"
+    assert "synthetic visual graph" in grid_window.detail_label.get_text()
+    assert "Game, Music" in grid_window.vesktop_label.get_text()
+    assert "separate from the Screen Share master path" in grid_window.vesktop_label.get_text()
+    assert "1 observed" in grid_window.consumer_label.get_text()
+    assert any(node.id == "vm_share" for node in grid_window._model.nodes)
+    assert all(edge.target != "Vesktop" for edge in grid_window._model.edges)
+    assert all(edge.source != "Vesktop" for edge in grid_window._model.edges)
+    assert any(edge.evidence.value == "capture" for edge in grid_window._model.edges)
+    capture("midi-routing-grid")
+
+    first_render_count = grid_window._render_count
+    window.open_routing_grid()
+    pump(0.02)
+    assert window._routing_grid_window is grid_window
+    assert grid_window._render_count == first_render_count
+
+    grid_window._on_close()
+    grid_window.set_visible(False)
+    grid_window.apply_snapshot(synthetic_snapshot, now=graph_time + 0.1)
+    assert grid_window._render_count == first_render_count
 
     def assert_choice_focus(label: str) -> None:
         assert remap_window.choice.grab_focus()
@@ -1108,6 +1216,7 @@ def test_production_windows_render_and_capture(
     window.banner_text.set_text("")
     window.banner.set_visible(False)
     setup_window.set_visible(False)
+    remap_window.shutdown()
     remap_window.set_visible(False)
     window.present()
     pump(0.05)
@@ -1177,7 +1286,8 @@ def test_production_windows_render_and_capture(
         "mixer-missing-device.png",
         "mixer-fault-banner.png",
         "setup.png",
-        "lpd8-controls.png",
+        "midi-controls.png",
+        "midi-routing-grid.png",
     }
 
     # Exercise keyboard reordering against the real production window, not only
@@ -1255,6 +1365,7 @@ def test_production_windows_render_and_capture(
     if window._capture_controls_window is not None:
         window._capture_controls_window.shutdown()
     window.set_visible(False)
+    grid_window.destroy()
     application.quit()
 
 
