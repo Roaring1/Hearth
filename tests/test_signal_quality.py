@@ -5,13 +5,18 @@ import math
 import pytest
 
 from hearth.audio.signal_quality import (
+    DropoutConfig,
+    DropoutState,
     SignalState,
+    TransportContextState,
     TransportSnapshot,
     TransportState,
     analyze_pcm,
     analyze_stereo_pcm,
     compare_taps,
     compare_transport,
+    detect_dropouts,
+    detect_transport_context,
 )
 
 
@@ -260,3 +265,64 @@ def test_stereo_mismatched_buffers_fail_closed():
     report = analyze_stereo_pcm(tone(220, count=2048), tone(220, count=1024), 48000)
     assert report.metrics is None
     assert "unequal lengths" in report.reasons[0]
+
+
+def test_replay_detects_sustained_dropout_candidate_not_short_quiet_window():
+    from hearth.audio.signal_quality import DropoutConfig
+
+    samples = [0.2] * 200
+    samples[60:140] = [0.0] * 80  # 80 ms gap at 1 kHz
+    report = detect_dropouts(samples, 1000, DropoutConfig(window_ms=20, min_windows=3))
+    assert report.state is DropoutState.CANDIDATE
+    assert report.dropout_start_samples == (60,)
+    assert report.dropout_windows == 4
+    assert report.longest_dropout_windows == 4
+    assert "not confirmed faults" in report.limitations[0]
+
+
+def test_replay_short_silence_is_not_a_dropout_candidate():
+    samples = [0.2] * 200
+    samples[80:100] = [0.0] * 20
+    report = detect_dropouts(samples, 1000, DropoutConfig(window_ms=20, min_windows=3))
+    assert report.state is DropoutState.NO_CANDIDATE
+    assert report.dropout_start_samples == ()
+
+
+def test_dropout_detector_fails_closed_for_invalid_and_unbounded_input():
+    assert detect_dropouts([0.0] * 100, True).state is DropoutState.INCONCLUSIVE
+    assert detect_dropouts([0.0] * 481_000, 48000).state is DropoutState.INCONCLUSIVE
+    assert detect_dropouts([float("nan")] * 100, 48000).state is DropoutState.INCONCLUSIVE
+    assert (
+        detect_dropouts([0.0] * 100, 48000, DropoutConfig(window_ms=True)).state
+        is DropoutState.INCONCLUSIVE
+    )
+
+
+def test_replay_transport_context_stable_changed_and_unknown():
+    baseline = TransportSnapshot("node-7", 12, 48000, 256, "driver")
+    stable = detect_transport_context(
+        baseline, TransportSnapshot("node-7", 12, 48000, 256, "driver")
+    )
+    assert stable.state is TransportContextState.STABLE
+    assert stable.changed_fields == ()
+
+    rate_changed = detect_transport_context(
+        baseline, TransportSnapshot("node-7", 12, 44100, 256, "driver")
+    )
+    assert rate_changed.state is TransportContextState.CHANGED
+    assert "sample_rate" in rate_changed.changed_fields
+
+    errors_changed = detect_transport_context(
+        baseline, TransportSnapshot("node-7", 15, 48000, 256, "driver")
+    )
+    assert errors_changed.state is TransportContextState.CHANGED
+    assert errors_changed.err_delta == 3
+    assert "err_count" in errors_changed.changed_fields
+
+    node_changed = detect_transport_context(
+        baseline, TransportSnapshot("node-8", 15, 48000, 256, "driver")
+    )
+    assert node_changed.state is TransportContextState.CHANGED
+    assert node_changed.changed_fields == ("node_id",)
+    missing = detect_transport_context(None, baseline)
+    assert missing.state is TransportContextState.UNKNOWN
