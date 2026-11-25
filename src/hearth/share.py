@@ -213,16 +213,24 @@ def parse_status(text: str) -> Status:
 # ------------------------------------------------------------------ reading
 
 
-def selection() -> list[str]:
-    """Current selection, read from the state file (no subprocess)."""
+def selection_state() -> tuple[str, tuple[str, ...]]:
+    """Saved selection plus its read status; never treats failure as empty."""
     try:
         raw = json.loads(selection_file().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
+    except FileNotFoundError:
+        return "unavailable", ()
+    except (OSError, ValueError, UnicodeError):
+        return "unknown", ()
     targets = raw.get("targets") if isinstance(raw, dict) else None
     if not isinstance(targets, list):
-        return []
-    return [str(t) for t in targets]
+        return "unknown", ()
+    return "verified", tuple(str(target) for target in targets)
+
+
+def selection() -> list[str]:
+    """Current selection, read from the state file (no subprocess)."""
+    _status, targets = selection_state()
+    return list(targets)
 
 
 def inventory() -> Inventory:

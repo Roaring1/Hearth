@@ -44,7 +44,9 @@ from gi.repository import GLib, Gtk  # noqa: E402 - must follow require_version
 
 from hearth import leds as leds_mod  # noqa: E402
 from hearth import lpd8map  # noqa: E402
+from hearth import midi as midi_mod  # noqa: E402
 from hearth import services as services_mod  # noqa: E402
+from hearth.errors import AudioError  # noqa: E402
 from hearth.ui.gtk4 import action_icons, style as style_mod  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -270,10 +272,10 @@ class _Knob(Gtk.Button, _Control):
 
 
 class RemapWindow(Gtk.Window):
-    """The LPD8, drawn, with every control editable on the control."""
+    """MIDI Controls overview with Hearth's existing LPD8 editor."""
 
     def __init__(self, parent: Gtk.Window | None = None) -> None:
-        super().__init__(title="LPD8 Controls", transient_for=parent)
+        super().__init__(title="MIDI Controls", transient_for=parent)
         self.add_css_class("hearth")
         self.set_resizable(False)
         # Same bargain as Setup: built once, hidden rather than destroyed,
@@ -286,6 +288,10 @@ class RemapWindow(Gtk.Window):
         self._write_error = ""
         self._service_state: str | None = None
         self._service_query_pending = False
+        self._surface_query_pending = False
+        self._surface_generation = 0
+        self._surface_states = None
+        self._surface_ports = None
         self._map_usable = False
         self._clash_note = ""
         self._pads: dict[int, _Pad] = {}
@@ -304,6 +310,10 @@ class RemapWindow(Gtk.Window):
         column.set_margin_end(14)
         self.set_child(column)
 
+        column.append(self._build_surface_overview())
+        lpd8_heading = Gtk.Label(label="LPD8 - HEARTH", xalign=0.0)
+        lpd8_heading.add_css_class("setup-tag")
+        column.append(lpd8_heading)
         column.append(self._build_device())
 
         # The only line of text in the window, and it is not a footer: it
@@ -419,11 +429,134 @@ class RemapWindow(Gtk.Window):
 
     # -- reading ---------------------------------------------------------
     def refresh(self) -> None:
+        """Refresh the LPD8 map and the read-only ownership inventory."""
+        self._queue_surface_state_refresh()
         if os.name == "nt":
             self._configure_windows_port()
             return
-        """Re-read the script and show what it says."""
         self._refresh_map()
+
+    def _build_surface_overview(self) -> Gtk.Widget:
+        section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
+        section.add_css_class("setup-box")
+        heading = Gtk.Label(label="CONNECTED CONTROLLERS", xalign=0.0)
+        heading.add_css_class("setup-tag")
+        section.append(heading)
+        lpd8_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        lpd8_name = Gtk.Label(label="LPD8 - Hearth", xalign=0.0)
+        lpd8_name.set_hexpand(True)
+        self.lpd8_surface_name = lpd8_name
+        self.lpd8_surface_status = Gtk.Label(label="Connection unknown", xalign=1.0)
+        self.lpd8_surface_status.add_css_class("setup-note")
+        lpd8_row.append(lpd8_name)
+        lpd8_row.append(self.lpd8_surface_status)
+        section.append(lpd8_row)
+        launchpad_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        launchpad_name = Gtk.Label(label="Launchpad Mini - Padfire", xalign=0.0)
+        launchpad_name.set_hexpand(True)
+        self.launchpad_surface_name = launchpad_name
+        self.launchpad_surface_status = Gtk.Label(
+            label="Connection unknown; Padfire owns this controller", xalign=1.0
+        )
+        self.launchpad_surface_status.add_css_class("setup-note")
+        self.launchpad_surface_status.set_wrap(True)
+        launchpad_row.append(launchpad_name)
+        launchpad_row.append(self.launchpad_surface_status)
+        section.append(launchpad_row)
+        note = Gtk.Label(
+            label="Only the LPD8 can be remapped here. The Launchpad remains under Padfire.",
+            xalign=0.0,
+        )
+        note.add_css_class("setup-note")
+        note.set_wrap(True)
+        section.append(note)
+        return section
+
+    def apply_surface_states(self, states) -> None:
+        """Apply synthetic or asynchronously collected MIDI inventory states."""
+        by_key = {state.surface.key: state for state in states}
+        lpd8 = by_key.get("lpd8")
+        launchpad = by_key.get("launchpad")
+        if lpd8 is None or launchpad is None:
+            return
+        if lpd8.connected is None:
+            lpd8_text = "Connection unknown"
+        elif not lpd8.connected:
+            lpd8_text = "Not connected"
+        elif lpd8.service_active is False:
+            lpd8_text = "Connected; controls not running"
+        elif lpd8.service_active is None:
+            lpd8_text = "Connected; service state unknown"
+        else:
+            lpd8_text = "Connected; controls running"
+        self.lpd8_surface_status.set_text(lpd8_text)
+
+        if launchpad.connected is None:
+            launchpad_text = "Connection unknown"
+        elif launchpad.connected:
+            launchpad_text = "Connected - Padfire owns it"
+        else:
+            launchpad_text = "Not connected - Padfire owns it"
+        self.launchpad_surface_status.set_text(launchpad_text)
+        self._surface_states = tuple(states)
+
+    def _queue_surface_state_refresh(self) -> None:
+        if os.name == "nt" or self._surface_query_pending or not self.get_visible():
+            return
+        self._surface_query_pending = True
+        self._surface_generation += 1
+        generation = self._surface_generation
+
+        def query() -> None:
+            try:
+                ports = midi_mod.list_seq_ports(timeout=2.0)
+            except AudioError as exc:
+                log.warning("midi: cannot list control surfaces: %s", exc)
+                ports = None
+            except Exception as exc:
+                log.warning("midi: control-surface inventory failed: %s", exc)
+                ports = None
+            GLib.idle_add(self._finish_surface_state_refresh, generation, ports)
+
+        try:
+            threading.Thread(
+                target=query, daemon=True, name="hearth-midi-surface-inventory"
+            ).start()
+        except RuntimeError as exc:
+            self._surface_query_pending = False
+            log.warning("could not queue MIDI surface inventory: %s", exc)
+
+    def _surface_service_active(self) -> bool | None:
+        if self._service_state == "active":
+            return True
+        if self._service_state in (None, "", services_mod.UNKNOWN):
+            return None
+        return False
+
+    def _apply_cached_surface_inventory(self) -> None:
+        if self._surface_ports is None:
+            states = midi_mod.analyze(None)
+        else:
+            states = midi_mod.analyze(
+                self._surface_ports,
+                service_states={midi_mod.LPD8_UNIT: self._surface_service_active()},
+            )
+        self.apply_surface_states(states)
+
+    def _finish_surface_state_refresh(self, generation, ports) -> bool:
+        if generation != self._surface_generation:
+            return False
+        self._surface_query_pending = False
+        self._surface_ports = tuple(ports) if ports is not None else None
+        if self.get_visible():
+            self._apply_cached_surface_inventory()
+        return False
+
+    def shutdown(self) -> None:
+        """Invalidate outstanding read-only inventory callbacks before teardown."""
+        self._surface_generation += 1
+        self._surface_query_pending = False
+        self._surface_ports = None
 
     def _service_note(self) -> str:
         """Describe the last asynchronously queried service state, if known."""
@@ -458,6 +591,8 @@ class RemapWindow(Gtk.Window):
         self._service_query_pending = False
         self._service_state = state
         self._show_status()
+        if getattr(self, "_surface_ports", None) is not None and self.get_visible():
+            self._apply_cached_surface_inventory()
         return False
 
     def _show_status(self) -> None:

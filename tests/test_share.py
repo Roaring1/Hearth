@@ -136,3 +136,29 @@ def test_view_degrades_when_the_controller_cannot_launch(
     assert v.installed is True
     assert "could not run" in v.error
     assert "timed out" in v.error
+
+
+def test_selection_state_distinguishes_verified_selection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    state = tmp_path / "share_select.json"
+    state.write_text(json.dumps({"targets": ["game", "music"]}), encoding="utf-8")
+    monkeypatch.setattr(share, "selection_file", lambda: state)
+    assert share.selection_state() == ("verified", ("game", "music"))
+
+
+def test_selection_state_reports_missing_file_as_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(share, "selection_file", lambda: tmp_path / "missing.json")
+    assert share.selection_state() == ("unavailable", ())
+
+
+@pytest.mark.parametrize("content", ["", "not json", "[]", '{"targets": 3}'])
+def test_selection_state_reports_malformed_file_as_unknown(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, content: str
+) -> None:
+    state = tmp_path / "share_select.json"
+    state.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(share, "selection_file", lambda: state)
+    assert share.selection_state() == ("unknown", ())
