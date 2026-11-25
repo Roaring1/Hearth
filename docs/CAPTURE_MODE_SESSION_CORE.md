@@ -126,3 +126,15 @@ No permanent service, timer, polling daemon or idle graph watcher is added. Capt
 
 
 The no-signal overlay is also verified in real mpv 0.40/Xvfb: a synthetic video is captured, the private property is toggled over IPC, and the centered label is confirmed to appear and clear.
+
+## W2 on-demand capture-core model (2026-11-24)
+
+`hearth.audio.capture_core` adds a separate pure-Python, demand-driven model/coordinator for capture-device/audio-session inventory and lifecycle. It intentionally does not implement a live adapter: the caller supplies `CaptureBackend` and explicitly invokes `refresh`, `select`, `start`, or `stop`.
+
+- Immutable `CaptureDevice`, `AudioSession`, and `CaptureCoreSnapshot` models validate their basic identity and scalar fields.
+- `OnDemandCaptureCore` transitions through `IDLE`, `READY`, `STARTING`, `ACTIVE`, `STOPPING`, and `ERROR`. Discovery is not called at construction.
+- Device selection is explicit. Duplicate identities and malformed inventories fail closed. Device refresh/selection are refused during active session states.
+- Failed start stores no session handle. Failed stop retains the session handle so a caller may retry cleanup.
+- Fake-backend tests exercise the state transitions and failure cases. No live PipeWire, hardware, UI, or session routing was accessed.
+
+This is an issue #11 foundation, not the production capture adapter or safe route/session integration.
