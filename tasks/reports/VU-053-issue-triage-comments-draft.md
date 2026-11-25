@@ -18,13 +18,13 @@ Triage: Keep open; review child/parent linkage and acceptance criteria rather th
 
 > PR #18 is now merged. It delivers the hardware-independent coordinator/discovery foundation, not an operational capture session. Remaining work includes the production capture adapter and safe route lease/integration. Please refresh the issue to track only these remaining steps and retain bounded discovery, explicit incomplete inventory, and fail-closed behavior. No live device access was performed in this pass.
 
-Triage: Keep open pending current PR/CI verification; comment intentionally avoids treating historical checkpoint as current.
+Triage: Keep open for the production capture adapter and safe route/session integration; do not repeat merged PR #18 work in the issue scope.
 
 ## Issue #12 - Capture Mode UI
 
 > The overview (#16) and session-core foundation (#11/#18) are now merged, but the issue body explicitly notes that the production app does not yet construct/inject the session manager and there is no production capture adapter/safe session-route lease. Keep this issue scoped to that remaining UI/session integration and acceptance, not the completed overview or foundation. Do not add route mutation or start/stop behavior outside the approved design.
 
-Triage: Keep open pending verified PR/head and acceptance evidence.
+Triage: Keep open for production manager injection/capture-adapter integration and its UI acceptance; no live test is authorized in this pass.
 
 ## Issue #13 - KDE Wayland + Vesktop capture behavior spike
 
