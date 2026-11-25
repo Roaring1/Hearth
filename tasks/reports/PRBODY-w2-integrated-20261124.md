@@ -5,9 +5,9 @@ Superseded by R3 branch w2/integrated-r3-20261125. The earlier integrated head r
 
 ## Evidence
 - Original integrated head 8508374: 932 passed, 18 skipped, 27 warnings; Ruff check/format PASS; hosted Windows 45548952071 PASS.
-- R3 local full gate: 954 passed, 18 skipped, 27 warnings; all checks passed.
-- R3 hosted CI run 45566240967 is in progress/partially green on cc81081; verify final workflow conclusion.
-- R3 Windows run 45566241083 is pending/in progress; do not claim hosted Windows-green for R3 until it completes.
+- R3 local full gate: 954 passed, 18 skipped, 30 warnings in 33.23s; all checks passed.
+- R3 hosted Linux CI 45566497898 PASS on code/doc head 5f6f854; lint/types, Python 3.11/3.12/3.13, GTK smoke and package/install smoke all green.
+- R3 hosted Windows run 45566497892 PASS on 5f6f854.
 - R3 adds a pure Capture Mode view-model, acceptance roll-up for issues #9/#11/#12, watchdog synthetic corpus/threshold-confidence docs, and PR #26 rebase recipe.
 
 ## Risks / limitations
