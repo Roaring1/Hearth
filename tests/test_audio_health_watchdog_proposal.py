@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import sys
 import wave
 from pathlib import Path
 
-from scripts.audio_health_watchdog_proposal import transport_probe, watchdog_report
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from audio_health_watchdog_proposal import transport_probe, watchdog_report
 
 
 def synthetic_wav(path: Path) -> Path:
