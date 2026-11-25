@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased - documentation (2026-11-24)
+
+### Fixed
+- Contributor setup instructions now install GTK4/Cairo dependencies matching the current application instead of the retired GTK3 stack.
+
 ## Unreleased — round 32 (2026-09-20)
 
 ### Added

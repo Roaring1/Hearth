@@ -10,11 +10,11 @@ PyGObject is **not** installed with pip. It comes from your distribution:
 
 ```bash
 # Fedora / Nobara
-sudo dnf install python3-gobject gtk3 libayatana-appindicator-gtk3
+sudo dnf install python3-gobject gtk4 python3-cairo
 # Debian / Ubuntu
 sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1
 # Arch
-sudo pacman -S python-gobject gtk3 libayatana-appindicator
+sudo pacman -S python-gobject gtk4 python-cairo
 ```
 
 Then, in a virtualenv that can see the system packages:

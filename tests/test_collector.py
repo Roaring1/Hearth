@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 
 import pytest
@@ -104,7 +105,7 @@ def test_all_units_active_is_false_with_no_units():
     assert collector.Snapshot().all_units_active is False
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Linux-only PipeWire collector")
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="Linux-only PipeWire collector")
 def test_collect_keeps_core_audio_read_failures_distinct_from_empty_graph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
