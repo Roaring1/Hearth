@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from threading import RLock
 from typing import Protocol
 
 
@@ -95,6 +96,7 @@ class OnDemandCaptureCore:
     """Small serialized state machine; all backend calls are demand-triggered."""
 
     def __init__(self, backend: CaptureBackend) -> None:
+        self._lock = RLock()
         self._backend = backend
         self._state = CaptureCoreState.IDLE
         self._devices: tuple[CaptureDevice, ...] = ()
@@ -104,126 +106,140 @@ class OnDemandCaptureCore:
         self._revision = 0
 
     def snapshot(self) -> CaptureCoreSnapshot:
-        return CaptureCoreSnapshot(
-            self._state, self._devices, self._selected, self._session, self._error, self._revision
-        )
+        with self._lock:
+            return CaptureCoreSnapshot(
+                self._state,
+                self._devices,
+                self._selected,
+                self._session,
+                self._error,
+                self._revision,
+            )
 
     def refresh(self) -> CaptureCoreSnapshot:
-        if self._state in (
-            CaptureCoreState.STARTING,
-            CaptureCoreState.ACTIVE,
-            CaptureCoreState.STOPPING,
-        ):
-            self._error = "device inventory cannot be refreshed during an active session"
+        with self._lock:
+            if self._state in (
+                CaptureCoreState.STARTING,
+                CaptureCoreState.ACTIVE,
+                CaptureCoreState.STOPPING,
+            ):
+                self._error = "device inventory cannot be refreshed during an active session"
+                self._revision += 1
+                return self.snapshot()
+            self._state = CaptureCoreState.IDLE
+            self._error = None
+            try:
+                found = self._backend.discover_devices()
+                if not isinstance(found, tuple) or any(
+                    not isinstance(item, CaptureDevice) for item in found
+                ):
+                    raise TypeError("backend returned an invalid device inventory")
+                ids = [device.device_id for device in found]
+                if len(ids) != len(set(ids)):
+                    raise ValueError("backend returned duplicate device identities")
+                self._devices = found
+                if self._selected not in {device.device_id for device in found if device.available}:
+                    self._selected = None
+                self._state = (
+                    CaptureCoreState.READY
+                    if any(device.available for device in found)
+                    else CaptureCoreState.IDLE
+                )
+            except Exception as exc:
+                self._devices = ()
+                self._selected = None
+                self._state = CaptureCoreState.ERROR
+                self._error = f"device discovery failed: {exc}"
             self._revision += 1
             return self.snapshot()
-        self._state = CaptureCoreState.IDLE
-        self._error = None
-        try:
-            found = self._backend.discover_devices()
-            if not isinstance(found, tuple) or any(
-                not isinstance(item, CaptureDevice) for item in found
-            ):
-                raise TypeError("backend returned an invalid device inventory")
-            ids = [device.device_id for device in found]
-            if len(ids) != len(set(ids)):
-                raise ValueError("backend returned duplicate device identities")
-            self._devices = found
-            if self._selected not in {device.device_id for device in found if device.available}:
-                self._selected = None
-            self._state = (
-                CaptureCoreState.READY
-                if any(device.available for device in found)
-                else CaptureCoreState.IDLE
-            )
-        except Exception as exc:
-            self._devices = ()
-            self._selected = None
-            self._state = CaptureCoreState.ERROR
-            self._error = f"device discovery failed: {exc}"
-        self._revision += 1
-        return self.snapshot()
 
     def select(self, device_id: str) -> CaptureCoreSnapshot:
-        if self._state in (
-            CaptureCoreState.STARTING,
-            CaptureCoreState.ACTIVE,
-            CaptureCoreState.STOPPING,
-        ):
-            self._error = "device selection is locked during an active session"
+        with self._lock:
+            if self._state in (
+                CaptureCoreState.STARTING,
+                CaptureCoreState.ACTIVE,
+                CaptureCoreState.STOPPING,
+            ):
+                self._error = "device selection is locked during an active session"
+                self._revision += 1
+                return self.snapshot()
+            device = next(
+                (item for item in self._devices if item.device_id == device_id and item.available),
+                None,
+            )
+            if device is None:
+                self._selected = None
+                self._error = "selected device is unavailable or not in the current inventory"
+                self._state = CaptureCoreState.ERROR
+                self._revision += 1
+                return self.snapshot()
+            self._selected = device_id
+            self._error = None
+            self._state = CaptureCoreState.READY
             self._revision += 1
             return self.snapshot()
-        device = next(
-            (item for item in self._devices if item.device_id == device_id and item.available), None
-        )
-        if device is None:
-            self._error = "selected device is unavailable or not in the current inventory"
-            self._state = CaptureCoreState.ERROR
-            self._revision += 1
-            return self.snapshot()
-        self._selected = device_id
-        self._error = None
-        self._state = CaptureCoreState.READY
-        self._revision += 1
-        return self.snapshot()
 
     def start(self) -> CaptureCoreSnapshot:
-        if self._state in (
-            CaptureCoreState.STARTING,
-            CaptureCoreState.ACTIVE,
-            CaptureCoreState.STOPPING,
-        ):
-            self._error = "capture session is already starting or active"
+        with self._lock:
+            if self._state is not CaptureCoreState.READY:
+                self._error = "capture core must be ready with a selected device before starting"
+                self._revision += 1
+                return self.snapshot()
+            device = next(
+                (
+                    item
+                    for item in self._devices
+                    if item.device_id == self._selected and item.available
+                ),
+                None,
+            )
+            if device is None:
+                self._error = "select an available capture device before starting"
+                self._state = CaptureCoreState.ERROR
+                self._revision += 1
+                return self.snapshot()
+            self._state = CaptureCoreState.STARTING
+            self._error = None
+            self._revision += 1
+            session: AudioSession | None = None
+            try:
+                started = self._backend.start_session(device)
+                if not isinstance(started, AudioSession):
+                    raise RuntimeError("backend did not return an audio-session model")
+                session = started
+                if not session.active or session.device_id != device.device_id:
+                    raise RuntimeError(
+                        "backend did not return a valid active session for the selected device"
+                    )
+                self._session = session
+                self._state = CaptureCoreState.ACTIVE
+            except Exception as exc:
+                # Keep a backend-returned session handle for cleanup even if
+                # validation failed (e.g. the backend selected the wrong device).
+                self._session = session
+                self._state = CaptureCoreState.ERROR
+                self._error = f"session start failed: {exc}"
             self._revision += 1
             return self.snapshot()
-        device = next(
-            (item for item in self._devices if item.device_id == self._selected and item.available),
-            None,
-        )
-        if device is None:
-            self._error = "select an available capture device before starting"
-            self._state = CaptureCoreState.ERROR
-            self._revision += 1
-            return self.snapshot()
-        self._state = CaptureCoreState.STARTING
-        self._error = None
-        self._revision += 1
-        try:
-            session = self._backend.start_session(device)
-            if (
-                not isinstance(session, AudioSession)
-                or not session.active
-                or session.device_id != device.device_id
-            ):
-                raise RuntimeError(
-                    "backend did not return a valid active session for the selected device"
-                )
-            self._session = session
-            self._state = CaptureCoreState.ACTIVE
-        except Exception as exc:
-            self._session = None
-            self._state = CaptureCoreState.ERROR
-            self._error = f"session start failed: {exc}"
-        self._revision += 1
-        return self.snapshot()
 
     def stop(self) -> CaptureCoreSnapshot:
-        if self._session is None:
-            self._state = CaptureCoreState.READY if self._devices else CaptureCoreState.IDLE
-            self._error = None
+        with self._lock:
+            if self._session is None:
+                self._state = CaptureCoreState.READY if self._devices else CaptureCoreState.IDLE
+                self._error = None
+                self._revision += 1
+                return self.snapshot()
+            session = self._session
+            self._state = CaptureCoreState.STOPPING
+            self._revision += 1
+            try:
+                self._backend.stop_session(session)
+                self._session = None
+                self._error = None
+                self._state = CaptureCoreState.READY if self._devices else CaptureCoreState.IDLE
+            except Exception as exc:
+                # Keep the handle: a retry may still be required by the backend.
+                self._state = CaptureCoreState.ERROR
+                self._error = f"session stop failed: {exc}"
             self._revision += 1
             return self.snapshot()
-        session = self._session
-        self._state = CaptureCoreState.STOPPING
-        self._revision += 1
-        try:
-            self._backend.stop_session(session)
-            self._session = None
-            self._error = None
-            self._state = CaptureCoreState.READY if self._devices else CaptureCoreState.IDLE
-        except Exception as exc:
-            # Keep the handle: a retry may still be required by the backend.
-            self._state = CaptureCoreState.ERROR
-            self._error = f"session stop failed: {exc}"
-        self._revision += 1
-        return self.snapshot()

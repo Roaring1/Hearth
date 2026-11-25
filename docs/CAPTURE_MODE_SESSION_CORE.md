@@ -133,8 +133,8 @@ The no-signal overlay is also verified in real mpv 0.40/Xvfb: a synthetic video 
 
 - Immutable `CaptureDevice`, `AudioSession`, and `CaptureCoreSnapshot` models validate their basic identity and scalar fields.
 - `OnDemandCaptureCore` transitions through `IDLE`, `READY`, `STARTING`, `ACTIVE`, `STOPPING`, and `ERROR`. Discovery is not called at construction.
-- Device selection is explicit. Duplicate identities and malformed inventories fail closed. Device refresh/selection are refused during active session states.
-- Failed start stores no session handle. Failed stop retains the session handle so a caller may retry cleanup.
+- Device selection is explicit. Duplicate identities and malformed inventories fail closed. Device refresh/selection are refused during active session states. A reentrant lock serializes state and backend operations.
+- Failed start stores no session handle. Failed stop retains the session handle so a caller may retry cleanup. A backend-returned but invalid/mismatched session is also retained for cleanup.
 - Fake-backend tests exercise the state transitions and failure cases. No live PipeWire, hardware, UI, or session routing was accessed.
 
 This is an issue #11 foundation, not the production capture adapter or safe route/session integration.

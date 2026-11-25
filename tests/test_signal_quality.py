@@ -292,6 +292,8 @@ def test_dropout_detector_fails_closed_for_invalid_and_unbounded_input():
     assert detect_dropouts([0.0] * 100, True).state is DropoutState.INCONCLUSIVE
     assert detect_dropouts([0.0] * 481_000, 48000).state is DropoutState.INCONCLUSIVE
     assert detect_dropouts([float("nan")] * 100, 48000).state is DropoutState.INCONCLUSIVE
+    assert detect_dropouts([True] * 100, 48000).state is DropoutState.INCONCLUSIVE
+    assert detect_dropouts(["bad"] * 100, 48000).state is DropoutState.INCONCLUSIVE
     assert (
         detect_dropouts([0.0] * 100, 48000, DropoutConfig(window_ms=True)).state
         is DropoutState.INCONCLUSIVE
