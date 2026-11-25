@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased - 2026-11-24
+
+### Added
+- `hearth.audio.capture_core`: pure on-demand capture-device/audio-session model and coordinator (`CaptureDevice`, `AudioSession`, explicit `refresh`/`select`/`start`/`stop`, immutable snapshots, retained stop handle for retry). Discovery and session I/O are injected; no hardware, PipeWire, UI, subprocess or background activity is performed by the core itself. Fake-backend tests cover explicit discovery, selection, lifecycle, failure handling and duplicate inventory.
+- `hearth.audio.signal_quality.detect_dropouts`: bounded PCM windows flag sustained low-RMS spans as dropout candidates; short gaps are not candidates and partial trailing windows are ignored.
+- `detect_transport_context`: snapshot replay comparison labels stable, changed, or unknown transport context and enumerates node/role/rate/quantum/ERR changes where safely comparable.
+
+### Fixed
+- `detect_stable_tone` now explicitly rejects boolean sample rates (Python `bool` is an `int` subtype), returning inconclusive rather than treating `True` as a 1 Hz rate.
+
+### Limitations
+- Capture core is an injected-backend contract/model only; no live device adapter or routing/session integration.
+- Dropout and transport-context outputs are heuristic/context flags only. No live capture, calibration, watchdog integration, or automatic recovery.
+
 ## Unreleased — round 32 (2026-09-20)
 
 ### Added
