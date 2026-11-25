@@ -20,8 +20,8 @@ PROGRESS 2026-11-25T01:54Z phase=signal-core-complete commit_pending=full_gate_p
 - Commit: `275302a` (`feat: add pure signal quality measurement core`), pushed.
 - Implemented bounded pure-Python normalized-mono-PCM metrics, clip and transient candidate features, immutable typed reports, fail-closed input/config validation, raw/post candidate localization (low-confidence only), and same-node transport ERR deltas/reset/identity/rate/quantum state.
 - Replay tests: 13 passed; mypy Windows platform check: no issues in 1 source file; Ruff and formatting pass.
-- Full project gate: 899 passed, 18 skipped, 26 warnings in 42.71s; Ruff, format, mypy (52 source files), legacy compile, desktop-entry, AppStream, ShellCheck passed. AppStream's existing uppercase-ID pedantic warning remains.
-- Hosted CI for the new branch run 45529118077 is in progress; Windows UCRT64 job is currently provisioning. This is not a blocker to local green gate, but report hosted result when completed.
+- Final full project gate: 900 passed, 18 skipped, 43 warnings in 43.78s; Ruff, format, mypy (52 source files), legacy compile, desktop-entry, AppStream, ShellCheck passed. AppStream's existing uppercase-ID pedantic warning remains.
+- Hosted CI runs triggered by successive documentation pushes were cancelled; final-head CI is pending after this last push. The portability fix branch CI run 45527113279 succeeded, including UCRT64 tests and installed-wheel smoke.
 - Deliberately not integrated into live watchdog or `~/bin/mic_analyze.py`; no capture/route/service/GUI interaction. Spectral tone detection, band metrics, stereo/phase, dropout context, true-peak, timestamp/content alignment and transport parser remain future work. No automatic recovery verdicts.
 
 ## Phase 3: issue-triage comments draft
@@ -36,3 +36,6 @@ Peer status checks continue to show Orchestrator and W1 generating. No messages 
 ## Hosted CI housekeeping
 
 - The signal-core CI run for commit `275302a` and the follow-up documentation run `9a4da4f` were cancelled after successive pushes. No hosted conclusion is asserted for the final head; local full verification is green. A fresh run is being requested by this final report update, after which no further pushes will be made unless a genuine fix is needed.
+
+
+PROGRESS 2026-11-25T01:57Z phase=signal-core-final-validation focused=14passed full_gate=900passed/18skipped mypy=pass benchmark=0.207s/480000 next=final-commit-and-CI

@@ -27,10 +27,11 @@ The impulse replay initially failed to produce a transient candidate with the fi
 
 ## Verification
 
-- Focused pytest: 13 passed.
+- Focused pytest after final validation edits: 14 passed; strict mypy Windows-platform check: success, no issues in 1 source file.
 - Strict mypy Windows platform: success, no issues in 1 source file.
 - Ruff check and format: pass.
-- Full project gate is being rerun; final exact output is copied into this report when complete.
+- Final full project gate passed with the final 14 replay tests; exact output is copied below.
+- Performance sanity check on 480,000 synthetic samples (10 seconds at 48 kHz): 0.207 seconds elapsed; 0 transient candidates on a clean 440 Hz sine. This is a synthetic microbenchmark, not live capture.
 
 
 ## Not implemented / deliberately deferred
@@ -92,6 +93,78 @@ SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows
 SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:364: Windows port regression tests
 SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:374: Windows port regression tests
 899 passed, 18 skipped, 26 warnings in 42.71s
+
+[1m== legacy module compiles[0m
+
+[1m== desktop entry[0m
+
+[1m== appstream metadata[0m
+P: io.github.roaring1.Hearth:4: cid-contains-uppercase-letter io.github.roaring1.Hearth
+
+✔ Validation was successful: pedantic: 1
+
+[1m== shell scripts[0m
+
+[32mAll checks passed[0m
+
+```
+
+
+## Final full-gate output (verbatim)
+
+```text
+
+[1m== ruff check[0m
+All checks passed!
+156 files already formatted
+
+[1m== mypy[0m
+Success: no issues found in 52 source files
+
+[1m== pytest[0m
+s....................................................................... [  7%]
+........................................................................ [ 15%]
+........................................................................ [ 23%]
+........................................................................ [ 31%]
+........................................................................ [ 39%]
+........................................................................ [ 47%]
+........................................................................ [ 54%]
+........................................................................ [ 62%]
+........................................................................ [ 70%]
+........................................................................ [ 78%]
+........................................................................ [ 86%]
+........................................................................ [ 94%]
+.....................................ssssssssssssssss                    [100%]
+=============================== warnings summary ===============================
+tests/test_gui_visual.py::test_production_windows_render_and_capture
+  /usr/lib64/python3.14/site-packages/gi/overrides/Gtk.py:1801: DeprecationWarning: Gtk.CssProvider.load_from_data is deprecated
+    super().load_from_data(text, length)
+
+tests/test_gui_visual.py: 42 warnings
+  /usr/lib64/python3.14/site-packages/gi/_ossighelper.py:266: DeprecationWarning: 'asyncio.get_event_loop_policy' is deprecated and slated for removal in Python 3.16
+    policy = asyncio.get_event_loop_policy()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_audio.py:16: Windows Core Audio backend
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/integration/test_pipewire_route_recovery.py:287: set HEARTH_RUN_PIPEWIRE_INTEGRATION=1 to run disposable PipeWire tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:23: Windows port regression tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:32: Windows port regression tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:41: Windows port regression tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:59: Windows port regression tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:81: Windows port regression tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:113: Windows port regression tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:141: Windows port regression tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:202: Windows port regression tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:240: Windows port regression tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:263: Windows port regression tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:272: Windows port regression tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:285: Windows port regression tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:322: Windows port regression tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:356: Windows port regression tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:364: Windows port regression tests
+SKIPPED [1] ../../home/roaring/Hearth-W2-signal-core-20261124/tests/test_windows_port.py:374: Windows port regression tests
+900 passed, 18 skipped, 43 warnings in 43.78s
 
 [1m== legacy module compiles[0m
 
