@@ -1,26 +1,20 @@
-# Hearth capture core and discovery adapter
+# Hearth Capture Mode core and discovery foundation
 
 ## Summary
-Adds capture core and read-only device-discovery adapter interface, fake backend, and recorded synthetic `pw-dump` fixture parsing. Discovery is testable without querying or mutating a live graph.
+Toolkit-free capture device/audio session models, bounded read-only V4L2 and PipeWire inventory adapters, stable USB identity matching, injected backend lifecycle, transactional session/viewer foundation, and pure Capture Mode presentation model.
 
 ## Evidence
-- 41 focused parser/adapter tests: **PASS**.
-- Completeness-guard mutation: expected failure observed.
-- Hosted Windows result recorded for integrated stack (45548952071 PASS on `8508374`); verify branch-specific hosted status before merge.
-- Commit: `81b9c3f`.
+- Capture-core branch 81b9c3f; hosted Windows CI 45544115193 PASS.
+- Synthetic/fake-backend tests cover discovery, identity, session lifecycle and cleanup failure retention.
+- W2d adds hearth.capture_ui_model mapping core snapshots to safe status/device choices and refresh/select/start/stop availability; 11 new assertions.
+- Mutation check removing the view-model module failed at import as expected; restored tests passed.
+- Full project gate and hosted CI evidence are recorded on the integrated candidate.
 
 ## Risks / limitations
-- Read-only adapter is not proof against every live graph/version.
-- Fixtures are synthetic/recorded; tests avoid live calls.
-- Check branch-specific CI at the exact commit.
-
-## Suggested merge order
-1. PR26 fixes (if needed).
-2. Signal-quality core (confirm API assumptions).
-3. Capture core.
-4. Integrated branch last.
+- No production route adapter, GTK Start/Stop injection, physical capture-card validation, or live graph mutation.
+- The session core is not an operational capture path.
 
 ## Reviewer checklist
-- Inspect protocol/adapter boundary and fake-backend tests.
-- Confirm malformed/incomplete fixture parsing fails closed.
-- Confirm unit tests do not invoke live PipeWire commands.
+- Confirm one-shot discovery, stable identity and fail-closed unknown/ambiguous states.
+- Review rollback/cleanup ownership and retained retry handles.
+- Ensure no live audio services, routes, devices or UI were touched.

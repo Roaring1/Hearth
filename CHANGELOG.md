@@ -9,6 +9,7 @@
 
 
 ### Added
+- R3 consolidation: issue #9/#11/#12 acceptance roll-up, watchdog thresholds/confidence note, PR #26 safe rebase recipe, and refreshed offline PR-body drafts.
 - Synthetic watchdog replay fixtures for 50/60 Hz and 97-99 Hz unidentified tones, clipping, dropouts and silence; explicit low/unknown confidence-state output and thresholds/confidence documentation.
 - `hearth.capture_ui_model`: pure Capture Mode view-model mapping capture-core snapshots into safe labels, device options, and refresh/select/start/stop availability without UI dependencies or I/O.
 - `python -m hearth.audio.quality_report FILE.wav`: read-only, bounded PCM WAV analyzer that emits a JSON report with signal state, metrics, limitations, and explicitly unidentified tone candidates. Supports uncompressed 8/16/24/32-bit PCM; averages channels for the current mono analyzer and rejects compressed or oversized input.

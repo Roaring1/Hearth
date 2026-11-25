@@ -1,28 +1,28 @@
-# Hearth integrated audio-quality and capture tooling
+# Hearth integrated signal-quality and Capture Mode foundation
 
 ## Summary
-Integrates the signal-quality core, capture core, read-only WAV/PCM JSON analyzer, capture-device discovery adapter (including recorded `pw-dump` parsing), and associated documentation/CHANGELOG updates. Repository candidate only; no host watchdog installation or live capture was performed.
+Combines signal-quality core, dropout/transport-context primitives, bounded WAV analysis CLI, capture-core/session foundation, read-only discovery adapter and Capture Controls design. This is a candidate branch only.
 
 ## Evidence
-- Canonical gate: **932 passed, 18 skipped, 27 warnings**.
-- Ruff check and format: PASS across 165 files.
-- Hosted Windows run: **45548952071 PASS**.
-- `mypy`: not run (not installed).
-- Synthetic fixtures only for capture discovery and audio-analysis tests; no live PipeWire queries in test runs.
+- Original integrated head 8508374: 932 passed, 18 skipped, 27 warnings; Ruff check/format PASS; mypy not installed.
+- Hosted Windows run 45548952071 PASS on exact original integrated head 8508374.
+- W2d additions: pure Capture Mode view-model (11 assertions), acceptance roll-up for issues #9/#11/#12, watchdog synthetic fixtures for 50/60/97/98/99 Hz, clipping, dropout, silence, thresholds/confidence doc, PR #26 rebase/fix recipe.
+- W2d hosted CI matrix run 45565337392 PASS on e8b0141 before the later changes. R3 full gate and hosted runs are pending.
 
 ## Risks / limitations
-- Signal-quality metrics are diagnostic/measurement-only; no automatic repair action is introduced.
-- True-peak conformance still needs reference-vector validation.
-- GTK/display and optional media tests remain skipped in headless gates.
-- Revalidate after any upstream merge/rebase.
+- The view-model is not wired to GTK.
+- Signal-quality features remain heuristic/measurement-only.
+- Production CaptureAudioAdapter and active-session route ownership are unresolved.
+- No physical capture-card, live PipeWire, KDE Wayland/Vesktop or dormant-resource audit.
+- PR #26 remains OPEN/UNSTABLE; W2 fixes are not applied to its PR head.
 
-## Suggested merge order
-1. `w2/pr26-fixes-20261124` (if fixes are a prerequisite)
-2. `w2/signal-quality-core-20261124`
-3. `w2/capture-core-20261124`
-4. `w2/integrated-20261124` last, after verifying integration base and resolving overlap
+## Suggested review sequence
+1. PR #26 fixes branch (only after owner approval and fresh combined-head CI).
+2. Signal-quality core.
+3. Capture core.
+4. Integrated candidate last; verify ancestry and CI.
 
 ## Reviewer checklist
-- Confirm dependency order against actual target history before merging.
-- Inspect skipped GUI/media tests and mypy gap.
-- Keep live installation and service restart outside this PR.
+- Reverify branch/head/CI against current remote.
+- Review issues #9/#11/#12 acceptance roll-up and thresholds/confidence documentation.
+- Confirm no live service, route, hardware, GUI, PR, merge or release action occurred.
