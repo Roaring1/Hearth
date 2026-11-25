@@ -389,7 +389,7 @@ def test_collector_thread_delivers_and_stops(monkeypatch):
     seen: list[collector.Snapshot] = []
     got = threading.Event()
 
-    def fake_collect(units):
+    def fake_collect(units, **_kwargs):
         return collector.Snapshot(units=dict.fromkeys(units, "active"))
 
     monkeypatch.setattr(collector, "collect", fake_collect)
@@ -407,7 +407,7 @@ def test_collector_survives_a_failing_tick(monkeypatch):
     calls = {"n": 0}
     recovered = threading.Event()
 
-    def flaky(units):
+    def flaky(units, **_kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("pactl went away")
@@ -497,3 +497,43 @@ def test_route_intent_snapshot_keeps_configured_mic_routes_separate_from_vesktop
     assert snapshot.vesktop_targets == ("game", "music")
     assert snapshot.vesktop_status == "verified"
     assert snapshot.taken_at == 42.0
+
+
+def test_capture_client_snapshot_reuses_recent_raw_listing_and_remaps_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    previous = collector.CaptureClientSnapshot(
+        clients=(collector.CaptureClient(8, 23, 243, "old_source"),),
+        status="verified",
+        detail="Application microphone consumers enumerated",
+        taken_at=100.0,
+        _raw_listing="8\t2\t23\t243\n",
+    )
+    monkeypatch.setattr(
+        collector.proc,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("recent inventory should be cached"),
+    )
+    reused = collector._capture_client_snapshot({243: "current_source"}, previous, now=102.0)
+    assert reused.taken_at == previous.taken_at
+    assert reused.clients[0].source == "current_source"
+    assert reused.status == "verified"
+
+
+def test_capture_client_snapshot_refreshes_after_five_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    previous = collector.CaptureClientSnapshot(
+        clients=(), status="verified", taken_at=100.0, _raw_listing=""
+    )
+    calls: list[list[str]] = []
+
+    def fresh_listing(argv: list[str], **_kwargs):
+        calls.append(argv)
+        return type("Result", (), {"stdout": "9\t2\t25\t244\n"})()
+
+    monkeypatch.setattr(collector.proc, "run", fresh_listing)
+    refreshed = collector._capture_client_snapshot({244: "new_source"}, previous, now=106.0)
+    assert calls == [["pactl", "list", "short", "source-outputs"]]
+    assert refreshed.taken_at == 106.0
+    assert refreshed.clients[0].source == "new_source"

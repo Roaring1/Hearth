@@ -57,6 +57,7 @@ class GraphSnapshot:
 GRAPH_MAX_PORTS = 512
 GRAPH_MAX_EDGES = 1024
 CAPTURE_MAX_CLIENTS = 128
+CAPTURE_CLIENT_REFRESH_INTERVAL = 5.0
 
 
 def bounded_graph(listing: str, *, taken_at: float | None = None) -> GraphSnapshot:
@@ -206,6 +207,55 @@ class CaptureClientSnapshot:
     status: str = "unknown"  # verified, unknown, truncated
     detail: str = ""
     taken_at: float = 0.0
+    _raw_listing: str = field(default="", repr=False, compare=False)
+
+
+def _capture_client_snapshot(
+    source_names: dict[int, str],
+    previous: CaptureClientSnapshot | None = None,
+    *,
+    now: float | None = None,
+) -> CaptureClientSnapshot:
+    """Reuse raw optional inventory for five seconds; remap names from fresh sources."""
+    timestamp = time.time() if now is None else now
+    if (
+        previous is not None
+        and previous.taken_at > 0.0
+        and 0.0 <= timestamp - previous.taken_at < CAPTURE_CLIENT_REFRESH_INTERVAL
+    ):
+        if not previous._raw_listing:
+            return previous
+        clients = parse_capture_clients(previous._raw_listing, source_names)
+        truncated = len(clients) > CAPTURE_MAX_CLIENTS
+        return CaptureClientSnapshot(
+            clients=clients[:CAPTURE_MAX_CLIENTS],
+            status="truncated" if truncated else "verified",
+            detail=(
+                f"Capture-client inventory capped at {CAPTURE_MAX_CLIENTS} entries"
+                if truncated
+                else "Application microphone consumers enumerated"
+            ),
+            taken_at=previous.taken_at,
+            _raw_listing=previous._raw_listing,
+        )
+    try:
+        listing = proc.run(["pactl", "list", "short", "source-outputs"], timeout=0.75).stdout
+    except CommandError as exc:
+        log.warning("collector source-output query failed; mic consumers unknown: %s", exc)
+        return CaptureClientSnapshot(status="unknown", detail=str(exc)[:240], taken_at=timestamp)
+    clients = parse_capture_clients(listing, source_names)
+    truncated = len(clients) > CAPTURE_MAX_CLIENTS
+    return CaptureClientSnapshot(
+        clients=clients[:CAPTURE_MAX_CLIENTS],
+        status="truncated" if truncated else "verified",
+        detail=(
+            f"Capture-client inventory capped at {CAPTURE_MAX_CLIENTS} entries"
+            if truncated
+            else "Application microphone consumers enumerated"
+        ),
+        taken_at=timestamp,
+        _raw_listing=listing,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -470,7 +520,9 @@ def build_route_health(
     return health
 
 
-def collect(units: Sequence[str]) -> Snapshot:
+def collect(
+    units: Sequence[str], *, previous_capture_clients: CaptureClientSnapshot | None = None
+) -> Snapshot:
     """Take one snapshot of the audio graph and the service stack.
 
     Core graph queries are checked: if the audio server did not answer, raise
@@ -524,30 +576,9 @@ def collect(units: Sequence[str]) -> Snapshot:
             build_route_health(modules, link_listing, set(sinks)) if modules is not None else None
         )
 
-    # This optional inventory describes applications capturing source audio.
-    # Its failure is isolated from the graph and from ordinary sink playback.
-    try:
-        capture_listing = proc.run(
-            ["pactl", "list", "short", "source-outputs"], timeout=0.75
-        ).stdout
-    except CommandError as exc:
-        log.warning("collector source-output query failed; mic consumers unknown: %s", exc)
-        capture_clients = CaptureClientSnapshot(
-            status="unknown", detail=str(exc)[:240], taken_at=time.time()
-        )
-    else:
-        clients = parse_capture_clients(capture_listing, source_names)
-        truncated = len(clients) > CAPTURE_MAX_CLIENTS
-        capture_clients = CaptureClientSnapshot(
-            clients=clients[:CAPTURE_MAX_CLIENTS],
-            status="truncated" if truncated else "verified",
-            detail=(
-                f"Capture-client inventory capped at {CAPTURE_MAX_CLIENTS} entries"
-                if truncated
-                else "Application microphone consumers enumerated"
-            ),
-            taken_at=time.time(),
-        )
+    # Optional source-output inventory is slower than the regular poll cycle.
+    # Reuse it briefly to avoid launching pactl on every UI refresh.
+    capture_clients = _capture_client_snapshot(source_names, previous=previous_capture_clients)
 
     route_intent = _route_intent_snapshot()
 
@@ -592,6 +623,7 @@ class Collector(threading.Thread):
         # CPython 3.11/3.12. CI caught this; 3.13+ happens not to call it.
         self._stopping = threading.Event()
         self._wake = threading.Event()
+        self._capture_clients: CaptureClientSnapshot | None = None
 
     def set_window_visible(self, visible: bool) -> None:
         self._visible.set() if visible else self._visible.clear()
@@ -616,7 +648,9 @@ class Collector(threading.Thread):
     def run(self) -> None:
         while not self._stopping.is_set():
             try:
-                self._on_snapshot(collect(self._units))
+                snapshot = collect(self._units, previous_capture_clients=self._capture_clients)
+                self._capture_clients = snapshot.capture_clients
+                self._on_snapshot(snapshot)
             except Exception as exc:
                 # A poll failure must never kill the thread: the next tick may
                 # well succeed, and a dead collector freezes the whole UI.
