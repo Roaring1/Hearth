@@ -2,6 +2,9 @@
 
 ## Unreleased - 2026-11-24
 
+### Verified
+- R3 candidate full local gate: 954 passed, 18 skipped, 27 warnings; project check script reports all checks passed. Ruff check/format manually passed across 188 files because the binaries were not on the check script PATH; mypy was skipped locally. Hosted R3 CI is still pending.
+
 ### Fixed
 - Dropout RMS windows now use validated normalized samples consistently; numeric-string inputs no longer raise during window multiplication.
 - Regression tests cover numeric-string and ordinary numeric samples.
