@@ -65,6 +65,11 @@ def watchdog_report(
         "transport": transport,
         "decision": "measurement_only",
         "automatic_action": "none",
+        "confidence_states": {
+            "signal": "low" if signal.get("metrics") is not None else "unknown",
+            "transport": "unknown",
+            "overall": "low" if signal.get("metrics") is not None else "unknown",
+        },
         "limitations": [
             "WAV analysis is offline, not a microphone capture.",
             "Transport probe is observational only.",

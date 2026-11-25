@@ -41,6 +41,11 @@ def test_combined_report_offline_with_injected_transport(tmp_path):
     assert report["automatic_action"] == "none"
     assert report["signal"]["state"] in {"healthy_observed", "inconclusive", "no_sample"}
     assert report["transport"]["metadata_ok"] is True
+    assert report["confidence_states"] == {
+        "signal": "low",
+        "transport": "unknown",
+        "overall": "low",
+    }
 
 
 def test_transport_probe_success_parses_fake_pwtop_and_metadata(monkeypatch):
