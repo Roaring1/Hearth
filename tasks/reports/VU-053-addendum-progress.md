@@ -32,3 +32,7 @@ PROGRESS 2026-11-25T01:54Z phase=signal-core-complete commit_pending=full_gate_p
 ## Peer reporting
 
 Peer status checks continue to show Orchestrator and W1 generating. No messages were sent to busy peer tabs. One-line phase reports are preserved here until a peer is confirmed idle.
+
+## Hosted CI housekeeping
+
+- The signal-core CI run for commit `275302a` and the follow-up documentation run `9a4da4f` were cancelled after successive pushes. No hosted conclusion is asserted for the final head; local full verification is green. A fresh run is being requested by this final report update, after which no further pushes will be made unless a genuine fix is needed.
