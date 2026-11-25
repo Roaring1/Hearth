@@ -9,6 +9,7 @@ from hearth.audio.signal_quality import (
     TransportSnapshot,
     TransportState,
     analyze_pcm,
+    analyze_stereo_pcm,
     compare_taps,
     compare_transport,
 )
@@ -176,3 +177,51 @@ def test_config_requires_finite_thresholds_and_positive_floor():
         analyze_pcm(tone(100), 48000, SignalConfig(max_samples=1024.5)).state
         is SignalState.INCONCLUSIVE
     )
+
+
+def test_replay_97_to_99_hz_line_is_unidentified_tone_not_mains_label():
+    report = analyze_pcm(tone(98.0, count=48000, amp=0.03), 48000)
+    assert report.metrics is not None
+    detected = report.metrics.stable_tone
+    assert detected.classification == "UNIDENTIFIED_TONE"
+    assert detected.frequency_hz == pytest.approx(98.0, abs=0.2)
+    assert detected.confidence == "low"
+    assert "mains" not in detected.classification.lower()
+    assert "hum" not in detected.classification.lower()
+
+
+def test_replay_stereo_identical_and_inverted_phase_metrics():
+    left = tone(1000.0, count=8192, amp=0.2)
+    same = analyze_stereo_pcm(left, left, 48000)
+    assert same.metrics is not None
+    assert same.metrics.correlation == pytest.approx(1.0, abs=1e-6)
+    assert same.metrics.phase_difference_degrees == pytest.approx(0.0, abs=0.2)
+    inverted = analyze_stereo_pcm(left, [-sample for sample in left], 48000)
+    assert inverted.metrics is not None
+    assert inverted.metrics.correlation == pytest.approx(-1.0, abs=1e-6)
+    assert abs(inverted.metrics.phase_difference_degrees) == pytest.approx(180.0, abs=0.2)
+
+
+def test_replay_stereo_quadrature_phase_and_true_peak_estimates():
+    left = tone(1000.0, count=8192, amp=0.2)
+    right = [0.2 * math.cos(2.0 * math.pi * 1000.0 * i / 48000) for i in range(len(left))]
+    report = analyze_stereo_pcm(left, right, 48000)
+    assert report.metrics is not None
+    assert report.metrics.correlation == pytest.approx(0.0, abs=0.01)
+    assert report.metrics.phase_difference_degrees == pytest.approx(90.0, abs=0.5)
+    assert report.metrics.left_true_peak >= report.left.metrics.peak
+    assert report.metrics.right_true_peak >= report.right.metrics.peak
+
+
+def test_replay_cubic_true_peak_estimate_catches_inter_sample_overshoot():
+    samples = [-1.0, 0.9, 0.9, -1.0] + [0.0] * 1020
+    report = analyze_pcm(samples, 48000)
+    assert report.metrics is not None
+    assert report.metrics.peak == 1.0
+    assert report.metrics.true_peak_estimate > report.metrics.peak
+
+
+def test_stereo_mismatched_buffers_fail_closed():
+    report = analyze_stereo_pcm(tone(220, count=2048), tone(220, count=1024), 48000)
+    assert report.metrics is None
+    assert "unequal lengths" in report.reasons[0]

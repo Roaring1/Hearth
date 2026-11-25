@@ -10,7 +10,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from math import isfinite, log10, sqrt
+from itertools import pairwise
+from math import atan2, cos, isfinite, log10, sin, sqrt
 from statistics import median
 
 
@@ -26,6 +27,34 @@ class TransportState(StrEnum):
     UNKNOWN = "unknown"
     NODE_CHANGED = "node_changed"
     COUNTER_RESET = "counter_reset"
+
+
+@dataclass(frozen=True, slots=True)
+class StableToneMetrics:
+    classification: str
+    frequency_hz: float | None
+    frequency_variation_percent: float | None
+    confidence: str
+
+
+@dataclass(frozen=True, slots=True)
+class StereoMetrics:
+    sample_count: int
+    sample_rate: int
+    correlation: float | None
+    phase_difference_degrees: float | None
+    phase_confidence: str
+    left_true_peak: float | None
+    right_true_peak: float | None
+    peak_difference_db: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class StereoReport:
+    left: SignalReport
+    right: SignalReport
+    metrics: StereoMetrics | None
+    reasons: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +75,8 @@ class SignalMetrics:
     longest_near_zero_run: int
     transient_candidates: int
     transient_candidate_indices: tuple[int, ...]
+    true_peak_estimate: float
+    stable_tone: StableToneMetrics
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +127,80 @@ class SignalConfig:
 
 
 DEFAULT_CONFIG = SignalConfig()
+
+
+def _estimate_true_peak_4x(values: Sequence[float]) -> float:
+    """Four-times oversampled Catmull-Rom interpolation; estimate, not certified."""
+    peak = max((abs(value) for value in values), default=0.0)
+    if len(values) < 4:
+        return peak
+    for index in range(1, len(values) - 2):
+        p0, p1, p2, p3 = values[index - 1 : index + 3]
+        for t in (0.25, 0.5, 0.75):
+            t2, t3 = t * t, t * t * t
+            interpolated = 0.5 * (
+                2.0 * p1
+                + (-p0 + p2) * t
+                + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+                + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+            )
+            peak = max(peak, abs(interpolated))
+    return peak
+
+
+def _positive_crossing_frequency(values: Sequence[float], sample_rate: int) -> float | None:
+    """Estimate frequency using interpolated rising zero crossings."""
+    if len(values) < 4:
+        return None
+    mean = sum(values) / len(values)
+    centered = [value - mean for value in values]
+    crossings: list[float] = []
+    for index, (left, right) in enumerate(pairwise(centered)):
+        if left <= 0.0 < right:
+            fraction = -left / (right - left) if right != left else 0.0
+            crossings.append(index + fraction)
+    if len(crossings) < 3:
+        return None
+    period = median(crossings[i] - crossings[i - 1] for i in range(1, len(crossings)))
+    return sample_rate / period if period > 0.0 else None
+
+
+def detect_stable_tone(values: Sequence[float], sample_rate: int) -> StableToneMetrics:
+    """Detect a stable spectral-line candidate; never label it as mains hum."""
+    if len(values) < 512 or sample_rate <= 0:
+        return StableToneMetrics("INCONCLUSIVE", None, None, "low")
+    rms = sqrt(sum(value * value for value in values) / len(values))
+    if rms < 0.005:
+        return StableToneMetrics("NO_STABLE_TONE", None, None, "low")
+    midpoint = len(values) // 2
+    estimates = (
+        _positive_crossing_frequency(values[:midpoint], sample_rate),
+        _positive_crossing_frequency(values[midpoint:], sample_rate),
+    )
+    if any(
+        frequency is None or frequency < 20.0 or frequency > sample_rate / 2.0
+        for frequency in estimates
+    ):
+        return StableToneMetrics("NO_STABLE_TONE", None, None, "low")
+    first, second = estimates
+    if first is None or second is None:
+        return StableToneMetrics("NO_STABLE_TONE", None, None, "low")
+    mean_frequency = (first + second) / 2.0
+    variation = abs(first - second) / mean_frequency * 100.0 if mean_frequency else None
+    if variation is None or variation > 2.5:
+        return StableToneMetrics("NO_STABLE_TONE", mean_frequency, variation, "low")
+    return StableToneMetrics("UNIDENTIFIED_TONE", mean_frequency, variation, "low")
+
+
+def _tone_phase(values: Sequence[float], sample_rate: int, frequency: float) -> float:
+    mean = sum(values) / len(values)
+    cos_sum = sin_sum = 0.0
+    for index, value in enumerate(values):
+        angle = 2.0 * 3.141592653589793 * frequency * index / sample_rate
+        centered = value - mean
+        cos_sum += centered * cos(angle)
+        sin_sum += centered * sin(angle)
+    return atan2(-sin_sum, cos_sum)
 
 
 def _runs(mask: Sequence[bool]) -> tuple[int, int]:
@@ -220,6 +325,8 @@ def analyze_pcm(
         longest_near_zero_run=longest_zero,
         transient_candidates=len(candidate_indices),
         transient_candidate_indices=tuple(candidate_indices),
+        true_peak_estimate=_estimate_true_peak_4x(values),
+        stable_tone=detect_stable_tone(values, sample_rate),
     )
 
     if peak <= config.near_zero_threshold:
@@ -245,6 +352,67 @@ def analyze_pcm(
             "digital samples cannot establish analog distortion or perceived quality",
         ),
     )
+
+
+def analyze_stereo_pcm(
+    left_samples: Sequence[float],
+    right_samples: Sequence[float],
+    sample_rate: int,
+    config: SignalConfig | None = None,
+) -> StereoReport:
+    """Analyze stereo correlation, tone phase, and estimated inter-sample peaks."""
+    left_report = analyze_pcm(left_samples, sample_rate, config)
+    right_report = analyze_pcm(right_samples, sample_rate, config)
+    if len(left_samples) != len(right_samples):
+        return StereoReport(
+            left_report, right_report, None, ("stereo buffers have unequal lengths",)
+        )
+    if left_report.metrics is None or right_report.metrics is None:
+        return StereoReport(left_report, right_report, None, ("stereo analysis is inconclusive",))
+    count = len(left_samples)
+    left_mean = sum(left_samples) / count
+    right_mean = sum(right_samples) / count
+    left_centered = [sample - left_mean for sample in left_samples]
+    right_centered = [sample - right_mean for sample in right_samples]
+    left_energy = sum(sample * sample for sample in left_centered)
+    right_energy = sum(sample * sample for sample in right_centered)
+    correlation = (
+        sum(a * b for a, b in zip(left_centered, right_centered, strict=True))
+        / sqrt(left_energy * right_energy)
+        if left_energy > 0.0 and right_energy > 0.0
+        else None
+    )
+    left_tone = left_report.metrics.stable_tone
+    right_tone = right_report.metrics.stable_tone
+    phase: float | None = None
+    if (
+        left_tone.frequency_hz is not None
+        and right_tone.frequency_hz is not None
+        and abs(left_tone.frequency_hz - right_tone.frequency_hz)
+        / max(left_tone.frequency_hz, right_tone.frequency_hz)
+        <= 0.02
+    ):
+        frequency = (left_tone.frequency_hz + right_tone.frequency_hz) / 2.0
+        difference = _tone_phase(right_samples, sample_rate, frequency) - _tone_phase(
+            left_samples, sample_rate, frequency
+        )
+        phase = (difference + 3.141592653589793) % (2.0 * 3.141592653589793) - 3.141592653589793
+    left_peak = left_report.metrics.true_peak_estimate
+    right_peak = right_report.metrics.true_peak_estimate
+    peak_difference = (
+        20.0 * log10(right_peak / left_peak) if left_peak > 0.0 and right_peak > 0.0 else None
+    )
+    metrics = StereoMetrics(
+        sample_count=count,
+        sample_rate=sample_rate,
+        correlation=correlation,
+        phase_difference_degrees=(phase * 180.0 / 3.141592653589793 if phase is not None else None),
+        phase_confidence="low",
+        left_true_peak=left_peak,
+        right_true_peak=right_peak,
+        peak_difference_db=peak_difference,
+    )
+    return StereoReport(left_report, right_report, metrics, ())
 
 
 def compare_taps(raw: SignalReport, processed: SignalReport) -> TapComparison:
