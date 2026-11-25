@@ -19,3 +19,13 @@ Based on the current lane notes and this branch's shipped changes. This is a loc
 - Boolean sample-rate validation fix for direct stable-tone detection.
 
 No live audio/hardware/PipeWire, GUI, route, service, issue tracker, or PR operation was performed.
+
+
+## Blocker cross-review correction - 2026-11-24
+
+- Fixed `detect_dropouts` to calculate RMS using the same normalized `values` sequence used by validation. Numeric-string samples no longer reach arithmetic as strings and cause TypeError.
+- Added regression tests for `detect_dropouts(['0.0'] * 2880, 48000)` and ordinary numeric samples at the same rate. Both assert the expected three-window candidate.
+- Focused signal-quality tests: 31 passed; capture-core + signal-quality tests: 40 passed.
+- Mutation test reverted the RMS window slice to raw `samples`; numeric-string regression failed with TypeError as expected (mutation confirmed). Restored corrected source.
+- Full project check: 926 passed, 18 skipped, 27 warnings in 41.61s; legacy module compile, desktop entry, AppStream and shell checks passed.
+- Ruff check/format, mypy, and pre-commit hook passed.
