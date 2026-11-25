@@ -9,6 +9,9 @@
 
 
 ### Added
+- `python -m hearth.audio.quality_report FILE.wav`: read-only, bounded PCM WAV analyzer that emits a JSON report with signal state, metrics, limitations, and explicitly unidentified tone candidates. Supports uncompressed 8/16/24/32-bit PCM; averages channels for the current mono analyzer and rejects compressed or oversized input.
+- `hearth.capture_audio_discovery`: injectable discovery backend protocol and read-only PipeWire adapter. USB audio matching uses stable serial/port identity; incomplete inventory and backend errors remain UNKNOWN. The pw-dump parser is exercised against a recorded synthetic JSON fixture and fake backend.
+- `docs/CAPTURE_MODE_UI_AND_WAYLAND_PLAN.md`: Capture Controls layout/state design and the safe KDE Wayland/Vesktop interactive spike matrix, including explicit non-interactive limits.
 - `hearth.audio.capture_core`: pure on-demand capture-device/audio-session model and coordinator (`CaptureDevice`, `AudioSession`, explicit `refresh`/`select`/`start`/`stop`, immutable snapshots, retained stop handle for retry). State operations are serialized; invalid selection clears prior selection, and a mismatched backend session is retained for cleanup. Discovery and session I/O are injected; no hardware, PipeWire, UI, subprocess or background activity is performed by the core itself. Fake-backend tests cover explicit discovery, selection, lifecycle, failure handling and duplicate inventory.
 - `hearth.audio.signal_quality.detect_dropouts`: bounded PCM windows flag sustained low-RMS spans as dropout candidates; short gaps are not candidates and partial trailing windows are ignored.
 - `detect_transport_context`: snapshot replay comparison labels stable, changed, or unknown transport context and enumerates node/role/rate/quantum/ERR changes where safely comparable.
