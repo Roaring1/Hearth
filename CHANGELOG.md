@@ -3,7 +3,7 @@
 ## Unreleased - 2026-11-24
 
 ### Verified
-- R3 candidate full local gate: 954 passed, 18 skipped, 30 warnings in 33.23s; project check script reports all checks passed. Ruff check/format manually passed across 188 files because the binaries were not on the check script PATH; mypy was skipped locally. Hosted CI and Windows both passed on code/doc head 5f6f854 (runs 45566497898 and 45566497892).
+- R3 candidate full local gate: 954 passed, 18 skipped, latest run 33 warnings in 33.80s (warning count varied 27-33 across runs); project check script reports all checks passed. Ruff check/format manually passed across 188 files because the binaries were not on the check script PATH; mypy was skipped locally. Hosted CI and Windows both passed on final candidate head 782a70f (runs 45567040484 and 45567040405).
 
 ### Fixed
 - Dropout RMS windows now use validated normalized samples consistently; numeric-string inputs no longer raise during window multiplication.

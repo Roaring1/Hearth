@@ -5,11 +5,11 @@ R3 is an isolated candidate consolidating the W2c integrated signal-quality/capt
 
 ## Evidence
 - Base: w2/integrated-20261124 (8508374), hosted Windows run 45548952071 passed; prior local gate 932 passed, 18 skipped, 27 warnings.
-- R3 local full gate: **954 passed, 18 skipped, 30 warnings in 33.23s**; scripts/check.sh reported All checks passed.
-- Ruff check: All checks passed; Ruff format: 188 files already formatted (manual invocation because tools were not on scripts/check.sh PATH).
+- R3 local full gate on head 782a70f: **954 passed, 18 skipped, 33 warnings in 33.80s**; scripts/check.sh reported All checks passed. Warning count varied 27-33 across repeated runs.
+- Ruff check: All checks passed; Ruff format: 188 files already formatted (manual invocation because binaries were not on scripts/check.sh PATH).
 - Local mypy skipped (not installed).
-- Hosted R3 CI run **45566497898 PASS** on code/doc head 5f6f854: lint/types, Python 3.11/3.12/3.13, GTK smoke and install/package jobs passed.
-- Hosted R3 Windows run **45566497892 PASS** on 5f6f854 (UCRT64 tests and installed-wheel smoke).
+- Hosted R3 CI run **45567040484 PASS** on head 782a70f: lint/types, Python 3.11/3.12/3.13, GTK smoke and install/package jobs passed.
+- Hosted R3 Windows run **45567040405 PASS** on head 782a70f (UCRT64 tests and installed-wheel smoke).
 - Item 2 view-model: 11 new tests; focused core+model suite 20 passed; removal mutation failed as expected.
 - Item 4 watchdog: 42 focused tests passed; confidence, stable-tone and dropout-threshold mutations all failed as expected.
 
