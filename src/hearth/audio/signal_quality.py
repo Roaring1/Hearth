@@ -120,12 +120,22 @@ def analyze_pcm(
     """Analyze one bounded normalized mono PCM buffer without side effects."""
     config = config or DEFAULT_CONFIG
     if (
-        config.min_samples < 1
+        isinstance(config.min_samples, bool)
+        or not isinstance(config.min_samples, int)
+        or isinstance(config.max_samples, bool)
+        or not isinstance(config.max_samples, int)
+        or isinstance(config.max_transient_candidates, bool)
+        or not isinstance(config.max_transient_candidates, int)
+        or config.min_samples < 1
         or config.max_samples < config.min_samples
+        or not isfinite(config.clip_threshold)
         or not 0.0 < config.clip_threshold <= 1.0
-        or config.near_zero_threshold < 0.0
+        or not isfinite(config.near_zero_threshold)
+        or not 0.0 <= config.near_zero_threshold < config.clip_threshold
+        or not isfinite(config.transient_mad_multiplier)
         or config.transient_mad_multiplier <= 0.0
-        or config.transient_floor < 0.0
+        or not isfinite(config.transient_floor)
+        or config.transient_floor <= 0.0
         or config.max_transient_candidates < 0
     ):
         return SignalReport(SignalState.INCONCLUSIVE, None, ("invalid analysis configuration",), ())
@@ -275,8 +285,14 @@ def compare_transport(
     if before is None or after is None:
         return TransportDelta(TransportState.UNKNOWN, None, None, None, "missing snapshot")
     if (
-        not before.node_id
+        not isinstance(before.node_id, str)
+        or not before.node_id
+        or not isinstance(after.node_id, str)
         or not after.node_id
+        or not isinstance(before.role, str)
+        or not before.role
+        or not isinstance(after.role, str)
+        or not after.role
         or isinstance(before.err_count, bool)
         or not isinstance(before.err_count, int)
         or isinstance(after.err_count, bool)

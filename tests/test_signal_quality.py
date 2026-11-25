@@ -155,3 +155,24 @@ def test_transport_boolean_and_float_counters_fail_closed():
         TransportSnapshot("n", 1, 48000.5), TransportSnapshot("n", 2, 48000)
     )
     assert float_rate.state is TransportState.UNKNOWN
+
+
+def test_config_requires_finite_thresholds_and_positive_floor():
+    from hearth.audio.signal_quality import SignalConfig
+
+    assert (
+        analyze_pcm(tone(100), 48000, SignalConfig(transient_floor=0)).state
+        is SignalState.INCONCLUSIVE
+    )
+    assert (
+        analyze_pcm(tone(100), 48000, SignalConfig(near_zero_threshold=1.0)).state
+        is SignalState.INCONCLUSIVE
+    )
+    assert (
+        analyze_pcm(tone(100), 48000, SignalConfig(transient_mad_multiplier=float("inf"))).state
+        is SignalState.INCONCLUSIVE
+    )
+    assert (
+        analyze_pcm(tone(100), 48000, SignalConfig(max_samples=1024.5)).state
+        is SignalState.INCONCLUSIVE
+    )
