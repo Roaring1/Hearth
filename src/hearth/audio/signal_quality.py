@@ -115,6 +115,201 @@ class TransportDelta:
     reason: str
 
 
+class DropoutState(StrEnum):
+    CANDIDATE = "candidate"
+    NO_CANDIDATE = "no_candidate"
+    INCONCLUSIVE = "inconclusive"
+
+
+@dataclass(frozen=True, slots=True)
+class DropoutConfig:
+    window_ms: int = 20
+    min_windows: int = 3
+    rms_threshold: float = 0.0001
+    max_samples: int = 480_000
+
+
+@dataclass(frozen=True, slots=True)
+class DropoutReport:
+    state: DropoutState
+    window_samples: int | None
+    analyzed_windows: int
+    dropout_windows: int
+    longest_dropout_windows: int
+    dropout_start_samples: tuple[int, ...]
+    reasons: tuple[str, ...]
+    limitations: tuple[str, ...]
+
+
+class TransportContextState(StrEnum):
+    STABLE = "stable"
+    CHANGED = "changed"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True, slots=True)
+class TransportContextReport:
+    state: TransportContextState
+    changed_fields: tuple[str, ...]
+    err_delta: int | None
+    reason: str
+    limitations: tuple[str, ...]
+
+
+DEFAULT_DROPOUT_CONFIG = DropoutConfig()
+
+
+def detect_dropouts(
+    samples: Sequence[float], sample_rate: int, config: DropoutConfig | None = None
+) -> DropoutReport:
+    """Flag sustained low-RMS windows as dropout candidates, not confirmed faults."""
+    config = config or DEFAULT_DROPOUT_CONFIG
+    invalid_config = (
+        isinstance(config.window_ms, bool)
+        or not isinstance(config.window_ms, int)
+        or config.window_ms < 1
+        or isinstance(config.min_windows, bool)
+        or not isinstance(config.min_windows, int)
+        or config.min_windows < 1
+        or isinstance(config.max_samples, bool)
+        or not isinstance(config.max_samples, int)
+        or config.max_samples < 1
+        or isinstance(config.rms_threshold, bool)
+        or not isinstance(config.rms_threshold, (int, float))
+        or not isfinite(config.rms_threshold)
+        or config.rms_threshold <= 0.0
+    )
+    if (
+        isinstance(sample_rate, bool)
+        or not isinstance(sample_rate, int)
+        or sample_rate <= 0
+        or invalid_config
+        or len(samples) < 1
+        or len(samples) > config.max_samples
+        or any(not isfinite(value) for value in samples)
+    ):
+        return DropoutReport(
+            DropoutState.INCONCLUSIVE,
+            None,
+            0,
+            0,
+            0,
+            (),
+            ("invalid rate, configuration, or bounded PCM sample input",),
+            ("dropout detection is an amplitude heuristic and cannot confirm signal loss",),
+        )
+    window_samples = max(1, round(sample_rate * config.window_ms / 1000.0))
+    complete_windows = len(samples) // window_samples
+    if complete_windows < config.min_windows:
+        return DropoutReport(
+            DropoutState.INCONCLUSIVE,
+            window_samples,
+            complete_windows,
+            0,
+            0,
+            (),
+            ("too few complete windows to evaluate dropout candidates",),
+            ("partial final window is ignored; low amplitude may be intentional",),
+        )
+    rms_values = [
+        sqrt(
+            sum(value * value for value in samples[start : start + window_samples]) / window_samples
+        )
+        for start in range(0, complete_windows * window_samples, window_samples)
+    ]
+    low = [value <= config.rms_threshold for value in rms_values]
+    starts: list[int] = []
+    total_dropout_windows = longest = current = 0
+    for index, is_low in enumerate(low):
+        if is_low:
+            current += 1
+            longest = max(longest, current)
+        else:
+            if current >= config.min_windows:
+                starts.append((index - current) * window_samples)
+                total_dropout_windows += current
+            current = 0
+    if current >= config.min_windows:
+        starts.append((complete_windows - current) * window_samples)
+        total_dropout_windows += current
+    state = DropoutState.CANDIDATE if starts else DropoutState.NO_CANDIDATE
+    return DropoutReport(
+        state,
+        window_samples,
+        complete_windows,
+        total_dropout_windows,
+        longest,
+        tuple(starts),
+        (
+            (f"{len(starts)} sustained low-amplitude region(s) found",)
+            if starts
+            else ("no sustained low-amplitude region found",)
+        ),
+        (
+            "amplitude-based dropout candidates are not confirmed faults",
+            "partial final window is ignored",
+        ),
+    )
+
+
+def detect_transport_context(
+    before: TransportSnapshot | None, after: TransportSnapshot | None
+) -> TransportContextReport:
+    """Compare snapshots and report transport context as stable/changed/unknown."""
+    delta = compare_transport(before, after)
+    if delta.state is TransportState.NODE_CHANGED:
+        return TransportContextReport(
+            TransportContextState.CHANGED,
+            ("node_id",),
+            None,
+            delta.reason,
+            ("a node change prevents continuous-counter comparison",),
+        )
+    if delta.state is TransportState.COUNTER_RESET:
+        return TransportContextReport(
+            TransportContextState.CHANGED,
+            ("err_count_reset",),
+            None,
+            delta.reason,
+            ("counter reset prevents interpreting a negative delta",),
+        )
+    if delta.reason == "node role differs":
+        return TransportContextReport(
+            TransportContextState.CHANGED,
+            ("role",),
+            None,
+            delta.reason,
+            ("role changes may indicate a different transport relationship",),
+        )
+    if delta.state is not TransportState.VERIFIED or before is None or after is None:
+        return TransportContextReport(
+            TransportContextState.UNKNOWN,
+            (),
+            None,
+            delta.reason,
+            ("transport snapshots do not prove audio continuity",),
+        )
+    changed: list[str] = []
+    if before.node_id != after.node_id:
+        changed.append("node_id")
+    if before.role != after.role:
+        changed.append("role")
+    if before.sample_rate != after.sample_rate:
+        changed.append("sample_rate")
+    if before.quantum != after.quantum:
+        changed.append("quantum")
+    if delta.err_delta is not None and delta.err_delta > 0:
+        changed.append("err_count")
+    state = TransportContextState.CHANGED if changed else TransportContextState.STABLE
+    return TransportContextReport(
+        state,
+        tuple(changed),
+        delta.err_delta,
+        "transport metadata or ERR counter changed" if changed else "comparable snapshots match",
+        ("context changes correlate with observations but do not prove causality",),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SignalConfig:
     min_samples: int = 256
