@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 from pathlib import Path
 
@@ -139,6 +140,7 @@ def test_empty_graph_is_verified_not_unknown() -> None:
     assert failed.detail == "query failed"
 
 
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="Linux-only PipeWire collector")
 def test_collect_keeps_core_audio_read_failures_distinct_from_empty_graph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
