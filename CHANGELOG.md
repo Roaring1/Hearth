@@ -9,6 +9,7 @@
 
 
 ### Added
+- `hearth.capture_ui_model`: pure Capture Mode view-model mapping capture-core snapshots into safe labels, device options, and refresh/select/start/stop availability without UI dependencies or I/O.
 - `python -m hearth.audio.quality_report FILE.wav`: read-only, bounded PCM WAV analyzer that emits a JSON report with signal state, metrics, limitations, and explicitly unidentified tone candidates. Supports uncompressed 8/16/24/32-bit PCM; averages channels for the current mono analyzer and rejects compressed or oversized input.
 - `hearth.capture_audio_discovery`: injectable discovery backend protocol and read-only PipeWire adapter. USB audio matching uses stable serial/port identity; incomplete inventory and backend errors remain UNKNOWN. The pw-dump parser is exercised against a recorded synthetic JSON fixture and fake backend.
 - `docs/CAPTURE_MODE_UI_AND_WAYLAND_PLAN.md`: Capture Controls layout/state design and the safe KDE Wayland/Vesktop interactive spike matrix, including explicit non-interactive limits.
