@@ -233,12 +233,20 @@ def analyze_pcm(
         or not isinstance(config.max_transient_candidates, int)
         or config.min_samples < 1
         or config.max_samples < config.min_samples
+        or isinstance(config.clip_threshold, bool)
+        or not isinstance(config.clip_threshold, (int, float))
         or not isfinite(config.clip_threshold)
         or not 0.0 < config.clip_threshold <= 1.0
+        or isinstance(config.near_zero_threshold, bool)
+        or not isinstance(config.near_zero_threshold, (int, float))
         or not isfinite(config.near_zero_threshold)
         or not 0.0 <= config.near_zero_threshold < config.clip_threshold
+        or isinstance(config.transient_mad_multiplier, bool)
+        or not isinstance(config.transient_mad_multiplier, (int, float))
         or not isfinite(config.transient_mad_multiplier)
         or config.transient_mad_multiplier <= 0.0
+        or isinstance(config.transient_floor, bool)
+        or not isinstance(config.transient_floor, (int, float))
         or not isfinite(config.transient_floor)
         or config.transient_floor <= 0.0
         or config.max_transient_candidates < 0

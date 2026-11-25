@@ -36,7 +36,13 @@ The impulse replay initially failed to produce a transient candidate with the fi
 
 ## Not implemented / deliberately deferred
 
-No frequency-domain tone/hum detection, band energy, stereo/phase analysis, dropout/gate context, true-peak estimate, raw/post alignment, or transport parser is implemented. This is a small testable first core, not the entire monitoring engine. It is not yet wired into the watchdog or offline analyzer; integration requires a separate phase and validated replay corpus before it can influence recovery.
+The `af7d76e` signal-quality extension adds:
+
+- Stable-tone candidate detection using interpolated rising zero crossings across two halves of a buffer. It reports a frequency and variation only as `UNIDENTIFIED_TONE` at low confidence; it does not label mains hum.
+- Stereo analysis with correlation, a low-confidence tone phase-difference estimate when both channels have comparable tone frequencies, per-channel true-peak estimates, and relative peak difference.
+- A four-times Catmull-Rom inter-sample true-peak estimate. It is an estimate, not a certified oversampled true-peak measurement.
+
+These additions are synthetic replay tested but remain heuristic and uncalibrated. They are not yet wired into the watchdog or offline analyzer; integration requires a separate phase and validated replay corpus before they can influence recovery. Band-energy, dropout/gate context, and broader transport-parser integration remain deferred.
 
 ## Final full-gate output (verbatim)
 
@@ -180,3 +186,11 @@ P: io.github.roaring1.Hearth:4: cid-contains-uppercase-letter io.github.roaring1
 [32mAll checks passed[0m
 
 ```
+
+## Follow-up correction and validation (boolean thresholds)
+
+A follow-up fix on branch `w2/signal-quality-core-20261124` rejects booleans for each numeric configuration threshold (`clip_threshold`, `near_zero_threshold`, `transient_mad_multiplier`, `transient_floor`) and rejects a boolean sample rate when `detect_stable_tone()` is called directly. Existing numeric metadata guards also reject booleans for transport `err_count`, `sample_rate`, and `quantum`; dedicated tests now cover sample-rate/quantum metadata. Focused tests: **25 passed**.
+
+Mutation evidence: removed the `clip_threshold` bool guard temporarily. The targeted boolean-threshold test failed for `clip_threshold` (1 failed, 3 passed), proving sensitivity; exact source backup restored afterward. Full project gate is currently running; its final result will be appended.
+
+The earlier `Not implemented / deliberately deferred` section has been corrected to reflect `af7d76e`: stable-tone candidate detection (`UNIDENTIFIED_TONE`, low confidence), stereo correlation/phase estimate, and 4x Catmull-Rom inter-sample true-peak estimate are implemented. These remain synthetic/heuristic measurements and are not integrated into live watchdog/offline analyzer or recovery. Band-energy and dropout/gate context remain deferred.

@@ -158,6 +158,41 @@ def test_transport_boolean_and_float_counters_fail_closed():
     assert float_rate.state is TransportState.UNKNOWN
 
 
+@pytest.mark.parametrize(
+    "field",
+    (
+        "clip_threshold",
+        "near_zero_threshold",
+        "transient_mad_multiplier",
+        "transient_floor",
+    ),
+)
+def test_boolean_config_thresholds_are_rejected(field):
+    from hearth.audio.signal_quality import SignalConfig
+
+    report = analyze_pcm(tone(100), 48000, SignalConfig(**{field: True}))
+    assert report.state is SignalState.INCONCLUSIVE
+    assert "configuration" in report.reasons[0]
+
+
+def test_direct_stable_tone_detector_rejects_boolean_sample_rate():
+    from hearth.audio.signal_quality import detect_stable_tone
+
+    assert detect_stable_tone(tone(100, count=1024), True).classification == "INCONCLUSIVE"
+
+
+def test_transport_metadata_boolean_sample_rate_and_quantum_are_rejected():
+    for before, after in (
+        (TransportSnapshot("n", 1, True, 256), TransportSnapshot("n", 2, 48000, 256)),
+        (TransportSnapshot("n", 1, 48000, True), TransportSnapshot("n", 2, 48000, 256)),
+        (TransportSnapshot("n", 1, 48000, 256), TransportSnapshot("n", 2, True, 256)),
+        (TransportSnapshot("n", 1, 48000, 256), TransportSnapshot("n", 2, 48000, True)),
+    ):
+        result = compare_transport(before, after)
+        assert result.state is TransportState.UNKNOWN
+        assert result.err_delta is None
+
+
 def test_config_requires_finite_thresholds_and_positive_floor():
     from hearth.audio.signal_quality import SignalConfig
 
