@@ -16,6 +16,7 @@ class FakeBackend:
         self.stop_calls = []
         self.fail_start = False
         self.fail_stop = False
+        self.session_override = None
 
     def discover_devices(self):
         self.discovery_calls += 1
@@ -25,7 +26,7 @@ class FakeBackend:
         self.start_calls.append(device.device_id)
         if self.fail_start:
             raise RuntimeError("simulated start failure")
-        return AudioSession("session-1", device.device_id, "fake")
+        return self.session_override or AudioSession("session-1", device.device_id, "fake")
 
     def stop_session(self, session):
         self.stop_calls.append(session.session_id)
@@ -126,3 +127,31 @@ def test_duplicate_inventory_is_fail_closed():
     assert snap.state is CaptureCoreState.ERROR
     assert snap.devices == ()
     assert "duplicate" in snap.error
+
+
+def test_invalid_selection_clears_previous_selection_and_prevents_start():
+    backend = FakeBackend((device(),))
+    core = OnDemandCaptureCore(backend)
+    core.refresh()
+    core.select("mic-1")
+    failed_selection = core.select("missing-device")
+    assert failed_selection.selected_device_id is None
+    blocked = core.start()
+    assert blocked.state is CaptureCoreState.ERROR
+    assert backend.start_calls == []
+
+
+def test_backend_session_mismatch_is_retained_for_cleanup():
+    backend = FakeBackend((device(),))
+    backend.session_override = AudioSession("foreign-session", "other-device", "fake")
+    core = OnDemandCaptureCore(backend)
+    core.refresh()
+    core.select("mic-1")
+    failed = core.start()
+    assert failed.state is CaptureCoreState.ERROR
+    assert failed.session is not None
+    assert failed.session.device_id == "other-device"
+    cleaned = core.stop()
+    assert cleaned.state is CaptureCoreState.READY
+    assert cleaned.session is None
+    assert backend.stop_calls == ["foreign-session"]

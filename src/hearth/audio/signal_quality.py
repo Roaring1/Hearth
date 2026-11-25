@@ -186,7 +186,6 @@ def detect_dropouts(
         or invalid_config
         or len(samples) < 1
         or len(samples) > config.max_samples
-        or any(not isfinite(value) for value in samples)
     ):
         return DropoutReport(
             DropoutState.INCONCLUSIVE,
@@ -198,6 +197,44 @@ def detect_dropouts(
             ("invalid rate, configuration, or bounded PCM sample input",),
             ("dropout detection is an amplitude heuristic and cannot confirm signal loss",),
         )
+    values: list[float] = []
+    for sample in samples:
+        if isinstance(sample, bool):
+            return DropoutReport(
+                DropoutState.INCONCLUSIVE,
+                None,
+                0,
+                0,
+                0,
+                (),
+                ("boolean sample invalid",),
+                ("dropout detection is an amplitude heuristic and cannot confirm signal loss",),
+            )
+        try:
+            value = float(sample)
+        except (TypeError, ValueError, OverflowError):
+            return DropoutReport(
+                DropoutState.INCONCLUSIVE,
+                None,
+                0,
+                0,
+                0,
+                (),
+                ("non-numeric sample",),
+                ("dropout detection is an amplitude heuristic and cannot confirm signal loss",),
+            )
+        if not isfinite(value):
+            return DropoutReport(
+                DropoutState.INCONCLUSIVE,
+                None,
+                0,
+                0,
+                0,
+                (),
+                ("non-finite sample detected",),
+                ("dropout detection is an amplitude heuristic and cannot confirm signal loss",),
+            )
+        values.append(value)
     window_samples = max(1, round(sample_rate * config.window_ms / 1000.0))
     complete_windows = len(samples) // window_samples
     if complete_windows < config.min_windows:
