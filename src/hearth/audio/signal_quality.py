@@ -167,7 +167,12 @@ def _positive_crossing_frequency(values: Sequence[float], sample_rate: int) -> f
 
 def detect_stable_tone(values: Sequence[float], sample_rate: int) -> StableToneMetrics:
     """Detect a stable spectral-line candidate; never label it as mains hum."""
-    if len(values) < 512 or sample_rate <= 0:
+    if (
+        len(values) < 512
+        or isinstance(sample_rate, bool)
+        or not isinstance(sample_rate, int)
+        or sample_rate <= 0
+    ):
         return StableToneMetrics("INCONCLUSIVE", None, None, "low")
     rms = sqrt(sum(value * value for value in values) / len(values))
     if rms < 0.005:
