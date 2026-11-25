@@ -1,0 +1,24 @@
+[
+  {
+    "id": 17,
+    "type": "PipeWire:Interface:Device",
+    "info": {"props": {
+      "device.bus": "usb",
+      "device.vendor.id": 6844,
+      "device.product.id": 751,
+      "device.serial": "GUV302G-001",
+      "device.bus-path": "pci-0000:00:14.0-usb-0:5:1.0",
+      "device.description": "IOGEAR UpStream Audio"
+    }}
+  },
+  {
+    "id": 29,
+    "type": "PipeWire:Interface:Node",
+    "info": {"props": {
+      "media.class": "Audio/Source",
+      "node.name": "alsa_input.usb-IOGEAR_GUV302G.analog-stereo",
+      "node.description": "IOGEAR Capture Audio",
+      "device.id": "17"
+    }}
+  }
+]
