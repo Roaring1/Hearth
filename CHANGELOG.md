@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased - 2026-11-24
+
+### Verified
+- R3 candidate full local gate: 954 passed, 18 skipped, latest run 33 warnings in 33.80s (warning count varied 27-33 across runs); project check script reports all checks passed. Ruff check/format manually passed across 188 files because the binaries were not on the check script PATH; mypy was skipped locally. Hosted CI and Windows both passed on final candidate head 782a70f (runs 45567040484 and 45567040405).
+
+### Fixed
+- Dropout RMS windows now use validated normalized samples consistently; numeric-string inputs no longer raise during window multiplication.
+- Regression tests cover numeric-string and ordinary numeric samples.
+
+
+
+### Added
+- R3 consolidation: issue #9/#11/#12 acceptance roll-up, watchdog thresholds/confidence note, PR #26 safe rebase recipe, and refreshed offline PR-body drafts.
+- Synthetic watchdog replay fixtures for 50/60 Hz and 97-99 Hz unidentified tones, clipping, dropouts and silence; explicit low/unknown confidence-state output and thresholds/confidence documentation.
+- `hearth.capture_ui_model`: pure Capture Mode view-model mapping capture-core snapshots into safe labels, device options, and refresh/select/start/stop availability without UI dependencies or I/O.
+- `python -m hearth.audio.quality_report FILE.wav`: read-only, bounded PCM WAV analyzer that emits a JSON report with signal state, metrics, limitations, and explicitly unidentified tone candidates. Supports uncompressed 8/16/24/32-bit PCM; averages channels for the current mono analyzer and rejects compressed or oversized input.
+- `hearth.capture_audio_discovery`: injectable discovery backend protocol and read-only PipeWire adapter. USB audio matching uses stable serial/port identity; incomplete inventory and backend errors remain UNKNOWN. The pw-dump parser is exercised against a recorded synthetic JSON fixture and fake backend.
+- `docs/CAPTURE_MODE_UI_AND_WAYLAND_PLAN.md`: Capture Controls layout/state design and the safe KDE Wayland/Vesktop interactive spike matrix, including explicit non-interactive limits.
+- `hearth.audio.capture_core`: pure on-demand capture-device/audio-session model and coordinator (`CaptureDevice`, `AudioSession`, explicit `refresh`/`select`/`start`/`stop`, immutable snapshots, retained stop handle for retry). State operations are serialized; invalid selection clears prior selection, and a mismatched backend session is retained for cleanup. Discovery and session I/O are injected; no hardware, PipeWire, UI, subprocess or background activity is performed by the core itself. Fake-backend tests cover explicit discovery, selection, lifecycle, failure handling and duplicate inventory.
+- `hearth.audio.signal_quality.detect_dropouts`: bounded PCM windows flag sustained low-RMS spans as dropout candidates; short gaps are not candidates and partial trailing windows are ignored.
+- `detect_transport_context`: snapshot replay comparison labels stable, changed, or unknown transport context and enumerates node/role/rate/quantum/ERR changes where safely comparable.
+
+### Fixed
+- `detect_stable_tone` now explicitly rejects boolean sample rates (Python `bool` is an `int` subtype), returning inconclusive rather than treating `True` as a 1 Hz rate.
+
+### Limitations
+- Capture core is an injected-backend contract/model only; no live device adapter or routing/session integration.
+- Dropout and transport-context outputs are heuristic/context flags only. No live capture, calibration, watchdog integration, or automatic recovery.
+
 ## Unreleased — round 32 (2026-09-20)
 
 ### Added
