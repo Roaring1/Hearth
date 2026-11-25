@@ -12,7 +12,7 @@ PyGObject is **not** installed with pip. It comes from your distribution:
 # Fedora / Nobara
 sudo dnf install python3-gobject gtk4 python3-cairo
 # Debian / Ubuntu
-sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1
+sudo apt install python3-gi gir1.2-gtk-4.0 python3-cairo
 # Arch
 sudo pacman -S python-gobject gtk4 python-cairo
 ```
