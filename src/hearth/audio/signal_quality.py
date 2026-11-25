@@ -250,7 +250,7 @@ def detect_dropouts(
         )
     rms_values = [
         sqrt(
-            sum(value * value for value in samples[start : start + window_samples]) / window_samples
+            sum(value * value for value in values[start : start + window_samples]) / window_samples
         )
         for start in range(0, complete_windows * window_samples, window_samples)
     ]

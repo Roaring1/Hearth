@@ -288,6 +288,24 @@ def test_replay_short_silence_is_not_a_dropout_candidate():
     assert report.dropout_start_samples == ()
 
 
+def test_dropout_uses_normalized_numeric_string_samples_consistently():
+    samples = ["0.0"] * 2880
+    report = detect_dropouts(samples, 48000)
+    assert report.state is DropoutState.CANDIDATE
+    assert report.window_samples == 960
+    assert report.analyzed_windows == 3
+    assert report.dropout_start_samples == (0,)
+    assert report.dropout_windows == 3
+
+
+def test_dropout_ordinary_numeric_samples_are_evaluated():
+    samples = [0.0] * 2880
+    report = detect_dropouts(samples, 48000)
+    assert report.state is DropoutState.CANDIDATE
+    assert report.analyzed_windows == 3
+    assert report.dropout_start_samples == (0,)
+
+
 def test_dropout_detector_fails_closed_for_invalid_and_unbounded_input():
     assert detect_dropouts([0.0] * 100, True).state is DropoutState.INCONCLUSIVE
     assert detect_dropouts([0.0] * 481_000, 48000).state is DropoutState.INCONCLUSIVE

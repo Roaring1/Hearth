@@ -2,6 +2,12 @@
 
 ## Unreleased - 2026-11-24
 
+### Fixed
+- Dropout RMS windows now use validated normalized samples consistently; numeric-string inputs no longer raise during window multiplication.
+- Regression tests cover numeric-string and ordinary numeric samples.
+
+
+
 ### Added
 - `hearth.audio.capture_core`: pure on-demand capture-device/audio-session model and coordinator (`CaptureDevice`, `AudioSession`, explicit `refresh`/`select`/`start`/`stop`, immutable snapshots, retained stop handle for retry). State operations are serialized; invalid selection clears prior selection, and a mismatched backend session is retained for cleanup. Discovery and session I/O are injected; no hardware, PipeWire, UI, subprocess or background activity is performed by the core itself. Fake-backend tests cover explicit discovery, selection, lifecycle, failure handling and duplicate inventory.
 - `hearth.audio.signal_quality.detect_dropouts`: bounded PCM windows flag sustained low-RMS spans as dropout candidates; short gaps are not candidates and partial trailing windows are ignored.
