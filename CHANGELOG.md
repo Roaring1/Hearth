@@ -2,6 +2,9 @@
 
 ## Unreleased - 2026-11-24
 
+### Added
+- Added a separate report-only 30-minute user timer for passive 10-second `b1_mic` quality WAV/JSON captures, with 48-pair retention. Trial evidence is in `docs/MIC_QUALITY_REPORT_ONLY.md`; no existing watchdog or audio routing was changed.
+
 ### Verified
 - R3 candidate full local gate: 954 passed, 18 skipped, latest run 33 warnings in 33.80s (warning count varied 27-33 across runs); project check script reports all checks passed. Ruff check/format manually passed across 188 files because the binaries were not on the check script PATH; mypy was skipped locally. Hosted CI and Windows both passed on final candidate head 782a70f (runs 45567040484 and 45567040405).
 
