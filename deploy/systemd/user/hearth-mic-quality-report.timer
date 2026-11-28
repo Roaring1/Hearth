@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Hearth passive mic quality report every 30 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1min
+AccuracySec=5s
+Unit=hearth-mic-quality-report.service
+
+[Install]
+WantedBy=timers.target

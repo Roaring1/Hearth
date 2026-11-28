@@ -1,0 +1,7 @@
+[Unit]
+Description=Hearth passive microphone quality report (report-only)
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/roaring/bin/hearth_mic_quality_report.py
